@@ -132,6 +132,11 @@ namespace umbriel {
     Window,
   };
 
+  enum class ClickMethod : uint8_t {
+    ButtonAreas,
+    ClickFinger,
+  };
+
   enum class WindowDragToggle : uint8_t {
     None,
     Floating,
@@ -679,6 +684,7 @@ namespace umbriel {
         std::optional<double> scrollFactor;
         std::optional<bool> disableWhileTyping;
         std::optional<bool> disableOnExternalMouse;
+        std::optional<ClickMethod> clickMethod;
         bool operator==(const Touchpad&) const = default;
       } touchpad;
 

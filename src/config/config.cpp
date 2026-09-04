@@ -79,6 +79,17 @@ namespace umbriel {
       return std::nullopt;
     }
 
+    std::optional<ClickMethod> readClickMethod(const toml::node& node) {
+      const auto value = node.value<std::string>();
+      if (value == "button-areas") {
+        return ClickMethod::ButtonAreas;
+      }
+      if (value == "clickfinger") {
+        return ClickMethod::ClickFinger;
+      }
+      return std::nullopt;
+    }
+
     std::optional<WindowDragToggle> readWindowDragToggle(const toml::node& node) {
       const auto value = node.value<std::string>();
       if (value == "none") {
@@ -1237,6 +1248,13 @@ namespace umbriel {
               .boolean("disable_while_typing", in.touchpad.disableWhileTyping)
               .boolean("disable_on_external_mouse", in.touchpad.disableOnExternalMouse);
           in.touchpad.accelProfile = readAccelProfile(t, "accel_profile", "input.touchpad");
+          if (const toml::node* clickNode = t.take("click_method")) {
+            if (const auto value = readClickMethod(*clickNode)) {
+              in.touchpad.clickMethod = *value;
+            } else {
+              warnAt(clickNode->source(), "ignoring input.touchpad.click_method (expected button-areas|clickfinger)");
+            }
+          }
         });
         s.sub("mouse", [&](Section& m) {
           m.boolean("natural_scroll", in.mouse.naturalScroll)
