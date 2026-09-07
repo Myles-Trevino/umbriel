@@ -6,10 +6,11 @@ the main configuration guide but remain part of Umbriel's observable behavior.
 ## Live content
 
 Overview cards display live window content. The real workspace windows are
-hidden while the overview is open, so wheel steps, fallback vertical arrow
-keys, and 3-finger swipes move one workspace at a time instead of sliding the
-live workspace. Configured vertical focus actions retain their layout-specific
-behavior, including stacked-card traversal in horizontal scrolling workspaces.
+hidden while the overview is open, so wheel steps, fallback arrow keys along the
+workspace axis, and 3-finger swipes move one workspace at a time instead of
+sliding the live workspace. Configured vertical focus actions retain their
+layout-specific behavior, including stacked-card traversal on outputs whose
+strip is horizontal.
 
 Transparent windows keep their window-rule blur throughout the zoom
 transition.
@@ -17,10 +18,11 @@ transition.
 ## Animation ownership
 
 Cards use separate scene buffers because the overview scales and clips each
-window into a workspace row. They do not own a second window animation state.
-Every `View` remains the authority for its currently presented position, size,
-and opacity, including for a hidden workspace while the overview is open. The
-overview projects that presented box through its row and zoom transform.
+window into a workspace preview. They do not own a second window animation
+state. Every `View` remains the authority for its currently presented position,
+size, and opacity, including for a hidden workspace while the overview is open.
+The overview projects that presented box through `Overview::previewBox` and its
+zoom.
 Card borders consume the same presented opacity as their window content, so
 map fades and window-rule opacity cannot reveal a ring ahead of its surface.
 
@@ -37,8 +39,8 @@ starting a second movement afterwards.
 
 Configured keybinds continue to dispatch during the closing zoom. A later focus
 or workspace selection replaces the card that initiated the close as the
-landing target. Workspace-row retargets use a separate animation value, so
-repeated navigation cannot extend the zoom deadline.
+landing target. Workspace retargets use a separate animation value, so repeated
+navigation cannot extend the zoom deadline.
 
 Unmap is the one transition that cannot remain live because the client buffer
 may disappear immediately. Before removing an unmapped card, the overview
@@ -54,27 +56,27 @@ windows. These values scale with the card. Every surface of a card rounds
 against the card's content box, the rule live windows use, so a client that
 draws its corners from a subsurface keeps them rounded in the thumbnail.
 
-Each output's overview tree carries a `wlr_scene_tree_set_clip` of that
-output's logical bounds, the same primitive windows use. A workspace row that
-pushes a card past an output edge is scissored there: cards, border rings, and
-workspace backgrounds are all contained by that one clip, and none of them
-trims its own geometry. The dragged card is reparented out to the
-unclipped overview root so it can span outputs, exactly as a dragged window
-does.
+Each output's overview tree carries a `wlr_scene_tree_set_clip` of that output's
+logical bounds, the same primitive windows use. It is the only clip a card is
+subject to: previews step along the output's workspace axis and a strip pushes
+its cards past the preview across that axis on purpose, so cards, border rings,
+and workspace backgrounds are contained by that one output clip and none of them
+trims its own geometry. The dragged card is reparented out to the unclipped
+overview root so it can span outputs, exactly as a dragged window does.
 
 Each workspace has a rounded background behind its cards. The configured alpha
 controls whether this is a light tint, a translucent panel, or an opaque fill.
 
-With `overview.workspace_wallpaper`, one passive scene buffer per row and per
-mirrored surface draws over that fill. The source is the output's background-
+With `overview.workspace_wallpaper`, one passive scene buffer per preview and
+per mirrored surface draws over that fill. The source is the output's background-
 and bottom-layer trees, walked in place so the copies keep their render order,
-and each surface's output-local box maps through the same row and zoom transform
-the cards use. Every row clips to its own bounds, so a partially anchored
-surface cannot reach into the gap between rows.
+and each surface's output-local box maps through the same preview origin and zoom
+the cards use. Every preview clips its own mirrors, so a partially anchored
+surface cannot reach into the gap between previews.
 
 The real bottom layer is disabled for as long as the overview is open, exactly
 as the window trees are: a bottom-layer surface appears once per workspace
-instead of twice at two scales, and at zoom 1 the rows reproduce the output
+instead of twice at two scales, and at zoom 1 the previews reproduce the output
 pixel for pixel, so neither the opening nor the teardown swap is visible. Those
 copies are then the only place their surfaces are sampled, so each one carries
 the presentation feedback, release points, and frame callbacks that pace its
@@ -93,10 +95,11 @@ No window holds the seat while the overview is open, so exactly one card can
 wear `colors.border.focused`: the live target, meaning the focused view of
 the active workspace on the output under the cursor. That is the window a focus
 or close action resolves to through `preferredOutput()`, so the strong border
-also identifies the current output. Every other row marks its own focused view
-with a blend of `colors.border.focused` into `colors.border.unfocused`, showing
-where the row would land without claiming focus. An empty current workspace
-leaves no strong border, which is also when those actions have no target.
+also identifies the current output. Every other workspace marks its own focused
+view with a blend of `colors.border.focused` into `colors.border.unfocused`,
+showing where that workspace would land without claiming focus. An empty current
+workspace leaves no strong border, which is also when those actions have no
+target.
 
 The live target is resolved per layout pass. `Overview::handleMotion` repaints
 when the pointer changes output, which covers both hand motion and the cursor
@@ -143,10 +146,11 @@ The relevant checks are:
   for one live marker across two outputs, following both an output-changing
   keybind and plain pointer motion.
 - [`tests/harness/checks/350_overview_horizontal_overflow.sh`](../../tests/harness/checks/350_overview_horizontal_overflow.sh)
-  for cards extending past the scaled workspace background while staying inside
-  the output.
-- [`tests/harness/checks/360_vertical_viewport_clips.sh`](../../tests/harness/checks/360_vertical_viewport_clips.sh)
-  for a vertical strip presented as one live viewport per overview row.
+  for cards extending past the scaled workspace preview on either axis while
+  staying inside the output.
+- [`tests/harness/checks/360_slide_viewport_clips.sh`](../../tests/harness/checks/360_slide_viewport_clips.sh)
+  for a sliding workspace clipping its overhanging content to the viewport it
+  travels with.
 - [`tests/harness/checks/650_two_output_containment.sh`](../../tests/harness/checks/650_two_output_containment.sh)
   for cards staying off a neighbouring output, overview included.
 - [`tests/unit/presented_crop.cpp`](../../tests/unit/presented_crop.cpp) for the

@@ -202,9 +202,9 @@ does, this is the full list:
 | `layout-master-count-increase`, `layout-master-count-decrease` | No effect | No effect | Moves one window between master and stack |
 
 Dwindle and master have no horizontal viewport, so the vertical splits and areas
-absorb what scrolling would express as column geometry. On a vertical scrolling
-workspace the directional actions follow their visual directions; see [Vertical
-workspaces](layout.md#vertical-workspaces).
+absorb what scrolling would express as column geometry. On an output with
+horizontal workspaces the strip is vertical and the directional actions follow
+their visual directions; see [Vertical strips](layout.md#vertical-strips).
 
 ## Notes
 

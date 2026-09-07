@@ -134,6 +134,20 @@ namespace umbriel {
     }
   }
 
+  void Gestures::cancelForLayoutChange() {
+    if (m_state == State::Idle || m_state == State::Forward) {
+      return;
+    }
+    // The old layout objects are still installed here, so the settling paths in
+    // cancelActive() can restore them before they are replaced.
+    cancelActive();
+    m_output = nullptr;
+    m_scrollWorkspace = nullptr;
+    m_switchGroup = nullptr;
+    m_scrollSource = ScrollSource::None;
+    m_state = State::Idle;
+  }
+
   void Gestures::cancelActive() {
     switch (m_state) {
     case State::Scroll:
@@ -326,29 +340,30 @@ namespace umbriel {
         return;
       }
       m_output = out;
+      m_workspaceAxis = out->workspaceGroup()->workspaceAxis();
+      // Ties resolve to the vertical component, as they always have.
+      const bool horizontalTravel = std::abs(m_accumX) > std::abs(m_accumY);
+      const bool alongWorkspaceAxis = horizontalTravel == (m_workspaceAxis == WorkspaceAxis::Horizontal);
 
       if (Overview* overview = m_server->overview(); overview != nullptr && overview->interactive()) {
-        // Horizontal has no meaning over the filmstrip, and letting it through
-        // would step rows on any swipe that drifted off true.
-        if (std::abs(m_accumX) > std::abs(m_accumY)) {
+        // Perpendicular travel has no meaning over the filmstrip, and letting it
+        // through would step workspaces on any swipe that drifted off true.
+        if (!alongWorkspaceAxis) {
           m_state = State::Idle;
           return;
         }
-        // Start measuring row travel from the lock point, not the touch down.
+        // Start measuring workspace travel from the lock point, not the touch down.
+        m_accumX = 0;
         m_accumY = 0;
         m_state = State::OverviewSelect;
         return;
       }
 
-      if (std::abs(m_accumX) > std::abs(m_accumY)) {
-        // Horizontal lock scrolls the active workspace.
+      if (!alongWorkspaceAxis) {
+        // Perpendicular to the workspace axis is the strip axis: scroll it.
         Workspace* ws = out->workspaceGroup()->active();
         ScrollingLayout* scrolling = ws != nullptr ? ws->scrollingLayout() : nullptr;
         if (scrolling == nullptr || scrolling->columns().empty()) {
-          m_state = State::Idle;
-          return;
-        }
-        if (ws->scrollingVertical()) {
           m_state = State::Idle;
           return;
         }
@@ -358,7 +373,7 @@ namespace umbriel {
           m_state = State::Idle;
         }
       } else {
-        // Vertical lock switches workspaces.
+        // Travel along the workspace axis switches workspaces.
         WorkspaceGroup* group = out->workspaceGroup();
         const size_t idx = group->active()->index();
         m_hasPrev = idx > 0;
@@ -377,9 +392,9 @@ namespace umbriel {
     }
 
     case State::Scroll: {
-      // Natural: fingers left → content moves left → scroll increases. The strip follows the
-      // fingers unclamped, past the strip edges included; the release resolves the overscroll.
-      updateScroll(event->dx, event->time_msec);
+      // Natural: fingers move against the strip axis → content follows them. The strip runs
+      // unclamped, past its edges included; the release resolves the overscroll.
+      updateScroll(m_scrollVertical ? event->dy : event->dx, event->time_msec);
       return;
     }
 
@@ -392,9 +407,12 @@ namespace umbriel {
         m_state = State::Idle;
         return;
       }
+      const bool horizontal = m_workspaceAxis == WorkspaceAxis::Horizontal;
+      const double travel = horizontal ? event->dx : event->dy;
+      m_accumX += event->dx;
       m_accumY += event->dy;
-      // Natural: swipe up (negative dy) → next workspace (positive progress).
-      double p = -m_accumY / kSwitchDistancePx * m_naturalScrollDirection;
+      // Natural: swiping toward the negative axis direction moves to the next workspace.
+      double p = -(horizontal ? m_accumX : m_accumY) / kSwitchDistancePx * m_naturalScrollDirection;
       const double lo = m_hasPrev ? -1.0 : 0.0;
       const double hi = m_hasNext ? 1.0 : 0.0;
       if (p < lo) {
@@ -404,7 +422,7 @@ namespace umbriel {
         p = std::min(hi + (p - hi) * kOverscrollCompress, hi + kOverscrollMaxWs);
       }
       const uint32_t dt = std::max(1U, event->time_msec - m_lastTimeMsec);
-      m_velocity = 0.75 * m_velocity + 0.25 * (-event->dy / static_cast<double>(dt) * m_naturalScrollDirection);
+      m_velocity = 0.75 * m_velocity + 0.25 * (-travel / static_cast<double>(dt) * m_naturalScrollDirection);
       m_lastTimeMsec = event->time_msec;
       m_progress = p;
       m_switchGroup->slideApply(p);
@@ -417,15 +435,18 @@ namespace umbriel {
         m_state = State::Idle;
         return;
       }
-      m_accumY += event->dy;
-      // Natural, and the same sense as the switch outside the overview: swipe up (negative dy) moves to the next
-      // workspace. The leftover travel stays in m_accumY so one long swipe crosses several rows.
-      while (m_accumY <= -kOverviewStepPx) {
-        m_accumY += kOverviewStepPx;
+      const bool horizontal = m_workspaceAxis == WorkspaceAxis::Horizontal;
+      double& accum = horizontal ? m_accumX : m_accumY;
+      accum += horizontal ? event->dx : event->dy;
+      // Natural, and the same sense as the switch outside the overview: swiping toward the negative
+      // axis direction moves to the next workspace. The leftover travel stays in the accumulator so
+      // one long swipe crosses several workspaces.
+      while (accum <= -kOverviewStepPx) {
+        accum += kOverviewStepPx;
         overview->selectRelativeWorkspace(m_naturalScrollDirection, m_output);
       }
-      while (m_accumY >= kOverviewStepPx) {
-        m_accumY -= kOverviewStepPx;
+      while (accum >= kOverviewStepPx) {
+        accum -= kOverviewStepPx;
         overview->selectRelativeWorkspace(-m_naturalScrollDirection, m_output);
       }
       return;

@@ -90,6 +90,7 @@ honor_restored_maximize = false                 # Honor restored maximized state
 # hdr = "auto"                                  # off, on, auto, or fullscreen
 # sdr_white = 203                               # SDR reference white in cd/m2 during HDR
 # workspaces = 5                                # Omit for dynamic workspaces
+# workspace_axis = "horizontal"                 # vertical or horizontal workspace arrangement
 
 # Replace the count with ["WEB", "CHAT", "MEDIA"] for named static workspaces,
 # or with "dynamic" to state the dynamic default explicitly. A dynamic output
@@ -455,7 +456,7 @@ top = 0
 bottom = 0
 
 [layout.scrolling]
-# direction = "horizontal"                      # horizontal or vertical strip axis
+# The strip axis is perpendicular to the output's workspace_axis.
 default_width_fraction = 0.5                    # Initial width for new columns, 0.1-1.0
 center_underfull_strip = true                   # Center a strip narrower than the viewport
 center_focused = false                          # Always center the focused column

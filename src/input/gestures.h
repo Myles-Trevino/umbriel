@@ -11,6 +11,7 @@ namespace umbriel {
   class Server;
   class Workspace;
   class WorkspaceGroup;
+  enum class WorkspaceAxis;
 
   class Gestures {
   public:
@@ -21,6 +22,9 @@ namespace umbriel {
     Gestures& operator=(const Gestures&) = delete;
 
     void cancelForOutput(Output* output);
+    // Settle every compositor-owned gesture before a layout change replaces the
+    // objects and axes it captured. Client-forwarded gestures are left alone.
+    void cancelForLayoutChange();
     // Mouse-button bindings use the same overscroll, velocity projection, and
     // column settling as the three-finger strip gesture, but pointer travel is
     // mapped one-to-one to content travel.
@@ -63,6 +67,9 @@ namespace umbriel {
     double m_accumX = 0;
     double m_accumY = 0;
     Output* m_output = nullptr;
+    // Workspace axis of the preferred output, captured when the three-finger
+    // gesture locks. An in-flight gesture keeps it even over another output.
+    WorkspaceAxis m_workspaceAxis{};
     int m_naturalScrollDirection = 1;
 
     // Scroll state (horizontal 3-finger).
@@ -86,8 +93,8 @@ namespace umbriel {
     // Overview state (vertical 4-finger): swipe up opens, swipe down closes.
     bool m_overviewWasOpen = false;
 
-    // OverviewSelect state (vertical 3-finger, overview up) reuses m_accumY as
-    // the travel left over since the last row step.
+    // OverviewSelect state (three-finger along the workspace axis, overview up)
+    // reuses the axis accumulator as the travel left over since the last step.
 
     wl_listener m_swipeBegin{};
     wl_listener m_swipeUpdate{};

@@ -34,6 +34,10 @@ overview_closed_count() {
   jq -s '[.[] | select(.event == "overview" and .data.open == false)] | length' "$OVERVIEW_EVENTS"
 }
 
+overview_open_count() {
+  jq -s '[.[] | select(.event == "overview" and .data.open == true)] | length' "$OVERVIEW_EVENTS"
+}
+
 wait_for_count() {
   local expected=$1
   for _ in $(seq 60); do
@@ -230,4 +234,119 @@ fi
 wait_for_focus overview-vim-row
 wait_for_workspace 2
 
-echo "overview arrows navigate cards and rows while configured binds remain active through the closing zoom"
+# The same rules follow the output's workspace axis. With workspaces arranged along X the roles swap: Left and Right
+# run along the workspace axis, and Up and Down traverse the vertically scrolling lanes.
+cat >> "$UMBRIEL_CONFIG" <<'EOF'
+
+[output."HEADLESS-1"]
+workspace_axis = "horizontal"
+EOF
+"$UMBRIEL" msg config-reload > /dev/null
+"$UMBRIEL" msg workspace-switch:1 > /dev/null
+wait_for_workspace 1
+
+# The stacked pair keeps its column, which now lays its members out along X.
+transposed=false
+for _ in $(seq 60); do
+  read -r left_id left_title right_id right_title order <<< "$("$UMBRIEL" windows --json | jq -r \
+    '[.[] | select(.title == "overview-vim-first" or .title == "overview-vim-second")] | sort_by(.x)
+     | "\(.[0].id) \(.[0].title) \(.[1].id) \(.[1].title) "
+       + (if .[0].y == .[1].y and .[0].x < .[1].x then "side-by-side" else "stacked" end)')"
+  [[ $order == side-by-side ]] && transposed=true && break
+  sleep 0.05
+done
+if [[ $transposed != true ]]; then
+  echo "stacked column did not transpose onto the horizontal axis: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+
+# A second lane, so the perpendicular arrows have somewhere to go inside the workspace. A vertically scrolling strip
+# puts that new column above or below the stacked pair, never beside it. Column insertion animates the strip, so both
+# lanes have to read the same twice before their order decides which arrow points at the new one.
+"$CLIENT" overview-vim-lane 1200 700 > "$UMBRIEL_RUNTIME_DIR/overview-vim-lane.log" 2>&1 &
+wait_for_count 4
+lanes=
+previous=
+for _ in $(seq 80); do
+  lanes=$("$UMBRIEL" windows --json | jq -r \
+    '[(.[] | select(.title == "overview-vim-first") | .y), (.[] | select(.title == "overview-vim-lane") | .y)] | "\(.[0]) \(.[1])"')
+  read -r stack_y lane_y <<< "$lanes"
+  if [[ $lanes == "$previous" ]] && (( lane_y > stack_y + 100 || lane_y + 100 < stack_y )); then
+    break
+  fi
+  previous=$lanes
+  lanes=
+  sleep 0.05
+done
+if [[ -z $lanes ]]; then
+  echo "the new column did not settle into a lane of its own along Y: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+if (( lane_y > stack_y )); then
+  toward=108 # Down
+  back=103   # Up
+else
+  toward=103 # Up
+  back=108   # Down
+fi
+
+"$UMBRIEL" msg "window-focus:$left_id" > /dev/null
+wait_for_focus "$left_title"
+"$UMBRIEL" msg overview-open > /dev/null
+sleep 0.55
+
+# Along the workspace axis: the stacked neighbour first, the next workspace only once the lane has no card that way.
+pointer tap 106 # Right
+wait_for_focus "$right_title"
+wait_for_workspace 1
+pointer tap 106 # Right
+wait_for_workspace 2
+wait_for_focus overview-vim-row
+pointer tap 105 # Left
+wait_for_workspace 1
+wait_for_focus "$right_title"
+pointer tap 105 # Left
+wait_for_focus "$left_title"
+wait_for_workspace 1
+
+# Perpendicular to it, the arrows walk the vertically scrolling lanes and never reach a workspace.
+pointer tap "$toward"
+wait_for_focus overview-vim-lane
+wait_for_workspace 1
+pointer tap "$toward"
+sleep 0.2
+wait_for_focus overview-vim-lane
+wait_for_workspace 1
+pointer tap "$back"
+wait_for_focus "$left_title"
+wait_for_workspace 1
+
+# A configured directional action keeps its physical meaning: it moves the focus and stops at the lane's edge.
+chord 38 # L
+wait_for_focus "$right_title"
+wait_for_workspace 1
+chord 38 # L again, with nothing to the right
+sleep 0.2
+wait_for_focus "$right_title"
+wait_for_workspace 1
+
+# Retargeting the close with a configured bind must land the focus without revealing the overview a second time.
+closed_before=$(overview_closed_count)
+opened_before=$(overview_open_count)
+pointer tap 28 # Enter
+sleep 0.15
+chord 35 # H, focus the card to the left during the closing zoom
+wait_for_focus "$left_title"
+sleep 0.6
+if (( $(overview_closed_count) <= closed_before )); then
+  echo "the closing zoom never finished on horizontally arranged workspaces"
+  exit 1
+fi
+if (( $(overview_open_count) != opened_before )); then
+  echo "focusing during the close revealed the overview again"
+  exit 1
+fi
+wait_for_focus "$left_title"
+wait_for_workspace 1
+
+echo "overview arrows navigate cards and workspaces along each output's axis while configured binds keep their physical meaning through the closing zoom"

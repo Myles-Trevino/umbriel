@@ -607,6 +607,51 @@ center_focused = true
   CHECK(!store.config().outputs[0].layout.scrolling.defaultWidthFraction.has_value());
 }
 
+UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[output.DP-1]\nworkspace_axis = \"horizontal\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{1});
+  CHECK(store.config().outputs[0].workspaceAxis == umbriel::WorkspaceAxis::Horizontal);
+  CHECK(!containsDiagnostic(store, "unknown key output.DP-1.workspace_axis"));
+
+  file.write("[output.DP-1]\nworkspace_axis = \"sideways\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].workspaceAxis == umbriel::WorkspaceAxis::Vertical);
+  CHECK(containsDiagnostic(store, "ignoring output.DP-1.workspace_axis (expected vertical|horizontal)"));
+
+  file.write("[output.DP-1]\nworkspace_axis = true\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].workspaceAxis == umbriel::WorkspaceAxis::Vertical);
+  CHECK(containsDiagnostic(store, "ignoring output.DP-1.workspace_axis (expected vertical|horizontal)"));
+
+  file.write("[output.DP-1]\nenabled = true\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].workspaceAxis == umbriel::WorkspaceAxis::Vertical);
+}
+
+// The configurable strip direction is gone: both spellings are ordinary unknown keys.
+UMBRIEL_TEST(scrollingDirectionKeysAreUnknown) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[layout.scrolling]
+direction = "vertical"
+
+[[workspace]]
+index = 1
+layout.scrolling.direction = "vertical"
+)");
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "unknown key layout.scrolling.direction"));
+  CHECK(containsDiagnostic(store, "unknown key workspace[0].layout.scrolling.direction"));
+}
+
 UMBRIEL_TEST(expandSingleColumnParsesAndDefaultsToFalse) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();

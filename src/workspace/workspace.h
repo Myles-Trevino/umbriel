@@ -79,7 +79,6 @@ namespace umbriel {
     void overrideLayoutMode(LayoutMode mode);
     void clearLayoutModeOverride() { m_layoutModeOverride.reset(); }
     [[nodiscard]] View* focusedView() const { return m_focusedView; }
-    [[nodiscard]] int slideOffsetY() const { return m_slideOffsetY; }
     [[nodiscard]] wlr_scene_tree* viewLayer(bool tiled) const { return tiled ? m_tiledLayer : m_floatingLayer; }
     [[nodiscard]] wlr_scene_tree* shadowLayer() const { return m_shadowLayer; }
     [[nodiscard]] wlr_scene_tree* fullscreenTree() const { return m_fullscreenTree; }
@@ -155,7 +154,7 @@ namespace umbriel {
     void beginSwitchTransition();
     void showSwitchViews();
     void endSwitchTransition();
-    void setSlideOffset(double y);
+    void setSlideOffset(double x, double y);
     void applyLayoutConfig(ResolvedLayoutConfig layoutConfig);
     void rename(std::string name, size_t index);
 
@@ -201,6 +200,7 @@ namespace umbriel {
     bool m_inSwitchTransition = false;
     bool m_arrangePending = false;
     bool m_arrangeAnimate = true;
+    int m_slideOffsetX = 0;
     int m_slideOffsetY = 0;
     std::vector<View*> m_switchViews;
     wlr_scene_tree* m_tree = nullptr;
@@ -230,6 +230,9 @@ namespace umbriel {
     [[nodiscard]] Workspace* workspaceForSelector(std::string_view name) const;
     [[nodiscard]] Workspace* workspaceFromHandle(wlr_ext_workspace_handle_v1* handle) const;
     [[nodiscard]] size_t workspaceCount() const { return m_workspaces.size(); }
+    // Direction this output arranges its workspaces along, cached from configuration
+    // so rendering and input never re-resolve it per event.
+    [[nodiscard]] WorkspaceAxis workspaceAxis() const { return m_workspaceAxis; }
 
     void activate(Workspace* workspace, bool animate = true);
     void select(Workspace* workspace);
@@ -243,6 +246,9 @@ namespace umbriel {
     bool moveActiveWorkspace(int direction);
     void reconcileInventory();
     void refreshLayouts();
+    // Re-resolve the output's workspace axis, settling any live slide on the old
+    // axis first. Called before per-workspace layout resolution.
+    void refreshWorkspaceAxis();
     void reconcileDynamic();
     // Every workspace, not just the active one: a client can change fullscreen state while another workspace is
     // showing, and that workspace still owes it a configure at the right size.
@@ -268,9 +274,9 @@ namespace umbriel {
 
     struct Slide {
       Workspace* base = nullptr;
-      Workspace* up = nullptr;
-      Workspace* down = nullptr;
-      double height = 0;
+      Workspace* previous = nullptr;
+      Workspace* next = nullptr;
+      double extent = 0;
       double progress = 0;
     };
 
@@ -280,6 +286,7 @@ namespace umbriel {
     Workspace* m_active = nullptr;
     Workspace* m_previous = nullptr;
     bool m_dynamic = false;
+    WorkspaceAxis m_workspaceAxis = WorkspaceAxis::Vertical;
     uint32_t m_nextHandleSerial = 1;
     std::vector<std::unique_ptr<Workspace>> m_workspaces;
     AnimatedValue m_slideAnim;

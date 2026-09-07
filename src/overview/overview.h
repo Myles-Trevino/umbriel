@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/config.h"
 #include "core/animation.h"
 #include "layout/drop_target.h"
 #include "scene/hint_rect.h"
@@ -127,7 +128,7 @@ namespace umbriel {
       Overview* overview = nullptr;
       OutputState* owner = nullptr;
       View* view = nullptr;
-      size_t row = 0; // workspace index inside the output's group
+      size_t workspaceIndex = 0; // workspace index inside the output's group
       wlr_scene_tree* tree = nullptr;
       wlr_scene_border* border = nullptr;
       SurfaceBlur blur;
@@ -191,18 +192,20 @@ namespace umbriel {
       std::vector<WorkspaceBackground> workspaceBackgrounds;
       std::vector<std::unique_ptr<Card>> cards;
       std::vector<std::unique_ptr<DesktopSurface>> desktop;
-      double rowScroll = 0;
-      double rowFrom = 0;
-      double rowTo = 0;
+      double workspaceScroll = 0;
+      double workspaceFrom = 0;
+      double workspaceTo = 0;
     };
 
-    // Row placement for one output at the current progress.
-    struct RowMetrics {
+    // Workspace preview placement for one output at the current progress. Previews
+    // step along the output's workspace axis; the other axis stays centered.
+    struct PreviewMetrics {
       wlr_box outputBox{};
       double zoom = 1.0;
-      int rowX = 0;
-      int rowW = 0;
-      int rowH = 0;
+      WorkspaceAxis axis = WorkspaceAxis::Vertical;
+      int previewW = 0;
+      int previewH = 0;
+      double baseX = 0;
       double baseY = 0;
       double gap = 0;
     };
@@ -219,13 +222,16 @@ namespace umbriel {
     static void onDesktopMirrorFrameDone(wl_listener* listener, void* data);
 
     [[nodiscard]] double zoom() const;
-    [[nodiscard]] static bool rowMetrics(const OutputState& state, const Server& server, double zoom, RowMetrics& out);
-    [[nodiscard]] static int rowTop(const RowMetrics& metrics, double rowScroll, size_t row);
+    [[nodiscard]] static bool
+    previewMetrics(const OutputState& state, const Server& server, double zoom, PreviewMetrics& out);
+    // The workspace preview's box in layout coordinates.
+    [[nodiscard]] static wlr_box
+    previewBox(const PreviewMetrics& metrics, double workspaceScroll, size_t workspaceIndex);
 
     bool beginPresentation();
     void buildState();
     void populateCards(OutputState& state);
-    Card* createCard(OutputState& state, View* view, size_t row);
+    Card* createCard(OutputState& state, View* view, size_t workspaceIndex);
     void snapshotCardForClose(Card& card);
     void destroyCard(Card* card);
     static void syncCardBuffer(CardSurface& entry);
@@ -247,7 +253,7 @@ namespace umbriel {
 
     void applyProgress();
     void layoutOutput(OutputState& state);
-    void layoutCard(Card& card, const RowMetrics& metrics, double rowScroll, const View* liveTarget);
+    void layoutCard(Card& card, const PreviewMetrics& metrics, double workspaceScroll, const View* liveTarget);
     // The window a focus or close action would act on right now: the focused view of the active workspace on the
     // output holding the cursor. Null when that workspace is empty, which is also when those actions do nothing.
     [[nodiscard]] View* liveTargetView() const;
@@ -267,7 +273,8 @@ namespace umbriel {
     void scheduleFrames() const;
 
     [[nodiscard]] Card* cardAt(double lx, double ly);
-    [[nodiscard]] Workspace* rowAt(double lx, double ly, OutputState** outState, size_t* outRow, bool extendHorizontal);
+    [[nodiscard]] Workspace*
+    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis);
     [[nodiscard]] WorkspaceGroup*
     workspaceGapAt(double lx, double ly, OutputState** outState, size_t* outIndex, wlr_box* outHintBox);
     [[nodiscard]] Workspace* preferredWorkspace() const;
@@ -277,7 +284,10 @@ namespace umbriel {
     void updateDrag(double lx, double ly);
     void endDrag(bool drop);
     void syncWorkspaceRows(OutputState& state, WorkspaceGroup& group);
-    void showDropHint(const wlr_box& worldBox, const RowMetrics& metrics, double rowScroll, size_t row, Output* output);
+    void showDropHint(
+        const wlr_box& worldBox, const PreviewMetrics& metrics, double workspaceScroll, size_t workspaceIndex,
+        Output* output
+    );
     void showWorkspaceInsertHint(Output* output, const wlr_box& box);
     void hideDropHint();
 
@@ -311,7 +321,8 @@ namespace umbriel {
     Output* m_middleOutput = nullptr;
     double m_middlePressX = 0;
     double m_middlePressY = 0;
-    double m_middleAccumY = 0;
+    // Travel along the pressed output's workspace axis since the last step.
+    double m_middleAccum = 0;
     bool m_middlePressed = false;
     bool m_middleDragging = false;
 

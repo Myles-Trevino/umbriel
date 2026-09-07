@@ -8,6 +8,8 @@ readonly LAYER_LOG="$UMBRIEL_RUNTIME_DIR/wallpaper-background.log"
 readonly BOTTOM_LOG="$UMBRIEL_RUNTIME_DIR/wallpaper-bottom.log"
 readonly MIRRORED="$UMBRIEL_RUNTIME_DIR/overview-wallpaper-on.png"
 readonly FLAT="$UMBRIEL_RUNTIME_DIR/overview-wallpaper-off.png"
+readonly HORIZONTAL="$UMBRIEL_RUNTIME_DIR/overview-wallpaper-horizontal.png"
+readonly HORIZONTAL_FLAT="$UMBRIEL_RUNTIME_DIR/overview-wallpaper-horizontal-flat.png"
 readonly BASE_CONFIG="$UMBRIEL_RUNTIME_DIR/wallpaper-base.toml"
 
 cp "$UMBRIEL_CONFIG" "$BASE_CONFIG"
@@ -84,5 +86,49 @@ grim "$FLAT"
 "$UMBRIEL" msg overview-close > /dev/null
 assert_rgb "wallpaper disabled" "$FLAT" 632 352 255 0 0
 assert_rgb "bottom layer kept" "$FLAT" 40 40 0 255 0
+
+# Horizontally arranged workspaces put the adjacent preview beside the active one instead of below it, so a preview's
+# mirrors travel along X with it. Two workspaces, and no shortcut badges to sit on the sampled corners.
+write_horizontal_config() {
+  {
+    cat "$BASE_CONFIG"
+    printf 'shortcuts = false\nworkspace_wallpaper = %s\n' "$1"
+    cat <<'EOF'
+
+[output."HEADLESS-1"]
+workspaces = 2
+workspace_axis = "horizontal"
+EOF
+  } > "$UMBRIEL_CONFIG"
+}
+
+write_horizontal_config true
+"$UMBRIEL" msg config-reload > /dev/null
+"$UMBRIEL" msg overview-open > /dev/null
+sleep 0.2
+grim "$HORIZONTAL"
+"$UMBRIEL" msg overview-close > /dev/null
+# The active preview still spans 320,180 to 960,540, and the second steps 640 + 0.1 * 1280 * 0.5 = 704 px along X, so
+# it enters the output at x = 1024 with the same vertical band. Each preview mirrors the bottom-layer surface into its
+# own top-left corner as a 100x100 square, which is where the copies become traceable.
+assert_rgb "active bottom layer mirrored" "$HORIZONTAL" 344 204 0 255 0
+assert_rgb "adjacent bottom layer mirrored" "$HORIZONTAL" 1060 210 0 255 0
+# Nothing steps along Y: where a vertically stacked second preview would have put its copy, the wallpaper is all there
+# is. The real bottom layer is still hidden while the copies stand in.
+assert_rgb "no bottom layer copy below" "$HORIZONTAL" 360 630 85 119 170
+assert_rgb "bottom layer hidden" "$HORIZONTAL" 40 40 85 119 170
+
+# With the mirrors off, each preview shows the flat fill instead, which draws the preview's own bounds: the adjacent
+# fill sits to the right, and it stops at the gap rather than bleeding across it.
+write_horizontal_config false
+"$UMBRIEL" msg config-reload > /dev/null
+"$UMBRIEL" msg overview-open > /dev/null
+sleep 0.2
+grim "$HORIZONTAL_FLAT"
+"$UMBRIEL" msg overview-close > /dev/null
+assert_rgb "active fill" "$HORIZONTAL_FLAT" 632 352 255 0 0
+assert_rgb "adjacent fill beside" "$HORIZONTAL_FLAT" 1100 352 255 0 0
+assert_rgb "gap between previews" "$HORIZONTAL_FLAT" 990 352 85 119 170
+assert_rgb "nothing below the previews" "$HORIZONTAL_FLAT" 632 620 85 119 170
 
 echo "workspace previews mirror the background- and bottom-layer surfaces, and fall back to the flat fill when disabled"

@@ -36,6 +36,8 @@ namespace umbriel {
   [[nodiscard]] const OutputRule* uniqueFixedWorkspaceOwner(const Config& config, size_t index);
   // Descriptor-specific output sections override connector fallbacks.
   [[nodiscard]] const OutputRule* findOutputRule(const Config& config, const OutputIdentity& identity);
+  // Direction the output arranges its workspaces along; vertical when no rule matches.
+  [[nodiscard]] WorkspaceAxis resolveWorkspaceAxis(const Config& config, const OutputIdentity& identity);
   [[nodiscard]] ResolvedLayoutConfig resolveGlobalLayout(const Config& config);
   [[nodiscard]] ResolvedLayoutConfig
   resolveWorkspaceLayout(const Config& config, const OutputIdentity& identity, std::string_view name, size_t index);

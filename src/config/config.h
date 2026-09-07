@@ -22,6 +22,13 @@ namespace umbriel {
   inline constexpr size_t kMaxWorkspaces = 64;
   struct ConfigReloadResult;
 
+  // Direction along which an output's workspaces are arranged. Scrolling layouts
+  // always scroll perpendicular to it.
+  enum class WorkspaceAxis {
+    Vertical,
+    Horizontal,
+  };
+
   enum class ModifierKey {
     Super,
     Alt,
@@ -50,7 +57,6 @@ namespace umbriel {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> centerUnderfullStrip;
       std::optional<bool> centerFocused;
-      std::optional<ScrollingDirection> direction;
       std::optional<bool> expandSingleColumn;
       bool operator==(const Scrolling&) const = default;
     } scrolling;
@@ -210,6 +216,9 @@ namespace umbriel {
     // Smallest workspace count a dynamic output keeps. Rejected alongside an
     // explicit inventory, which already states an exact count.
     int minWorkspaces = 1;
+    // Direction this output's workspaces are arranged along. Scrolling layouts on
+    // it scroll perpendicular to this.
+    WorkspaceAxis workspaceAxis = WorkspaceAxis::Vertical;
     struct Layout {
       struct Scrolling {
         // Initial strip-axis extent inherited by workspaces on this output.
@@ -604,7 +613,6 @@ namespace umbriel {
         std::optional<double> defaultWidthFraction;
         bool centerUnderfullStrip = true;
         bool centerFocused = false;
-        ScrollingDirection direction = ScrollingDirection::Horizontal;
         bool expandSingleColumn = false;
         bool operator==(const Scrolling&) const = default;
       } scrolling;

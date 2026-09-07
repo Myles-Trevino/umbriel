@@ -353,27 +353,6 @@ namespace umbriel {
       return std::nullopt;
     }
 
-    std::optional<ScrollingDirection> readScrollingDirection(Section& section, std::string_view context) {
-      const toml::node* node = section.take("direction");
-      if (node == nullptr) {
-        return std::nullopt;
-      }
-      const auto* value = node->as_string();
-      if (value == nullptr) {
-        warnAt(node->source(), R"({}.direction must be a string ("horizontal" or "vertical"))", context);
-        return std::nullopt;
-      }
-      const std::string_view direction = value->get();
-      if (direction == "horizontal") {
-        return ScrollingDirection::Horizontal;
-      }
-      if (direction == "vertical") {
-        return ScrollingDirection::Vertical;
-      }
-      warnAt(node->source(), R"(unknown {}.direction "{}" (expected "horizontal" or "vertical"))", context, direction);
-      return std::nullopt;
-    }
-
     std::optional<MasterPosition> readMasterPosition(Section& section, std::string_view context) {
       const toml::node* node = section.take("position");
       if (node == nullptr) {
@@ -590,9 +569,6 @@ namespace umbriel {
               overrides.widthPresets = std::move(*presets);
             }
             s.sub("scrolling", [&](Section& sc) {
-              if (const auto direction = readScrollingDirection(sc, layoutContext + ".scrolling")) {
-                overrides.scrolling.direction = direction;
-              }
               sc.boolean("expand_single_column", overrides.scrolling.expandSingleColumn);
               sc.real("default_width_fraction", 0.1, 1.0, overrides.scrolling.defaultWidthFraction)
                   .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip)
@@ -1221,9 +1197,6 @@ namespace umbriel {
           loaded.layout.widthPresets = std::move(*presets);
         }
         s.sub("scrolling", [&](Section& sc) {
-          if (const auto direction = readScrollingDirection(sc, "layout.scrolling")) {
-            loaded.layout.scrolling.direction = *direction;
-          }
           sc.boolean("expand_single_column", loaded.layout.scrolling.expandSingleColumn);
           sc.real("default_width_fraction", 0.1, 1.0, loaded.layout.scrolling.defaultWidthFraction)
               .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip)
@@ -1578,6 +1551,16 @@ namespace umbriel {
           });
         });
         keys.integer("min_workspaces", 1, static_cast<int>(kMaxWorkspaces), rule.minWorkspaces);
+        if (const toml::node* axisNode = keys.take("workspace_axis")) {
+          const auto value = axisNode->value<std::string>();
+          if (value == "vertical") {
+            rule.workspaceAxis = WorkspaceAxis::Vertical;
+          } else if (value == "horizontal") {
+            rule.workspaceAxis = WorkspaceAxis::Horizontal;
+          } else {
+            warnAt(axisNode->source(), "ignoring output.{}.workspace_axis (expected vertical|horizontal)", name);
+          }
+        }
         if (const toml::node* workspacesNode = keys.take("workspaces")) {
           if (const auto count = workspacesNode->value<std::int64_t>()) {
             if (*count < 1 || *count > static_cast<std::int64_t>(kMaxWorkspaces)) {

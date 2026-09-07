@@ -4,9 +4,10 @@
 // events. The compositor attaches it to its wlr_cursor like any other pointer, so these events run the same path a real
 // mouse does. Usage: pointer-client <width> <height> <command>... move <x> <y> absolute motion within the given extent
 // click <button> press and release (button is an evdev BTN_* code) press <button> release <button> notch <dir> one
-// vertical wheel notch, -1 up / 1 down mod <name|none> hold one modifier (shift, control, alt, or logo) tap <key> press
-// and release one evdev key pause <ms> keep the pointer connection and current input state. Commands run in order,
-// each followed by a frame and a roundtrip so the compositor has processed one before the next is sent.
+// vertical wheel notch, -1 up / 1 down notch-horizontal <dir> the same notch on the horizontal wheel axis, -1 left /
+// 1 right mod <name|none> hold one modifier (shift, control, alt, or logo) tap <key> press and release one evdev key
+// pause <ms> keep the pointer connection and current input state. Commands run in order, each followed by a frame and
+// a roundtrip so the compositor has processed one before the next is sent.
 
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
 #include "wlr-virtual-pointer-unstable-v1-client-protocol.h"
@@ -220,15 +221,14 @@ int main(int argc, char** argv) {
       if (command != "press") {
         zwlr_virtual_pointer_v1_button(pointer, nextTime(), button, WL_POINTER_BUTTON_STATE_RELEASED);
       }
-    } else if (command == "notch") {
+    } else if (command == "notch" || command == "notch-horizontal") {
       needs(1);
       const int dir = std::atoi(args[i + 1].c_str()) < 0 ? -1 : 1;
       i += 1;
+      const uint32_t axis = command == "notch" ? WL_POINTER_AXIS_VERTICAL_SCROLL : WL_POINTER_AXIS_HORIZONTAL_SCROLL;
       // A real wheel sends the smooth value and the discrete step together. The overview counts notches, so the
       // discrete half is the one that matters here, but sending only that is not something a wheel does.
-      zwlr_virtual_pointer_v1_axis_discrete(
-          pointer, nextTime(), WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(dir * 15.0), dir
-      );
+      zwlr_virtual_pointer_v1_axis_discrete(pointer, nextTime(), axis, wl_fixed_from_double(dir * 15.0), dir);
     } else if (command == "mod") {
       needs(1);
       const uint32_t depressed = modifierMask(keyboard, args[i + 1]);

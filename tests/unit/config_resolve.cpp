@@ -317,6 +317,64 @@ UMBRIEL_TEST(descriptorOutputRuleOverridesConnectorFallback) {
   }
 }
 
+// Scrolling runs perpendicular to the workspace axis, and a descriptor rule that
+// omits the axis does not inherit the connector rule's.
+UMBRIEL_TEST(workspaceAxisSelectsTheStripDirectionPerOutput) {
+  Config config;
+
+  OutputRule connector;
+  connector.name = "HDMI-A-1";
+  connector.workspaceAxis = umbriel::WorkspaceAxis::Horizontal;
+  config.outputs.push_back(std::move(connector));
+
+  OutputRule descriptor;
+  descriptor.name = "Microstep MSI G2712F CD6T084401192";
+  config.outputs.push_back(std::move(descriptor));
+
+  OutputRule horizontal;
+  horizontal.name = "DP-1";
+  horizontal.workspaceAxis = umbriel::WorkspaceAxis::Horizontal;
+  config.outputs.push_back(std::move(horizontal));
+
+  constexpr OutputIdentity monitor = identity("HDMI-A-1", "Microstep", "MSI G2712F", "CD6T084401192");
+  CHECK(umbriel::resolveWorkspaceAxis(config, monitor) == umbriel::WorkspaceAxis::Vertical);
+  CHECK(
+      umbriel::resolveWorkspaceLayout(config, monitor, "1", 0).scrolling.direction
+      == umbriel::ScrollingDirection::Horizontal
+  );
+
+  CHECK(umbriel::resolveWorkspaceAxis(config, identity("DP-1")) == umbriel::WorkspaceAxis::Horizontal);
+  CHECK(
+      umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "1", 0).scrolling.direction
+      == umbriel::ScrollingDirection::Vertical
+  );
+
+  CHECK(umbriel::resolveWorkspaceAxis(config, identity("DP-9")) == umbriel::WorkspaceAxis::Vertical);
+  CHECK(
+      umbriel::resolveWorkspaceLayout(config, identity("DP-9"), "1", 0).scrolling.direction
+      == umbriel::ScrollingDirection::Horizontal
+  );
+}
+
+// A workspace rule can no longer restore the removed strip direction.
+UMBRIEL_TEST(workspaceRulesCannotOverrideTheResolvedStripDirection) {
+  Config config;
+
+  OutputRule horizontal;
+  horizontal.name = "DP-1";
+  horizontal.workspaceAxis = umbriel::WorkspaceAxis::Horizontal;
+  config.outputs.push_back(std::move(horizontal));
+
+  WorkspaceConfig rule;
+  rule.name = "dev";
+  rule.layout.scrolling.centerFocused = true;
+  config.workspaceRules.push_back(std::move(rule));
+
+  const auto resolved = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "dev", 0);
+  CHECK(resolved.scrolling.centerFocused);
+  CHECK(resolved.scrolling.direction == umbriel::ScrollingDirection::Vertical);
+}
+
 UMBRIEL_TEST(fixedWorkspacePositionSelectsItsUniqueOutput) {
   Config config;
 

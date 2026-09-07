@@ -652,6 +652,14 @@ namespace umbriel {
     }
   }
 
+  void Cursor::cancelLayoutInteraction() {
+    // An axis change keeps the same layout object, so cancelStaleTiledResize()
+    // cannot see it; the session's edges would still mean the old orientation.
+    if (std::holds_alternative<ScrollDragGrab>(m_grab) || std::holds_alternative<TiledResizeGrab>(m_grab)) {
+      resetMode();
+    }
+  }
+
   void Cursor::onMotion(wl_listener* listener, void* data) {
     Cursor* self;
     self = wl_container_of(listener, self, m_motion);

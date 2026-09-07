@@ -1832,9 +1832,14 @@ namespace umbriel {
       setPosition(fullArea.x, fullArea.y);
     }
 
+    // Present at the node's absolute position: a workspace mid-slide offsets its
+    // whole tree on either axis, and the local origin does not carry that.
+    int lx = 0;
+    int ly = 0;
+    wlr_scene_node_coords(&m_sceneTree->node, &lx, &ly);
     const wlr_box target{
-        m_sceneTree->node.x,
-        m_sceneTree->node.y,
+        lx,
+        ly,
         fullArea.width,
         fullArea.height,
     };

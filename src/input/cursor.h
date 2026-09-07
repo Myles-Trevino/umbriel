@@ -151,6 +151,10 @@ namespace umbriel {
     bool warpToView(View& view);
     // A layout-mode reload can replace the layout that owns a tiled resize.
     void cancelStaleTiledResize();
+    // End the pointer grabs whose meaning depends on the workspace axis before a
+    // layout change: pointer strip scrolling and a tiled resize session. Move and
+    // floating resize keep running.
+    void cancelLayoutInteraction();
     void handleNewConstraint(wlr_pointer_constraint_v1* constraint);
     void clearConstraint();
     // Recompute compositor cursor (mod-held resize/move affordance, or active grab).

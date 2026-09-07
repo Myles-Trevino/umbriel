@@ -505,6 +505,23 @@ UMBRIEL_TEST(outputScrollingDefaultOnlyRefreshesWorkspaceLayout) {
   CHECK_EQ(effects.summary(), std::string("workspace layout"));
 }
 
+UMBRIEL_TEST(outputWorkspaceAxisOnlyRefreshesWorkspaceLayout) {
+  Config before;
+  OutputRule output;
+  output.name = "HEADLESS-1";
+  before.outputs.push_back(output);
+
+  Config after = before;
+  after.outputs[0].workspaceAxis = umbriel::WorkspaceAxis::Horizontal;
+
+  const ConfigEffects effects = ConfigEffects::between(before, after);
+  CHECK(effects.workspaceLayout);
+  CHECK(effects.invalidatesOverview());
+  CHECK(!effects.outputState);
+  CHECK(!effects.workspaceInventory);
+  CHECK_EQ(effects.summary(), std::string("workspace layout"));
+}
+
 UMBRIEL_TEST(outputRuleNameSetChangesRefreshIdentityDependentEffects) {
   Config before;
   OutputRule connector;

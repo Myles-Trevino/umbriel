@@ -44,12 +44,11 @@ duration_ms = 1
 [layout.scrolling]
 default_width_fraction = 0.5
 
+# The whole output starts with horizontally arranged workspaces, so its scrolling
+# strips run vertically for the named-lane phase below.
 [output."HEADLESS-1"]
 workspaces = 4
-
-[[workspace]]
-index = 1
-layout.scrolling.direction = "vertical"
+workspace_axis = "horizontal"
 
 [[workspace]]
 index = 3
@@ -124,6 +123,10 @@ if [[ $first_configure != "$final_size" ]]; then
   exit 1
 fi
 vertical_workspace=$(workspace_of named-vertical-first)
+
+# Restore vertically arranged workspaces so the strip runs horizontally again.
+sed -i 's/^workspace_axis = "horizontal"$/workspace_axis = "vertical"/' "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
 
 # Once users split a named column manually, new members join the first named
 # column in strip order, not whichever column happens to be focused.

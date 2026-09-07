@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# The center of a scrolling card projected into the overview's left margin
-# must keep its content-anchored stack hint, not become the strip's prepend
-# target at the centered preview boundary.
+# The center of a scrolling card projected into the overview's margin must keep
+# its content-anchored stack hint, not become the strip's prepend target at the
+# centered preview boundary. That holds along either scrolling axis: with
+# horizontally arranged workspaces the strip scrolls vertically and its cards
+# overhang the preview's bottom edge instead of its left one.
 set -euo pipefail
 
 readonly BTN_LEFT=272
@@ -10,6 +12,8 @@ readonly OUTPUT_H=720
 readonly OVERVIEW_ZOOM=0.5
 readonly OVERVIEW_X=320
 readonly OVERVIEW_Y=180
+# The zoom below scales the output to a 640x360 preview centred on both axes.
+readonly PREVIEW_BOTTOM=540
 readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 pointer() {
@@ -43,6 +47,9 @@ default_width_fraction = 0.5
 
 [overview]
 zoom = 0.5
+
+[output."HEADLESS-1"]
+workspace_axis = "vertical"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 
@@ -121,4 +128,91 @@ if (( source_x != target_x || source_w != target_w || source_y >= target_y )); t
   exit 1
 fi
 
-echo "the overhanging card center kept its stack hint and accepted the drop: red=$red green=$green"
+# Arrange the workspaces horizontally: the strip now scrolls vertically, so later columns hang below the preview's
+# bottom edge. A drop down there is only reachable because hit ownership extends across the output along the
+# scrolling axis, and its projection must still name the column it points at.
+sed -i 's/^workspace_axis = "vertical"$/workspace_axis = "horizontal"/' "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+
+# overhang-7 shares its column with overhang-4, so detaching it cannot collapse a column and shift the stack under the
+# pointer mid-drag. Focusing it also scrolls that column into the preview.
+source_id=$(jq -r '.[] | select(.title == "overhang-7") | .id' <<< "$windows")
+"$UMBRIEL" msg "window-focus:$source_id" > /dev/null
+stack_rows=0
+for _ in $(seq 30); do
+  stack_rows=$("$UMBRIEL" windows --json | jq '[.[] | .y] | unique | length')
+  ((stack_rows >= 5)) && break
+  sleep 0.1
+done
+if ((stack_rows < 5)); then
+  echo "the strip never stacked its columns vertically: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+
+windows=$("$UMBRIEL" windows --json)
+read -r source_x source_y source_h < <(
+  jq -r '.[] | select(.title == "overhang-7") | "\(.x) \(.y) \(.h)"' <<< "$windows"
+)
+# The topmost column that starts below the preview's bottom edge: its card is visible only where it overhangs, so
+# every point on it lies outside the preview box.
+read -r target_title target_x target_top target_bottom < <(
+  jq -r --argjson origin "$OVERVIEW_Y" --argjson zoom "$OVERVIEW_ZOOM" --argjson bottom "$PREVIEW_BOTTOM" '
+    [.[] | {title, x, top: (($origin + .y * $zoom) | round), bottom: (($origin + (.y + .h) * $zoom) | round)}]
+    | map(select(.top > $bottom))
+    | min_by(.top)
+    | "\(.title) \(.x) \(.top) \(.bottom)"' <<< "$windows"
+)
+if [[ $target_title == null || $target_title == "overhang-7" ]] \
+  || ((target_top >= 640 || target_bottom <= target_top + 60)); then
+  echo "test setup left no usable column overhanging below the preview: ${target_title} top=${target_top}: $windows"
+  exit 1
+fi
+press_x=$((OVERVIEW_X + (source_x + 20) / 2))
+press_y=$((OVERVIEW_Y + (source_y + source_h / 2) / 2))
+# Drop near the column's leading cross edge so the stack target is its first row, and low enough that only the
+# extended hit area can own the point.
+drop_x=$((OVERVIEW_X + 100))
+drop_y=$((target_top + 40))
+if ((press_y <= OVERVIEW_Y + 5 || press_y >= 535)); then
+  echo "test setup did not leave the drag source inside the preview: y=$press_y in $windows"
+  exit 1
+fi
+
+"$UMBRIEL" msg overview-open > /dev/null
+sleep 0.6
+pointer move "$press_x" "$press_y" press "$BTN_LEFT" move "$drop_x" "$drop_y" pause 1500 release "$BTN_LEFT" &
+pointer_pid=$!
+sleep 0.5
+
+# The stack hint for the first row is a bar along the column's leading cross edge, projected into the overhanging
+# part of the preview. The dragged card trails to the right of the pointer, so it cannot cover that bar.
+vertical_shot="$UMBRIEL_RUNTIME_DIR/drag-overhanging-card-vertical.png"
+grim "$vertical_shot"
+hint_sample="45x30+$((OVERVIEW_X + target_x / 2 + 8))+$((target_top + 15))"
+vertical_red=$(magick "$vertical_shot" -crop "$hint_sample" -colorspace RGB -format '%[fx:round(255*mean.r)]' info:)
+vertical_green=$(magick "$vertical_shot" -crop "$hint_sample" -colorspace RGB -format '%[fx:round(255*mean.g)]' info:)
+wait "$pointer_pid"
+
+if ((vertical_red < vertical_green + 35)); then
+  echo "no stack hint at the projected overhang position $hint_sample: red=$vertical_red green=$vertical_green"
+  exit 1
+fi
+
+sleep 0.2
+"$UMBRIEL" msg overview-close > /dev/null
+sleep 0.6
+
+windows=$("$UMBRIEL" windows --json)
+read -r moved_x moved_y moved_h < <(
+  jq -r '.[] | select(.title == "overhang-7") | "\(.x) \(.y) \(.h)"' <<< "$windows"
+)
+read -r landed_x landed_y landed_h < <(
+  jq -r --arg title "$target_title" '.[] | select(.title == $title) | "\(.x) \(.y) \(.h)"' <<< "$windows"
+)
+if ((moved_y != landed_y || moved_h != landed_h || moved_x >= landed_x)); then
+  echo "the drop below the preview did not stack overhang-7 before $target_title in its column: $windows"
+  exit 1
+fi
+
+echo "the overhanging card center kept its stack hint and accepted the drop on either axis:" \
+  "red=$red green=$green, overhang red=$vertical_red green=$vertical_green into $target_title"

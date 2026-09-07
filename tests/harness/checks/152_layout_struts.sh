@@ -15,6 +15,8 @@ readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/layout-struts.png"
 
 cp "$UMBRIEL_CONFIG" "$BASE_CONFIG"
 
+# $1 selects the strut set, $2 the output's workspace axis: vertical workspaces
+# scroll horizontally, horizontal ones scroll vertically.
 write_config() {
   cat "$BASE_CONFIG" > "$UMBRIEL_CONFIG"
   cat >> "$UMBRIEL_CONFIG" <<'EOF'
@@ -33,15 +35,19 @@ corner_radius = 0
 [layout]
 mode = "dwindle"
 gap = 0
+EOF
+  cat >> "$UMBRIEL_CONFIG" <<EOF
 
 [output.HEADLESS-1]
 workspaces = ["base", "override", "scroll-h", "scroll-v"]
+workspace_axis = "$2"
+EOF
+  cat >> "$UMBRIEL_CONFIG" <<'EOF'
 
 [[workspace]]
 name = "scroll-h"
 layout.mode = "scrolling"
 layout.gap = 8
-layout.scrolling.direction = "horizontal"
 layout.scrolling.default_width_fraction = 0.5
 layout.scrolling.center_underfull_strip = false
 
@@ -49,7 +55,6 @@ layout.scrolling.center_underfull_strip = false
 name = "scroll-v"
 layout.mode = "scrolling"
 layout.gap = 8
-layout.scrolling.direction = "vertical"
 layout.scrolling.default_width_fraction = 0.5
 layout.scrolling.center_underfull_strip = false
 
@@ -175,7 +180,7 @@ focus_window() {
   return 1
 }
 
-write_config with-struts
+write_config with-struts vertical
 "$UMBRIEL" msg config-reload > /dev/null
 
 "$LAYER_CLIENT" HEADLESS-1 40 > "$PANEL_LOG" 2>&1 &
@@ -253,6 +258,9 @@ assert_box strut-scroll-neighbor 608 604 1288 79
 assert_box strut-scroll-h 608 604 25 79
 assert_box strut-scroll-neighbor 608 604 641 79
 
+# Horizontally arranged workspaces turn the strip vertical for the scroll-v phase.
+write_config with-struts horizontal
+"$UMBRIEL" msg config-reload > /dev/null
 "$UMBRIEL" msg workspace-switch:scroll-v > /dev/null
 spawn_client strut-scroll-v
 focus_window strut-scroll-v
@@ -262,7 +270,7 @@ capture_maximized_to_edges strut-scroll-v
 "$UMBRIEL" msg window-toggle-maximize-to-edges > /dev/null
 assert_box strut-scroll-v 1224 298 25 79
 
-write_config without-struts
+write_config without-struts horizontal
 "$UMBRIEL" msg config-reload > /dev/null
 assert_box strut-scroll-v 1264 328 8 48
 
