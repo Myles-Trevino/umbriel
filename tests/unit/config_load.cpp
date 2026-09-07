@@ -1708,7 +1708,7 @@ scroll_button = "MouseBack"
 
   CHECK(result.success);
   CHECK(store.config().input.mouse.scrollButton == std::optional<uint32_t>(BTN_SIDE));
-  CHECK(containsDiagnostic(store, "input.mouse.scroll_button takes MouseBack away from keybinds"));
+  CHECK(containsDiagnostic(store, "input.mouse.scroll_button claims MouseBack for scrolling"));
 
   file.write(R"(
 [input.mouse]
@@ -1718,7 +1718,7 @@ scroll_button = "MouseBack"
 "Mod+MouseForward" = "overview-close"
 )");
   CHECK(store.reload().success);
-  CHECK(!containsDiagnostic(store, "away from keybinds"));
+  CHECK(!containsDiagnostic(store, "claims MouseBack for scrolling"));
 }
 
 UMBRIEL_TEST(keyboardOptionsLoadGloballyAndPerDevice) {

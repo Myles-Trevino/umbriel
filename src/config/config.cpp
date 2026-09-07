@@ -1594,8 +1594,8 @@ namespace umbriel {
       }
     }
 
-    // libinput consumes the scroll button: while it is configured, neither a press nor a release reaches the
-    // compositor, so a bind on that button can never fire.
+    // libinput swallows the scroll button while it turns motion into scrolling, but a press released without any
+    // motion still reaches the compositor as a click, so a bind on that button fires only in that case.
     void warnScrollButtonBinds(const Config& loaded) {
       const auto report = [&loaded](std::optional<uint32_t> button, std::string_view context) {
         if (!button) {
@@ -1605,7 +1605,10 @@ namespace umbriel {
           return;
         }
         const char* name = mouseButtonName(*button);
-        warnNoSrc("{} takes {} away from keybinds, so binds on it never fire", context, name != nullptr ? name : "it");
+        warnNoSrc(
+            "{} claims {} for scrolling, so binds on it fire only when it is released without motion", context,
+            name != nullptr ? name : "it"
+        );
       };
       report(loaded.input.mouse.scrollButton, "input.mouse.scroll_button");
       for (const Config::Input::Device& device : loaded.input.devices) {
