@@ -13,8 +13,9 @@ namespace umbriel::configmerge {
     toml::table merged;
     std::vector<std::filesystem::path> loadedFiles;
     std::vector<ConfigDiagnostic> diagnostics;
-    bool hadParseError = false;
+    bool hadError = false;
     bool missingIncludes = false;
+    bool missingOptionalIncludes = false;
   };
 
   [[nodiscard]] MergeResult mergeWithIncludes(const std::filesystem::path& rootFile);

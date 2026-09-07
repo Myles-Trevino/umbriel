@@ -21,6 +21,7 @@
 #include "scene/config_banner.h"
 #include "scene/hint_rect.h"
 #include "scene/quit_confirm.h"
+#include "server/backend_manager.h"
 #include "server/ipc.h"
 #include "server/wine_color_manager.h"
 #include "view/view.h"
@@ -269,12 +270,14 @@ namespace umbriel {
     m_clientCreated.notify = onClientCreated;
     wl_display_add_client_created_listener(m_display, &m_clientCreated);
 
-    m_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), &m_session);
-    if (m_backend == nullptr) {
+    m_backendManager = BackendManager::create(m_display, config().drm);
+    if (m_backendManager == nullptr) {
       throw std::runtime_error("failed to create wlr_backend");
     }
+    m_backend = m_backendManager->backend();
+    m_session = m_backendManager->session();
 
-    m_renderer = fx_renderer_create(m_backend);
+    m_renderer = m_backendManager->createRenderer();
     if (m_renderer == nullptr) {
       throw std::runtime_error("failed to create fx_renderer");
     }
@@ -307,6 +310,9 @@ namespace umbriel {
     m_allocator = wlr_allocator_autocreate(m_backend, m_renderer);
     if (m_allocator == nullptr) {
       throw std::runtime_error("failed to create wlr_allocator");
+    }
+    if (!m_backendManager->verifyOpenDevices("after allocator creation")) {
+      throw std::runtime_error("renderer or allocator opened an excluded GPU");
     }
 
     prepareAnimationShaders(m_renderer);
@@ -609,7 +615,9 @@ namespace umbriel {
     wlr_allocator_destroy(m_allocator);
     clearAnimationShaderCache();
     wlr_renderer_destroy(m_renderer);
-    wlr_backend_destroy(m_backend);
+    m_backendManager.reset();
+    m_backend = nullptr;
+    m_session = nullptr;
     wl_display_destroy(m_display);
   }
 
@@ -672,6 +680,7 @@ namespace umbriel {
       wlr_log(WLR_ERROR, "failed to start backend");
       return false;
     }
+    m_backendManager->markStarted();
 
     // These are delivered through the event loop, not a signal handler, so the shutdown path is ordinary code. Note the
     // side effect: wl_event_loop_add_signal blocks the signal process-wide, and a blocked mask survives fork and exec,
