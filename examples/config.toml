@@ -345,6 +345,10 @@ follows_mouse = false                           # Focus the pointer target after
 # Scratchpads
 # Each output owns a separate scratchpad. Bare actions target the output under
 # the pointer; append `:DP-1` or a monitor Config name to target one explicitly.
+# Resize, maximize, fullscreen, and close actions target a scratchpad that owns
+# keyboard focus. Layout-relative window actions leave the workspace behind it
+# unchanged.
+# Per-output dim and blur follow scratchpad visibility and clear when hidden.
 # Documentation: https://docs.noctalia.dev/umbriel/scratchpads/
 "Mod+Shift+Space" = "window-move-to-scratchpad"
 "Mod+Space" = "scratchpad-toggle"
@@ -605,7 +609,7 @@ curve = "easeout"
 style = "fade"                                  # fade or slide
 # shader = "shaders/reveal.glsl"
 
-# Window movement, resizing, and floating maximize
+# Window movement, resizing, visible scratchpad keybind resizing, and floating maximize
 [animation.windows_move]
 enabled = true
 duration_ms = 250

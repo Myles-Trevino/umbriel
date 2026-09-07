@@ -165,6 +165,15 @@ namespace umbriel {
     void requestFloatingSize(int width, int height);
     // The pending compositor request, else the committed geometry.
     [[nodiscard]] std::array<int, 2> floatingSize() const;
+    // The current floating size and usable output extent on one axis, as
+    // {size, extent}. Detached scratchpads use their assigned output.
+    [[nodiscard]] std::optional<std::array<int, 2>> floatingAxisBasis(bool width) const;
+    // The current floating size as a fraction of its usable output axis.
+    [[nodiscard]] std::optional<double> floatingFraction(bool width) const;
+    // Resize a floating view by usable-area fractions. An omitted axis keeps
+    // its current pending or committed size.
+    bool
+    resizeFloatingFractions(const std::optional<double>& widthFraction, const std::optional<double>& heightFraction);
     // The size a float episode lands on: the remembered floating size, else the
     // last size the client acked, was configured with, or was assigned.
     [[nodiscard]] std::array<int, 2> floatingRestoreSize() const;
@@ -328,6 +337,10 @@ namespace umbriel {
     void clearViewSurfaceWatches();
     void beginCloseAnimation();
     void applyPresentedSize();
+    // Refresh presentation through whichever owner currently holds the view.
+    // Scratchpads are detached from workspaces but still need animated crop
+    // and chrome updates.
+    void syncOwnedPresentation();
     // Presentation for a window held by an interactive move: derived from the
     // presented size at the node's current position, so a drag that changes the
     // window's target size keeps its chrome and crop while the layout stays out

@@ -29,6 +29,7 @@ namespace umbriel {
     [[nodiscard]] bool animatesOn(const Output* output) const override;
 
     [[nodiscard]] bool contains(const View* view) const;
+    [[nodiscard]] Output* outputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, Output* output);
     bool toggle(Output* output);
     void hideAll();
@@ -38,6 +39,9 @@ namespace umbriel {
     [[nodiscard]] bool hasFocus(Output* output) const;
     void noteFocus(View* view);
     void finishMove(View* view, Output* output);
+    // Apply the manager-owned floating presentation after a commit or while a
+    // detached view animation advances.
+    void syncViewPresentation(View* view);
     // Restore the manager-owned scene parents after a temporary global drag.
     void restorePresentation(View* view);
     void remove(View* view);

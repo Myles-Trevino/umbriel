@@ -1,5 +1,6 @@
 #include "workspace/scratchpad.h"
 
+#include "input/cursor.h"
 #include "output/output.h"
 #include "scene/animation_shader.h"
 #include "server/server.h"
@@ -77,6 +78,12 @@ namespace umbriel {
 
   bool ScratchpadManager::contains(const View* view) const {
     return std::ranges::any_of(m_entries, [view](const Entry& entry) { return entry.view == view; });
+  }
+
+  Output* ScratchpadManager::outputFor(const View* view) const {
+    const auto entry =
+        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
+    return entry != m_entries.end() ? entry->output : nullptr;
   }
 
   bool ScratchpadManager::moveToScratchpad(View* view, Output* output) {
@@ -423,9 +430,6 @@ namespace umbriel {
     Output* previous = it->output;
     if (output != nullptr) {
       it->output = output;
-      if (std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
-        m_visibleOutputs.push_back(output);
-      }
     }
     if (previous != it->output) {
       it->displacedOutput.clear();
@@ -440,7 +444,10 @@ namespace umbriel {
     }
     if (previous != it->output
         && std::ranges::none_of(m_entries, [previous](const Entry& entry) { return entry.output == previous; })) {
-      std::erase(m_visibleOutputs, previous);
+      setVisible(previous, false);
+    }
+    if (previous != it->output) {
+      setVisible(it->output, true);
     }
     restorePresentation(view);
   }
@@ -456,6 +463,34 @@ namespace umbriel {
     view->setOnActiveWorkspace(true);
     view->enterForeignOutput(entry->output);
     view->setNodeEnabled(true);
+    syncViewPresentation(view);
+  }
+
+  void ScratchpadManager::syncViewPresentation(View* view) {
+    const auto entry =
+        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
+    if (view == nullptr || entry == m_entries.end() || !view->mapped()) {
+      return;
+    }
+    // The global drag presentation intentionally spans output roots. Leave its
+    // crop alone until restorePresentation runs after the grab is released.
+    if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isDraggingView(view)) {
+      return;
+    }
+    if (view->toplevel()->scheduled.fullscreen) {
+      view->applyFullscreenLayout();
+      return;
+    }
+    const wlr_box& geometry = view->toplevel()->base->geometry;
+    if (geometry.width <= 0 || geometry.height <= 0) {
+      return;
+    }
+    view->applyPresentation({
+        .x = view->sceneTree()->node.x,
+        .y = view->sceneTree()->node.y,
+        .width = geometry.width,
+        .height = geometry.height,
+    });
   }
 
   bool ScratchpadManager::focusNext(Output* output) {

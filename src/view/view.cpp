@@ -681,8 +681,17 @@ namespace umbriel {
       updateShadow(width, height);
     }
     updateBlur(width, height);
+    syncOwnedPresentation();
+  }
+
+  void View::syncOwnedPresentation() {
     if (m_workspace != nullptr) {
       m_workspace->syncViewPresentation(this);
+      return;
+    }
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
+        scratchpad != nullptr && scratchpad->contains(this)) {
+      scratchpad->syncViewPresentation(this);
     }
   }
 
@@ -702,9 +711,7 @@ namespace umbriel {
     updateBorderGeometry();
     updateBlur();
     updateShadow();
-    if (m_workspace != nullptr) {
-      m_workspace->syncViewPresentation(this);
-    }
+    syncOwnedPresentation();
   }
 
   void View::cancelSizeAnimation() {
@@ -784,9 +791,11 @@ namespace umbriel {
   void View::beginResizeAnimation(int width, int height, bool allowFullscreen) {
     const Overview* overview = m_server->overview();
     const bool presentedInOverview = overview != nullptr && overview->active() && m_workspace != nullptr;
+    const ScratchpadManager* scratchpad = m_server->scratchpadManager();
+    const bool presentedInScratchpad = scratchpad != nullptr && scratchpad->contains(this);
     if (!m_mapped
         || (!m_onActiveWorkspace && !presentedInOverview)
-        || (m_workspace == nullptr && !allowFullscreen)
+        || (m_workspace == nullptr && !presentedInScratchpad && !allowFullscreen)
         || (!allowFullscreen && (m_toplevel->scheduled.fullscreen || m_toplevel->current.fullscreen))
         || width <= 0
         || height <= 0) {
@@ -919,9 +928,7 @@ namespace umbriel {
       m_decoration.setShadowPosition(cx, cy);
       // Clips are derived from the node's current position; refresh them as the
       // node moves or partial-visibility trims land displaced.
-      if (m_workspace != nullptr) {
-        m_workspace->syncViewPresentation(this);
-      }
+      syncOwnedPresentation();
       if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
         overview->onViewPresentationChanged(this);
       }
@@ -1092,6 +1099,11 @@ namespace umbriel {
   wlr_box View::floatingUsableArea() const {
     if (m_workspace != nullptr && m_workspace->group() != nullptr && m_workspace->group()->output() != nullptr) {
       return m_workspace->group()->output()->usableArea();
+    }
+    if (m_server != nullptr && m_server->scratchpadManager() != nullptr) {
+      if (Output* output = m_server->scratchpadManager()->outputFor(this)) {
+        return output->usableArea();
+      }
     }
     return m_server->usableAreaAt(m_sceneTree->node.x, m_sceneTree->node.y);
   }
@@ -1518,7 +1530,12 @@ namespace umbriel {
     if (m_workspace != nullptr && m_workspace->group() != nullptr && m_workspace->group()->output() != nullptr) {
       return m_workspace->group()->output();
     }
-    // Scratchpad / floating views with no workspace: find the output containing the view's scene coordinates.
+    if (m_server != nullptr && m_server->scratchpadManager() != nullptr) {
+      if (Output* output = m_server->scratchpadManager()->outputFor(this)) {
+        return output;
+      }
+    }
+    // Other floating views with no workspace use their scene coordinates.
     if (m_sceneTree != nullptr && m_server != nullptr && m_server->outputLayout() != nullptr) {
       wlr_output* wlrOut = wlr_output_layout_output_at(
           m_server->outputLayout(), m_sceneTree->node.x + (m_toplevel ? m_toplevel->current.width / 2 : 0),
@@ -1635,6 +1652,54 @@ namespace umbriel {
     return {geo.width, geo.height};
   }
 
+  std::optional<std::array<int, 2>> View::floatingAxisBasis(bool width) const {
+    if (!m_mapped || m_tiled) {
+      return std::nullopt;
+    }
+    const wlr_box usable = floatingUsableArea();
+    const auto [basisWidth, basisHeight] = floatingSize();
+    const int basis = width ? basisWidth : basisHeight;
+    const int extent = width ? usable.width : usable.height;
+    if (extent <= 0 || basis <= 0) {
+      return std::nullopt;
+    }
+    return std::array{basis, extent};
+  }
+
+  std::optional<double> View::floatingFraction(bool width) const {
+    const auto axis = floatingAxisBasis(width);
+    if (!axis) {
+      return std::nullopt;
+    }
+    return floatingSizeFraction((*axis)[0], (*axis)[1]);
+  }
+
+  bool View::resizeFloatingFractions(
+      const std::optional<double>& widthFraction, const std::optional<double>& heightFraction
+  ) {
+    if (!m_mapped || m_tiled || m_toplevel->current.fullscreen || m_toplevel->scheduled.fullscreen) {
+      return false;
+    }
+    const wlr_box usable = floatingUsableArea();
+    if (usable.width <= 0 || usable.height <= 0) {
+      return false;
+    }
+    const XdgSizeHints hints = xdgSizeHints(m_toplevel);
+    const auto [basisWidth, basisHeight] = floatingSize();
+    const int width =
+        widthFraction ? clampXdgWidth(floatingFractionSize(*widthFraction, usable.width), hints) : basisWidth;
+    const int height =
+        heightFraction ? clampXdgHeight(floatingFractionSize(*heightFraction, usable.height), hints) : basisHeight;
+    if (width <= 0 || height <= 0) {
+      return false;
+    }
+    dropMaximizedForResize();
+    requestFloatingSize(width, height);
+    beginResizeAnimation(width, height);
+    clampFloatingPositionForSize(width, height);
+    return true;
+  }
+
   std::array<int, 2> View::floatingRestoreSize() const {
     if (m_floating.size()) {
       return *m_floating.size();
@@ -1748,7 +1813,7 @@ namespace umbriel {
       output = m_workspace->group()->output();
     }
     if (output == nullptr) {
-      output = m_server->outputFromWlr(m_server->preferredOutput());
+      output = currentOutput();
     }
     wlr_output* wlrOutput = output != nullptr ? output->wlr() : m_server->preferredOutput();
     wlr_box fullArea{};
@@ -2282,10 +2347,9 @@ namespace umbriel {
         if (!sizeAnimating()) {
           syncFloatingSurfaceClip();
         }
-        // Enable + clip to the home output (previously done per render pass).
-        if (m_workspace != nullptr) {
-          m_workspace->syncViewPresentation(this);
-        }
+        // Enable + clip through the current presentation owner (previously
+        // done per render pass).
+        syncOwnedPresentation();
       }
     } else {
       updateBlur();
@@ -2373,9 +2437,11 @@ namespace umbriel {
       return;
     }
 
-    // Detached scratchpad views have no presentation owner to apply a resize
-    // animation, so keep their position and size transition in lockstep.
-    const bool animateFloating = animate && m_workspace != nullptr;
+    const ScratchpadManager* scratchpad = m_server->scratchpadManager();
+    const bool visibleScratchpad = m_onActiveWorkspace && scratchpad != nullptr && scratchpad->contains(this);
+    // A visible scratchpad has a manager-owned presentation even though it is
+    // detached from a workspace, so its position and size can animate together.
+    const bool animateFloating = animate && (m_workspace != nullptr || visibleScratchpad);
     if (!animateFloating) {
       cancelSizeAnimation();
     }

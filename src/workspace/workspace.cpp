@@ -1018,60 +1018,17 @@ namespace umbriel {
 
   std::optional<std::array<int, 2>> Workspace::focusedFloatingAxis(bool width) const {
     View* view = m_focusedView;
-    if (view == nullptr || !view->mapped() || !view->floating()) {
-      return std::nullopt;
-    }
-    const wlr_box usable = view->floatingUsableArea();
-    const auto [basisWidth, basisHeight] = view->floatingSize();
-    const int basis = width ? basisWidth : basisHeight;
-    const int extent = width ? usable.width : usable.height;
-    if (extent <= 0 || basis <= 0) {
-      return std::nullopt;
-    }
-    return std::array{basis, extent};
+    return view != nullptr ? view->floatingAxisBasis(width) : std::nullopt;
   }
 
   std::optional<double> Workspace::focusedFloatingFraction(bool width) const {
-    const auto axis = focusedFloatingAxis(width);
-    if (!axis) {
-      return std::nullopt;
-    }
-    return floatingSizeFraction((*axis)[0], (*axis)[1]);
+    return m_focusedView != nullptr ? m_focusedView->floatingFraction(width) : std::nullopt;
   }
 
   bool
   Workspace::resizeFocusedFloating(const std::optional<double>& widthFrac, const std::optional<double>& heightFrac) {
     View* view = m_focusedView;
-    if (view == nullptr || !view->mapped() || !view->floating()) {
-      return false;
-    }
-    const wlr_xdg_toplevel* toplevel = view->toplevel();
-    if (toplevel->current.fullscreen || toplevel->scheduled.fullscreen) {
-      // A fullscreen configure outranks the request, and adoptFloatingClientSize
-      // refuses to retire it, so the resize would only strand a pending serial.
-      return false;
-    }
-    const wlr_box usable = view->floatingUsableArea();
-    if (usable.width <= 0 || usable.height <= 0) {
-      return false;
-    }
-    const XdgSizeHints hints = xdgSizeHints(toplevel);
-    const auto [basisWidth, basisHeight] = view->floatingSize();
-    const int width = widthFrac ? clampXdgWidth(floatingFractionSize(*widthFrac, usable.width), hints) : basisWidth;
-    const int height =
-        heightFrac ? clampXdgHeight(floatingFractionSize(*heightFrac, usable.height), hints) : basisHeight;
-    if (width <= 0 || height <= 0) {
-      return false;
-    }
-    // A maximized float that keeps its state would snap back to the pre-maximize
-    // box on the next toggle, discarding this size.
-    view->dropMaximizedForResize();
-    view->requestFloatingSize(width, height);
-    view->beginResizeAnimation(width, height);
-    // Resize in place. The clamp runs on the requested size: the origin has to travel with the presented size, and a
-    // client that commits exactly what was requested never re-enters the clamp at commit.
-    view->clampFloatingPositionForSize(width, height);
-    return true;
+    return view != nullptr && view->resizeFloatingFractions(widthFrac, heightFrac);
   }
 
   bool Workspace::cycleFocusedWidth(int direction) {
