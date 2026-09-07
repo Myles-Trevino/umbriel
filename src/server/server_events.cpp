@@ -590,6 +590,9 @@ namespace umbriel {
       if (result.change.keybinds) {
         m_bindCooldowns.clear();
       }
+      if (result.change.scratchpads && m_scratchpadManager != nullptr) {
+        m_scratchpadManager->reconcileConfig();
+      }
       if (result.effects.invalidatesOverview()) {
         m_overview->forceClose();
       }

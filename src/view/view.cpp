@@ -364,7 +364,8 @@ namespace umbriel {
     } else {
       // Output membership tracks the physical monitor, not the active workspace: a window on another workspace is still
       // on its output. Leaving the output here would make foreign-toplevel clients drop the window from their task
-      // lists. Scratchpad windows have no workspace at all, so they genuinely leave.
+      // lists. Workspace-less overlays leave here, then their owner can
+      // explicitly advertise a retained output assignment.
       if (m_workspace == nullptr) {
         leaveForeignOutput();
       }
@@ -2043,6 +2044,7 @@ namespace umbriel {
 
   void View::handleUnmap() {
     setUrgent(false);
+    m_floatingMaximized = false;
     m_maximizedToEdges = false;
     m_hasFullscreenRestoreBox = false;
     if (m_pinned) {
@@ -2421,6 +2423,7 @@ namespace umbriel {
 
   void View::setMaximized(bool maximized, bool animate) {
     if (m_tiled && m_workspace != nullptr) {
+      m_floatingMaximized = false;
       if (m_maximizedToEdges) {
         setMaximizedToEdges(false);
       }
@@ -2437,6 +2440,9 @@ namespace umbriel {
       return;
     }
 
+    // Record the target before cancelSizeAnimation synchronizes the current
+    // presentation back through ScratchpadManager.
+    m_floatingMaximized = maximized;
     const ScratchpadManager* scratchpad = m_server->scratchpadManager();
     const bool visibleScratchpad = m_onActiveWorkspace && scratchpad != nullptr && scratchpad->contains(this);
     // A visible scratchpad has a manager-owned presentation even though it is
@@ -2558,13 +2564,27 @@ namespace umbriel {
 
   void View::toggleMaximizedToEdges() { setMaximizedToEdges(!m_maximizedToEdges); }
 
-  void View::toggleMaximized() { setMaximized(!m_toplevel->scheduled.maximized); }
+  void View::toggleMaximized() { setMaximized(m_tiled ? !m_toplevel->scheduled.maximized : !m_floatingMaximized); }
+
+  void View::restoreMaximizedForMove() {
+    // Fullscreen temporarily covers an underlying floating-maximized state.
+    // Moving the fullscreen surface must not consume the state that should be
+    // revealed when fullscreen ends.
+    if (m_toplevel->scheduled.fullscreen || m_toplevel->current.fullscreen) {
+      return;
+    }
+    if (m_maximizedToEdges) {
+      setMaximizedToEdges(false, false);
+    } else if (m_floatingMaximized) {
+      setMaximized(false, false);
+    }
+  }
 
   void View::dropMaximizedForResize() {
     if (m_tiled || !m_toplevel->base->initialized) {
       return;
     }
-    if (!m_maximizedToEdges && !m_toplevel->scheduled.maximized) {
+    if (!m_maximizedToEdges && !m_floatingMaximized) {
       return;
     }
     // Deliberately not setMaximized(false)/setMaximizedToEdges(false): those
@@ -2573,6 +2593,7 @@ namespace umbriel {
     cancelSizeAnimation();
     const bool wasEdges = m_maximizedToEdges;
     m_maximizedToEdges = false;
+    m_floatingMaximized = false;
     m_restoreMaximizedToEdges = false;
     m_hasMaximizeRestoreBox = false;
     wlr_xdg_toplevel_set_maximized(m_toplevel, false);
@@ -2736,6 +2757,7 @@ namespace umbriel {
     if (m_maximizedToEdges) {
       setMaximizedToEdges(false, false);
     }
+    m_floatingMaximized = false;
     const bool unpinning = !floating && m_pinned;
     if (unpinning) {
       m_pinned = false;

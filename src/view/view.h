@@ -218,6 +218,9 @@ namespace umbriel {
     // output's usable area and restores to the box it had before; tiled windows
     // toggle their column's full-width state.
     void toggleMaximized();
+    // Restore a floating maximized window to its saved box before a pointer
+    // move takes ownership of its position.
+    void restoreMaximizedForMove();
     // Leave maximized or edges-maximized state without restoring the pre-maximize
     // box: the caller assigns its own size next. Floating windows only; tiled
     // windows clear their full-width state through the layout.
@@ -465,6 +468,7 @@ namespace umbriel {
     // placement snaps (avoids animating from the default (0,0) world origin).
     bool m_positioned = false;
     bool m_tiled = false;
+    bool m_floatingMaximized = false;
     bool m_maximizedToEdges = false;
     bool m_restoreMaximizedToEdges = false;
     wlr_box m_fullscreenRestoreBox{};

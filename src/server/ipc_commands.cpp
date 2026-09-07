@@ -6,6 +6,7 @@
 #include "server/server.h"
 #include "view/view.h"
 #include "wlr.h"
+#include "workspace/scratchpad.h"
 #include "workspace/workspace.h"
 
 #include <cctype>
@@ -52,12 +53,15 @@ namespace umbriel {
         const std::string xdgTagSuffix = xdgTag.empty() ? "" : " [xdg_tag=" + xdgTag + "]";
         const std::string contentType = entry.value("content_type", "none");
         const std::string contentTypeSuffix = contentType == "none" ? "" : " [content_type=" + contentType + "]";
+        const std::string scratchpad = entry.value("scratchpad", "");
+        const std::string scratchpadSuffix = scratchpad.empty() ? "" : " [scratchpad=" + scratchpad + "]";
         std::println(
-            "{}{}{}\t{}\t[{} {}x{}{:+}{:+}]{}{}",
+            "{}{}{}\t{}\t[{} {}x{}{:+}{:+}]{}{}{}",
             entry.value("focused", false) ? "*" : (entry.value("urgent", false) ? "!" : " "),
             entry.value("xwayland", false) ? "[Xwayland] " : "", appId.empty() ? "-" : appId,
             title.empty() ? "-" : title, entry.value("floating", false) ? "float" : "tile", entry.value("w", 0),
-            entry.value("h", 0), entry.value("x", 0), entry.value("y", 0), xdgTagSuffix, contentTypeSuffix
+            entry.value("h", 0), entry.value("x", 0), entry.value("y", 0), xdgTagSuffix, contentTypeSuffix,
+            scratchpadSuffix
         );
       }
     }
@@ -343,14 +347,16 @@ namespace umbriel {
       nlohmann::json entry;
       entry["id"] = v->extForeignIdentifier() != nullptr ? v->extForeignIdentifier() : "";
       entry["workspace"] = v->workspace() != nullptr ? v->workspace()->id() : "";
+      const ScratchpadManager* scratchpads = server.scratchpadManager();
+      entry["scratchpad"] = scratchpads != nullptr ? std::string(scratchpads->nameFor(v.get())) : std::string{};
       entry["active"] = v->activated();
       entry["app_id"] = v->toplevel()->app_id != nullptr ? v->toplevel()->app_id : "";
       entry["title"] = v->toplevel()->title != nullptr ? v->toplevel()->title : "";
       entry["xdg_tag"] = v->xdgTag().value_or("");
       entry["content_type"] = contentTypeName(v->contentType());
       entry["floating"] = v->floating();
-      // The compositor's own notion of focus, which is what every action acts
-      // on. Lets a caller (and the harness) see where focus went.
+      // Workspace-local remembered focus. Seat-global activation is reported
+      // separately by `active`; scratchpad windows have no workspace focus.
       entry["focused"] = v->workspace() != nullptr && v->workspace()->focusedView() == v.get();
       entry["urgent"] = v->urgent();
       entry["xwayland"] = v->xwayland();

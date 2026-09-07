@@ -26,6 +26,7 @@ namespace umbriel {
     bool windowRules = false;
     bool layerRules = false;
     bool securityContextRules = false;
+    bool scratchpads = false;
     bool workspaceRules = false;
 
     [[nodiscard]] bool any() const {
@@ -46,6 +47,7 @@ namespace umbriel {
           || windowRules
           || layerRules
           || securityContextRules
+          || scratchpads
           || workspaceRules;
     }
 

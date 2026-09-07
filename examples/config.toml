@@ -286,6 +286,20 @@ follows_mouse = false                           # Focus the pointer target after
 # scroll_button = "MouseBack"
 # scroll_button_lock = false
 
+# ────────────────────────────── Scratchpads ─────────────────────────────────
+# With no entries below, Umbriel creates one implicit scratchpad named
+# `default`, and bare scratchpad actions select it. Defining any named
+# scratchpad disables that implicit default and requires a name suffix on every
+# scratchpad action. Names must be unique, and `default` is reserved.
+# Documentation: https://docs.noctalia.dev/umbriel/scratchpads/
+# ────────────────────────────────────────────────────────────────────────────
+
+# [[scratchpad]]
+# name = "terminal"
+
+# [[scratchpad]]
+# name = "music"
+
 # ─────────────────────────────── Keybinds ───────────────────────────────────
 # Bind chords to compositor actions. Configured chords replace matching
 # built-ins; built-in chords not mentioned here remain active.
@@ -343,17 +357,28 @@ follows_mouse = false                           # Focus the pointer target after
 # keypad digits provide the same built-in actions.
 
 # Scratchpads
-# Each output owns a separate scratchpad. Bare actions target the output under
-# the pointer; append `:DP-1` or a monitor Config name to target one explicitly.
+# These bare actions use the implicit `default` scratchpad because no named
+# definitions are active above. A scratchpad is global: toggling it summons all
+# its windows to the output under the pointer. Only outputs with a visible
+# scratchpad receive its dim and blur backdrop.
 # Resize, maximize, fullscreen, and close actions target a scratchpad that owns
 # keyboard focus. Layout-relative window actions leave the workspace behind it
 # unchanged.
-# Per-output dim and blur follow scratchpad visibility and clear when hidden.
 # Documentation: https://docs.noctalia.dev/umbriel/scratchpads/
 "Mod+Shift+Space" = "window-move-to-scratchpad"
 "Mod+Space" = "scratchpad-toggle"
 "Mod+Ctrl+Space" = "window-restore-from-scratchpad"
 "Mod+Tab" = "scratchpad-focus-next"
+
+# Named mode recipe: uncomment the definitions above, then replace the four
+# action values with named forms such as these. Every scratchpad action needs a
+# configured name once named mode is active.
+# "Mod+Shift+Space" = "window-move-to-scratchpad:terminal"
+# "Mod+Space" = "scratchpad-toggle:terminal"
+# "Mod+Ctrl+Space" = "window-restore-from-scratchpad:terminal"
+# "Mod+Tab" = "scratchpad-focus-next:terminal"
+# "Mod+Ctrl+Shift+M" = "window-toggle-scratchpad:music"
+# "Mod+Ctrl+M" = "scratchpad-toggle:music"
 
 # Optional navigation and sizing recipes. These chords do not replace active
 # bindings above when uncommented.

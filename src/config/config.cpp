@@ -620,6 +620,88 @@ namespace umbriel {
       return names;
     }
 
+    void readScratchpads(Section& root, Config& loaded) {
+      const toml::node* node = root.take("scratchpad");
+      if (node == nullptr) {
+        return;
+      }
+      const auto* scratchpads = node->as_array();
+      if (scratchpads == nullptr) {
+        errorAt(node->source(), "scratchpad must be a [[scratchpad]] array of tables");
+        return;
+      }
+
+      int entryIndex = 0;
+      for (const auto& entry : *scratchpads) {
+        const auto* table = entry.as_table();
+        if (table == nullptr) {
+          errorAt(entry.source(), "scratchpad[{}] must be a table", entryIndex);
+          ++entryIndex;
+          continue;
+        }
+
+        const std::string context = std::format("scratchpad[{}]", entryIndex);
+        Section keys(*table, context, configStore().mutableDiagnostics());
+        const toml::node* nameNode = keys.take("name");
+        if (nameNode == nullptr) {
+          errorAt(entry.source(), "{} must set name", context);
+          ++entryIndex;
+          continue;
+        }
+        const auto name = nameNode->value<std::string>();
+        if (!name) {
+          errorAt(nameNode->source(), "{}.name must be a string", context);
+          ++entryIndex;
+          continue;
+        }
+        if (name->empty()) {
+          errorAt(nameNode->source(), "{}.name must not be empty", context);
+          ++entryIndex;
+          continue;
+        }
+        if (*name == "default") {
+          errorAt(nameNode->source(), "{}.name 'default' is reserved for the implicit scratchpad", context);
+          ++entryIndex;
+          continue;
+        }
+
+        const auto duplicate = std::ranges::find_if(loaded.scratchpads, [&](const ScratchpadConfig& scratchpad) {
+          return scratchpad.name == *name;
+        });
+        if (duplicate != loaded.scratchpads.end()) {
+          errorAt(nameNode->source(), "{}.name duplicates scratchpad name '{}'", context, *name);
+          ++entryIndex;
+          continue;
+        }
+
+        loaded.scratchpads.push_back({.name = *name});
+        ++entryIndex;
+      }
+    }
+
+    std::optional<std::string> scratchpadSelectorError(const Config& loaded, const Keybind& binding) {
+      const auto* scratchpad = payloadIf<ScratchpadArg>(binding);
+      if (scratchpad == nullptr) {
+        return std::nullopt;
+      }
+      if (loaded.scratchpads.empty()) {
+        if (!scratchpad->name.empty() && scratchpad->name != "default") {
+          return std::format("unknown scratchpad '{}'", scratchpad->name);
+        }
+        return std::nullopt;
+      }
+      if (scratchpad->name.empty()) {
+        return std::string{"scratchpad name required"};
+      }
+      const bool configured = std::ranges::any_of(loaded.scratchpads, [&](const ScratchpadConfig& candidate) {
+        return candidate.name == scratchpad->name;
+      });
+      if (configured) {
+        return std::nullopt;
+      }
+      return std::format("unknown scratchpad '{}'", scratchpad->name);
+    }
+
     WorkspaceConfig parseWorkspaceEntry(const toml::table& section, std::string_view context) {
       WorkspaceConfig ws;
       Section keys(section, std::string(context), configStore().mutableDiagnostics());
@@ -1110,6 +1192,10 @@ namespace umbriel {
           Keybind bind;
           if (!parseAction(*value, bind)) {
             warnAt(node->source(), R"(invalid hot_corners.{}.action "{}")", name, *value);
+            return;
+          }
+          if (const auto invalid = scratchpadSelectorError(loaded, bind)) {
+            warnAt(node->source(), "ignoring hot_corners.{}.action ({})", name, *invalid);
             return;
           }
           corner.action = std::move(bind);
@@ -1714,6 +1800,11 @@ namespace umbriel {
           continue;
         }
 
+        if (const auto invalid = scratchpadSelectorError(loaded, binding)) {
+          warnAt(key.source(), "ignoring keybind '{}' ({})", chord, *invalid);
+          continue;
+        }
+
         if (std::ranges::any_of(configured, [&](const Keybind& existing) { return sameChord(existing, binding); })) {
           warnAt(key.source(), "duplicate keybind {}", chord);
         }
@@ -2212,6 +2303,7 @@ namespace umbriel {
           readAnimation(root, loaded);
           readAppearance(root, loaded);
           readOverview(root, loaded);
+          readScratchpads(root, loaded);
           readHotCorners(root, loaded);
           readLayout(root, loaded);
           readGeneral(root, loaded);

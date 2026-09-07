@@ -99,9 +99,9 @@ if ! grep -q '^mapped$' "$CLIENT_LOG"; then
   exit 1
 fi
 
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 wait_for_empty_workspace
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 0.1
 grim "$BEFORE"
 assert_blue before-overview "$BEFORE"

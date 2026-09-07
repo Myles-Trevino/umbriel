@@ -3,8 +3,8 @@
 # window-toggle-scratchpad, which calls ScratchpadManager::restoreFocused) must retarget the
 # backdrop fade to 0 and refresh the dim/blur nodes, same as ScratchpadManager::setVisible does
 # when the scratchpad is hidden through scratchpad-toggle. Before the fix, restoreFocused and
-# remove() dropped the output from m_visibleOutputs without touching the backdrop fade, so the
-# dim rect stayed at its last alpha forever once every scratchpad window on that output was gone.
+# remove() cleared visibility without touching the backdrop fade, so the dim rect stayed at its
+# last alpha forever once every scratchpad window on that output was gone.
 set -euo pipefail
 
 readonly BEFORE="$UMBRIEL_RUNTIME_DIR/scratchpad-restore-before.png"
@@ -50,14 +50,14 @@ wait_for_count() {
 
 foot --title=scratch-a sh -c 'sleep 120' > /dev/null 2>&1 &
 wait_for_count 1
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 
 foot --title=scratch-b sh -c 'sleep 120' > /dev/null 2>&1 &
 wait_for_count 2
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 
 # Show both scratchpad windows: the backdrop dims.
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 0.3
 grim "$BEFORE"
 before=$(sample_corner "$BEFORE")
@@ -68,7 +68,7 @@ fi
 
 # Restore the first (currently scratchpad-focused) window. One scratchpad window remains, so the
 # dim must stay.
-"$UMBRIEL" msg window-toggle-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-toggle-scratchpad > /dev/null
 sleep 0.3
 if ! wait_for_count 2; then
   echo "restoring the first window changed the window count unexpectedly"
@@ -77,9 +77,9 @@ fi
 
 # Focus the remaining scratchpad window, then restore it too. The scratchpad is now empty on this
 # output, so the dim must clear.
-"$UMBRIEL" msg scratchpad-focus-next:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-focus-next > /dev/null
 sleep 0.1
-"$UMBRIEL" msg window-toggle-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-toggle-scratchpad > /dev/null
 sleep 0.3
 
 grim "$AFTER"

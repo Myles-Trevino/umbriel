@@ -6,6 +6,8 @@ set -euo pipefail
 
 readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLOSE_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly BTN_LEFT=272
 readonly PREFIX=scratchpad-actions
 readonly LEFT="${PREFIX}-bg-left"
 readonly TOP="${PREFIX}-bg-top"
@@ -31,12 +33,15 @@ mode = "1600x900"
 position = [1280, 0]
 workspaces = ["RIGHT"]
 
+[[scratchpad]]
+name = "actions"
+
 [[window_rule]]
 match.title = "^scratchpad-actions-foreground$"
 default_output = "HEADLESS-1"
 default_floating = true
 default_size = [420, 260]
-default_position = { x = 1100, y = 230, anchor = "top_left" }
+default_position = { x = 430, y = 230, anchor = "top_left" }
 
 [[window_rule]]
 match.title = "^scratchpad-actions-close$"
@@ -269,14 +274,23 @@ scratch_pid=$!
 wait_for_count 4
 wait_for_field "$SCRATCH" w 420
 wait_for_field "$SCRATCH" h 260
-wait_for_field "$SCRATCH" x 1100
+wait_for_field "$SCRATCH" x 430
 wait_for_field "$SCRATCH" y 230
 scratch_id=$(field_of "$SCRATCH" id)
+"$POINTER" 2880 900 move 640 360
 accepts "window-focus:$scratch_id"
-accepts window-move-to-scratchpad:HEADLESS-2
+accepts window-move-to-scratchpad:actions
 wait_for_field "$SCRATCH" workspace ""
-accepts scratchpad-toggle:HEADLESS-2
+accepts scratchpad-toggle:actions
+# Drop the straddling window with its pointer on HEADLESS-2. Scratchpad drags
+# roam the named pad without restoring it to the workspace underneath.
+"$POINTER" 2880 900 \
+  move 640 360 mod logo press "$BTN_LEFT" move 800 360 move 1310 360 release "$BTN_LEFT" mod none
 wait_for_straddled_scratch
+# Recreate the deliberate split between pointer output and scratchpad seat
+# focus that the action-isolation assertions exercise.
+"$POINTER" 2880 900 move 640 360
+accepts "window-focus:$scratch_id"
 if [[ $("$UMBRIEL" workspaces --json | jq -r '.[] | select(.focused) | .output') != HEADLESS-1 ]]; then
   echo "pointer did not remain on HEADLESS-1 while the HEADLESS-2 scratchpad held seat focus"
   exit 1
@@ -350,9 +364,9 @@ wait_for_count 3
 wait_for_count 4
 close_scratch_id=$(field_of "$CLOSE_SCRATCH" id)
 accepts "window-focus:$close_scratch_id"
-accepts window-move-to-scratchpad:HEADLESS-2
+accepts window-move-to-scratchpad:actions
 wait_for_field "$CLOSE_SCRATCH" workspace ""
-accepts scratchpad-toggle:HEADLESS-2
+accepts scratchpad-toggle:actions
 wait_for_field "$CLOSE_SCRATCH" active true
 accepts window-close
 wait_for_count 3

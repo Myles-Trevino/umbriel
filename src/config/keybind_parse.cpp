@@ -176,10 +176,10 @@ namespace umbriel {
         {"overview-close", "", "Close the workspace overview", KeybindAction::OverviewClose},
         {"overview-open", "", "Open the workspace overview", KeybindAction::OverviewOpen},
         {"overview-toggle", "", "Open or close the workspace overview", KeybindAction::OverviewToggle},
-        {"scratchpad-focus-next", "[<output>]", "Focus the next visible scratchpad window",
-         KeybindAction::ScratchpadFocusNext, ActionArgKind::OptionalOutput},
-        {"scratchpad-toggle", "[<output>]", "Show or hide the output's scratchpad windows",
-         KeybindAction::ScratchpadToggle, ActionArgKind::OptionalOutput},
+        {"scratchpad-focus-next", "[<scratchpad>]", "Focus the next visible scratchpad window",
+         KeybindAction::ScratchpadFocusNext, ActionArgKind::OptionalScratchpad},
+        {"scratchpad-toggle", "[<scratchpad>]", "Show or hide the selected scratchpad windows",
+         KeybindAction::ScratchpadToggle, ActionArgKind::OptionalScratchpad},
         {"session-quit", "[skip-confirmation]", "Quit the session, confirming first unless told to skip",
          KeybindAction::SessionQuit, ActionArgKind::SkipConfirmation},
         {"spawn", "<cmd>", "Run a command with a launch activation token", KeybindAction::Spawn,
@@ -252,8 +252,8 @@ namespace umbriel {
          KeybindAction::WindowMoveToOutputRight},
         {"window-move-to-output-up", "", "Move the focused window to the output above",
          KeybindAction::WindowMoveToOutputUp},
-        {"window-move-to-scratchpad", "[<output>]", "Move the focused window into the scratchpad",
-         KeybindAction::WindowMoveToScratchpad, ActionArgKind::OptionalOutput},
+        {"window-move-to-scratchpad", "[<scratchpad>]", "Move the focused window into a scratchpad",
+         KeybindAction::WindowMoveToScratchpad, ActionArgKind::OptionalScratchpad},
         {"window-move-to-workspace", "<workspace>[/<output>]", "Move the focused window to the selected workspace",
          KeybindAction::WindowMoveToWorkspace, ActionArgKind::Workspace},
         {"window-move-to-workspace-next", "", "Move the focused window to the next workspace",
@@ -261,8 +261,8 @@ namespace umbriel {
         {"window-move-to-workspace-previous", "", "Move the focused window to the previous workspace",
          KeybindAction::WindowMoveToWorkspacePrevious},
         {"window-move-up", "", "Move the focused window up in its column", KeybindAction::WindowMoveUp},
-        {"window-restore-from-scratchpad", "[<output>]", "Return the scratchpad window to its saved workspace",
-         KeybindAction::WindowRestoreFromScratchpad, ActionArgKind::OptionalOutput},
+        {"window-restore-from-scratchpad", "[<scratchpad>]", "Return a scratchpad window to its saved workspace",
+         KeybindAction::WindowRestoreFromScratchpad, ActionArgKind::OptionalScratchpad},
         {"window-set-height", "<fraction>", "Set the focused window's height fraction", KeybindAction::WindowSetHeight,
          ActionArgKind::WidthFraction},
         {"window-set-width", "<fraction>", "Set the focused column's width fraction", KeybindAction::WindowSetWidth,
@@ -277,8 +277,8 @@ namespace umbriel {
         {"window-toggle-maximize-to-edges", "", "Toggle maximize without gaps, struts, or borders",
          KeybindAction::ToggleMaximizeToEdges},
         {"window-toggle-pinned", "", "Pin the focused window above other windows", KeybindAction::TogglePinned},
-        {"window-toggle-scratchpad", "[<output>]", "Move the focused window to or from the scratchpad",
-         KeybindAction::WindowToggleScratchpad, ActionArgKind::OptionalOutput},
+        {"window-toggle-scratchpad", "[<scratchpad>]", "Move the focused window to or from a scratchpad",
+         KeybindAction::WindowToggleScratchpad, ActionArgKind::OptionalScratchpad},
         {"workspace-focus-last", "", "Focus the previously active workspace", KeybindAction::WorkspaceFocusLast},
         {"workspace-move-down", "", "Move the focused workspace down the list", KeybindAction::WorkspaceMoveDown},
         {"workspace-move-to-output-down", "", "Move every workspace window to the output below",
@@ -482,6 +482,18 @@ namespace umbriel {
         if (takeActionArg(value, spec, arg)) {
           output.action = spec.action;
           output.payload = OutputArg{.output = std::string(arg)};
+          return true;
+        }
+        break;
+      case ActionArgKind::OptionalScratchpad:
+        if (value == spec.name) {
+          output.action = spec.action;
+          output.payload = ScratchpadArg{};
+          return true;
+        }
+        if (takeActionArg(value, spec, arg)) {
+          output.action = spec.action;
+          output.payload = ScratchpadArg{.name = std::string(arg)};
           return true;
         }
         break;

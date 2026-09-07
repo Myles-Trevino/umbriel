@@ -436,6 +436,7 @@ namespace umbriel {
     bool tiled = view->tiled();
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
         scratchpad != nullptr && scratchpad->contains(view)) {
+      view->restoreMaximizedForMove();
       view->setFloating(true);
       tiled = false;
     }

@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <array>
 #include <expected>
+#include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -42,16 +44,30 @@ namespace umbriel {
       return output->workspaceGroup()->active();
     }
 
-    Output* scratchpadOutput(Server& server, const Keybind& bind, std::string* error) {
-      const auto* arg = payloadIf<OutputArg>(bind);
-      if (arg == nullptr || arg->output.empty()) {
-        return server.outputFromWlr(server.preferredOutput());
+    std::optional<std::string_view> scratchpadName(Server& server, const Keybind& bind, std::string* error) {
+      const auto* arg = payloadIf<ScratchpadArg>(bind);
+      ScratchpadManager* manager = server.scratchpadManager();
+      if (arg == nullptr || manager == nullptr) {
+        if (error != nullptr) {
+          *error = "scratchpad action carries no scratchpad selector";
+        }
+        return std::nullopt;
       }
-      Output* output = server.outputFromName(arg->output);
-      if (output == nullptr && error != nullptr) {
-        *error = "unknown output: " + arg->output;
+
+      const std::string_view name = arg->name.empty() ? std::string_view("default") : std::string_view(arg->name);
+      if (arg->name.empty() && !config().scratchpads.empty()) {
+        if (error != nullptr) {
+          *error = "scratchpad name required";
+        }
+        return std::nullopt;
       }
-      return output;
+      if (!manager->hasScratchpad(name)) {
+        if (error != nullptr) {
+          *error = "unknown scratchpad: " + std::string(name);
+        }
+        return std::nullopt;
+      }
+      return name;
     }
 
     // The action was consumed, but with a message for the caller.
@@ -1325,33 +1341,35 @@ namespace umbriel {
 
     // Scratchpad
     bool actionMoveToScratchpad(Server& server, const Keybind& bind, std::string* error) {
-      Output* output = scratchpadOutput(server, bind, error);
-      if (output == nullptr) {
+      const auto name = scratchpadName(server, bind, error);
+      Output* output = server.outputFromWlr(server.preferredOutput());
+      if (!name || output == nullptr) {
         return false;
       }
       Workspace* workspace = activeWorkspace(server);
       ScratchpadManager* scratchpad = server.scratchpadManager();
       return scratchpad != nullptr
           && workspace != nullptr
-          && scratchpad->moveToScratchpad(workspace->focusedView(), output);
+          && scratchpad->moveToScratchpad(workspace->focusedView(), *name, output);
     }
 
     bool actionScratchpadToggle(Server& server, const Keybind& bind, std::string* error) {
-      Output* output = scratchpadOutput(server, bind, error);
-      if (output == nullptr) {
+      const auto name = scratchpadName(server, bind, error);
+      Output* output = server.outputFromWlr(server.preferredOutput());
+      if (!name || output == nullptr) {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && scratchpad->toggle(output);
+      return scratchpad != nullptr && scratchpad->toggle(*name, output);
     }
 
     bool actionRestoreFromScratchpad(Server& server, const Keybind& bind, std::string* error) {
-      Output* output = scratchpadOutput(server, bind, error);
-      if (output == nullptr) {
+      const auto name = scratchpadName(server, bind, error);
+      if (!name) {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && scratchpad->restoreFocused(output);
+      return scratchpad != nullptr && scratchpad->restoreFocused(*name);
     }
 
     // Toggles the focused window's scratchpad membership: if the focused
@@ -1359,28 +1377,29 @@ namespace umbriel {
     // actionRestoreFromScratchpad); otherwise move it into the scratchpad
     // (same as actionMoveToScratchpad).
     bool actionToggleScratchpad(Server& server, const Keybind& bind, std::string* error) {
-      Output* output = scratchpadOutput(server, bind, error);
-      if (output == nullptr) {
+      const auto name = scratchpadName(server, bind, error);
+      Output* output = server.outputFromWlr(server.preferredOutput());
+      if (!name || output == nullptr) {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
       if (scratchpad == nullptr) {
         return false;
       }
-      if (focusedScratchpadWindow(server) != nullptr && scratchpad->hasFocus(output)) {
-        return scratchpad->restoreFocused(output);
+      if (focusedScratchpadWindow(server) != nullptr && scratchpad->hasFocus(*name)) {
+        return scratchpad->restoreFocused(*name);
       }
       Workspace* workspace = activeWorkspace(server);
-      return workspace != nullptr && scratchpad->moveToScratchpad(workspace->focusedView(), output);
+      return workspace != nullptr && scratchpad->moveToScratchpad(workspace->focusedView(), *name, output);
     }
 
     bool actionScratchpadFocusNext(Server& server, const Keybind& bind, std::string* error) {
-      Output* output = scratchpadOutput(server, bind, error);
-      if (output == nullptr) {
+      const auto name = scratchpadName(server, bind, error);
+      if (!name) {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && scratchpad->focusNext(output);
+      return scratchpad != nullptr && scratchpad->focusNext(*name);
     }
 
     constexpr std::array<ActionHandlerFn, static_cast<size_t>(KeybindAction::Count)> kActionHandlers = {

@@ -7,7 +7,11 @@ set -euo pipefail
 
 readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 readonly UNMAP_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly OUTPUT_LAYOUT_W=4480
+readonly OUTPUT_LAYOUT_H=1440
 readonly BASE_CONFIG="$(< "$UMBRIEL_CONFIG")"
+readonly SCRATCHPAD=auxiliary
 
 layouts=(scroll dwindle master)
 titles=(scroll-anchor scroll-probe dwindle-anchor dwindle-probe master-anchor master-probe)
@@ -68,6 +72,21 @@ wait_for_field() {
   done
   echo "expected '$title' field '$field' to be '$expected', got '$actual'"
   return 1
+}
+
+output_origin() {
+  "$UMBRIEL" outputs \
+    | awk -v name="$1" '$1 == name { found = 1; next } found && /Position:/ { split($2, p, ","); print p[1], p[2]; exit }'
+}
+
+move_pointer_to_output() {
+  local output=$1 output_x output_y
+  read -r output_x output_y < <(output_origin "$output")
+  if [[ -z ${output_x:-} || -z ${output_y:-} ]]; then
+    echo "could not resolve origin for $output" >&2
+    return 1
+  fi
+  "$POINTER" "$OUTPUT_LAYOUT_W" "$OUTPUT_LAYOUT_H" move "$((output_x + 640))" "$((output_y + 360))"
 }
 
 focus_window() {
@@ -187,7 +206,7 @@ assert_visible_scratchpad_cycle() {
   local output=$1 active=
   declare -A seen=()
   for _ in 1 2 3; do
-    if ! "$UMBRIEL" msg "scratchpad-focus-next:$output" > /dev/null; then
+    if ! "$UMBRIEL" msg "scratchpad-focus-next:$SCRATCHPAD" > /dev/null; then
       echo "scratchpad on '$output' was not visible while cycling '$active'"
       return 1
     fi
@@ -220,6 +239,9 @@ enabled = $second_enabled
 mode = "1920x1080"
 position = [2560, 0]
 workspaces = "dynamic"
+
+[[scratchpad]]
+name = "auxiliary"
 
 [[workspace]]
 output = "HEADLESS-1"
@@ -315,10 +337,11 @@ spawn_client legit-scratch
 count=$((count + 1))
 wait_for_count "$count"
 move_to_workspace legit-scratch 1
+move_pointer_to_output HEADLESS-1
 focus_window legit-scratch
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg "window-move-to-scratchpad:$SCRATCHPAD" > /dev/null
 wait_for_home legit-scratch ''
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg "scratchpad-toggle:$SCRATCHPAD" > /dev/null
 
 write_matrix_config false false
 "$UMBRIEL" msg config-reload > /dev/null
@@ -343,7 +366,7 @@ done
 wait_for_home late-float HEADLESS-2/1
 wait_for_field late-float floating true
 wait_for_home legit-scratch ''
-"$UMBRIEL" msg scratchpad-focus-next:HEADLESS-2 > /dev/null
+"$UMBRIEL" msg "scratchpad-focus-next:$SCRATCHPAD" > /dev/null
 
 write_matrix_config true true
 "$UMBRIEL" msg config-reload > /dev/null
@@ -352,7 +375,7 @@ for title in "${probes[@]}"; do
   wait_for_field "$title" floating true
 done
 wait_for_home legit-scratch ''
-"$UMBRIEL" msg scratchpad-focus-next:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg "scratchpad-focus-next:$SCRATCHPAD" > /dev/null
 "$UMBRIEL" msg "window-close:$(field_of legit-scratch id)" > /dev/null
 count=$((count - 1))
 wait_for_count "$count"
@@ -377,13 +400,14 @@ scratchpad_phase() {
     done
   fi
 
+  move_pointer_to_output HEADLESS-1
   for title in "${probes[@]}"; do
     focus_window "$title"
-    "$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+    "$UMBRIEL" msg "window-move-to-scratchpad:$SCRATCHPAD" > /dev/null
     wait_for_home "$title" ''
     wait_for_field "$title" floating true
   done
-  "$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+  "$UMBRIEL" msg "scratchpad-toggle:$SCRATCHPAD" > /dev/null
   assert_visible_scratchpad_cycle HEADLESS-1
   scratch_anchor_before=$(wait_for_stable_snapshot anchors)
 
@@ -400,7 +424,7 @@ scratchpad_phase() {
 
   for title in "${probes[@]}"; do
     focus_window "$title"
-    "$UMBRIEL" msg window-restore-from-scratchpad:HEADLESS-1 > /dev/null
+    "$UMBRIEL" msg "window-restore-from-scratchpad:$SCRATCHPAD" > /dev/null
     wait_for_home "$title" "HEADLESS-1/${workspace_of[$title]}"
     wait_for_field "$title" floating "$return_floating"
   done

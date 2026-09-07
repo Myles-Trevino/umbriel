@@ -32,6 +32,7 @@ UMBRIEL_TEST(aFirstLoadReportsEverything) {
   CHECK(change.events);
   CHECK(change.input);
   CHECK(change.outputs);
+  CHECK(change.scratchpads);
 }
 
 UMBRIEL_TEST(eachSectionIsReportedOnItsOwn) {
@@ -250,6 +251,13 @@ UMBRIEL_TEST(listSectionsAreCompared) {
     Config after;
     after.securityContextRules.push_back(SecurityContextRule{});
     CHECK(ConfigChange::between(before, after).securityContextRules);
+  }
+  {
+    Config after;
+    after.scratchpads.push_back({.name = "term"});
+    const ConfigChange change = ConfigChange::between(before, after);
+    CHECK(change.scratchpads);
+    CHECK_EQ(change.summary(), std::string("scratchpads"));
   }
 }
 

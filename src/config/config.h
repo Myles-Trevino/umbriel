@@ -77,6 +77,13 @@ namespace umbriel {
     bool operator==(const WorkspaceConfig&) const = default;
   };
 
+  // A user-defined scratchpad. An empty list means that Umbriel provides the
+  // implicit scratchpad named "default" instead.
+  struct ScratchpadConfig {
+    std::string name;
+    bool operator==(const ScratchpadConfig&) const = default;
+  };
+
   // Fully resolved layout config. Owned by each Workspace.
   struct ResolvedLayoutConfig {
     LayoutMode mode = LayoutMode::Scrolling;
@@ -771,6 +778,7 @@ namespace umbriel {
     std::vector<WindowRule> windowRules;
     std::vector<LayerRule> layerRules;
     std::vector<SecurityContextRule> securityContextRules;
+    std::vector<ScratchpadConfig> scratchpads;   // [[scratchpad]] definitions
     std::vector<WorkspaceConfig> workspaceRules; // [[workspace]] layout rules
 
     // True when any surface may sample the cached background blur, so every

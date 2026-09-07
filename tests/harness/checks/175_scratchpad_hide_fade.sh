@@ -53,9 +53,9 @@ if ! grep -q '^ready$' "$CLIENT_LOG"; then
   exit 1
 fi
 
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 sleep 2.1
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 2.1
 grim "$BEFORE"
 before_blue=$(sample_blue "$BEFORE")
@@ -77,7 +77,7 @@ fi
 enters_before_hide=$(grep -c '^pointer-enter$' "$CLIENT_LOG")
 pointer move 0 0
 
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 0.3
 pointer move 630 350
 sleep 0.1

@@ -9,7 +9,9 @@
 #include <linux/input-event-codes.h>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unistd.h>
+#include <utility>
 
 using umbriel::ConfigDiagnostic;
 using umbriel::ConfigStore;
@@ -323,6 +325,147 @@ UMBRIEL_TEST(backgroundDefaultsOpaque) {
   CHECK_EQ(config.colors.background[3], 1.0F);
 }
 
+UMBRIEL_TEST(scratchpadDefinitionsLoadUniqueNames) {
+  const TempConfig file;
+  file.write(R"(
+[[scratchpad]]
+name = "term"
+
+[[scratchpad]]
+name = "music"
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  CHECK(result.success);
+  CHECK_EQ(store.config().scratchpads.size(), size_t{2});
+  CHECK_EQ(store.config().scratchpads[0].name, std::string{"term"});
+  CHECK_EQ(store.config().scratchpads[1].name, std::string{"music"});
+  CHECK(!containsDiagnostic(store, "unknown key scratchpad"));
+}
+
+UMBRIEL_TEST(scratchpadDefinitionsRequireValidUniqueNames) {
+  const TempConfig file;
+  file.write("[[scratchpad]]\nname = \"kept\"\n");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  CHECK(store.reload().success);
+  const umbriel::Config previous = store.config();
+
+  const std::array invalid{
+      std::pair{
+          std::string{"scratchpad = \"named\"\n"}, std::string{"scratchpad must be a [[scratchpad]] array of tables"}
+      },
+      std::pair{std::string{"[[scratchpad]]\n"}, std::string{"scratchpad[0] must set name"}},
+      std::pair{std::string{"[[scratchpad]]\nname = 7\n"}, std::string{"scratchpad[0].name must be a string"}},
+      std::pair{std::string{"[[scratchpad]]\nname = \"\"\n"}, std::string{"scratchpad[0].name must not be empty"}},
+      std::pair{
+          std::string{"[[scratchpad]]\nname = \"default\"\n"},
+          std::string{"scratchpad[0].name 'default' is reserved for the implicit scratchpad"}
+      },
+      std::pair{
+          std::string{"[[scratchpad]]\nname = \"term\"\n[[scratchpad]]\nname = \"term\"\n"},
+          std::string{"scratchpad[1].name duplicates scratchpad name 'term'"}
+      },
+  };
+
+  for (const auto& [contents, expectedDiagnostic] : invalid) {
+    file.write(contents);
+    const umbriel::ConfigReloadResult result = store.reload();
+    CHECK(!result.success);
+    CHECK(store.config() == previous);
+    CHECK(containsDiagnostic(store, expectedDiagnostic));
+  }
+}
+
+UMBRIEL_TEST(scratchpadDefinitionsReportUnknownKeysWithoutDiscardingTheEntry) {
+  const TempConfig file;
+  file.write(R"(
+[[scratchpad]]
+name = "term"
+output = "DP-1"
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  CHECK(result.success);
+  CHECK_EQ(store.config().scratchpads.size(), size_t{1});
+  CHECK_EQ(store.config().scratchpads[0].name, std::string{"term"});
+  CHECK(containsDiagnostic(store, "unknown key scratchpad[0].output"));
+}
+
+UMBRIEL_TEST(implicitScratchpadActionsAcceptOnlyTheDefaultTarget) {
+  const TempConfig file;
+  file.write(R"(
+[keybinds]
+"Mod+1" = "scratchpad-toggle"
+"Mod+2" = "window-move-to-scratchpad:default"
+"Mod+3" = "scratchpad-focus-next:other"
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  const auto countTarget = [&](std::string_view name) {
+    size_t count = 0;
+    for (const auto& keybind : store.config().keybinds) {
+      const auto* target = umbriel::payloadIf<umbriel::ScratchpadArg>(keybind);
+      count += target != nullptr && target->name == name ? 1U : 0U;
+    }
+    return count;
+  };
+
+  CHECK(result.success);
+  CHECK(store.config().scratchpads.empty());
+  CHECK_EQ(countTarget(""), size_t{1});
+  CHECK_EQ(countTarget("default"), size_t{1});
+  CHECK_EQ(countTarget("other"), size_t{0});
+  CHECK(containsDiagnostic(store, "ignoring keybind 'Mod+3' (unknown scratchpad 'other')"));
+}
+
+UMBRIEL_TEST(namedScratchpadActionsRequireAConfiguredName) {
+  const TempConfig file;
+  file.write(R"(
+[[scratchpad]]
+name = "term"
+
+[keybinds]
+"Mod+1" = "window-restore-from-scratchpad"
+"Mod+2" = "window-toggle-scratchpad:term"
+"Mod+3" = "scratchpad-toggle:missing"
+"Mod+4" = "window-move-to-scratchpad:default"
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  const auto countTarget = [&](std::string_view name) {
+    size_t count = 0;
+    for (const auto& keybind : store.config().keybinds) {
+      const auto* target = umbriel::payloadIf<umbriel::ScratchpadArg>(keybind);
+      count += target != nullptr && target->name == name ? 1U : 0U;
+    }
+    return count;
+  };
+
+  CHECK(result.success);
+  CHECK_EQ(store.config().scratchpads.size(), size_t{1});
+  CHECK_EQ(countTarget(""), size_t{0});
+  CHECK_EQ(countTarget("term"), size_t{1});
+  CHECK_EQ(countTarget("missing"), size_t{0});
+  CHECK_EQ(countTarget("default"), size_t{0});
+  CHECK(containsDiagnostic(store, "ignoring keybind 'Mod+1' (scratchpad name required)"));
+  CHECK(containsDiagnostic(store, "ignoring keybind 'Mod+3' (unknown scratchpad 'missing')"));
+  CHECK(containsDiagnostic(store, "ignoring keybind 'Mod+4' (unknown scratchpad 'default')"));
+}
+
 UMBRIEL_TEST(dwindlePreserveSplitDefaultsToFalse) {
   const TempConfig file;
   file.write("[layout]\n");
@@ -616,6 +759,74 @@ UMBRIEL_TEST(hotCornersLoadActionsAndValidate) {
   CHECK(!store.config().hotCorners.corners[1].action.has_value());
   CHECK(containsDiagnostic(store, "invalid hot_corners.top_right.action \"not-an-action\""));
   CHECK(containsDiagnostic(store, "hot_corners.top_right.delay_ms = -1"));
+}
+
+UMBRIEL_TEST(implicitScratchpadHotCornersAcceptOnlyTheDefaultTarget) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[hot_corners.top_left]
+enabled = true
+action = "scratchpad-toggle"
+
+[hot_corners.top_right]
+enabled = true
+action = "window-move-to-scratchpad:default"
+
+[hot_corners.bottom_left]
+enabled = true
+action = "scratchpad-focus-next:missing"
+)");
+  CHECK(store.reload().success);
+
+  const auto& corners = store.config().hotCorners.corners;
+  CHECK(corners[0].action.has_value());
+  CHECK(corners[1].action.has_value());
+  CHECK(!corners[2].action.has_value());
+  const auto* bare = corners[0].action ? umbriel::payloadIf<umbriel::ScratchpadArg>(*corners[0].action) : nullptr;
+  const auto* explicitDefault =
+      corners[1].action ? umbriel::payloadIf<umbriel::ScratchpadArg>(*corners[1].action) : nullptr;
+  CHECK(bare != nullptr);
+  CHECK(bare != nullptr && bare->name.empty());
+  CHECK(explicitDefault != nullptr);
+  CHECK(explicitDefault != nullptr && explicitDefault->name == "default");
+  CHECK(containsDiagnostic(store, "ignoring hot_corners.bottom_left.action (unknown scratchpad 'missing')"));
+}
+
+UMBRIEL_TEST(namedScratchpadHotCornersRequireAConfiguredName) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[[scratchpad]]
+name = "term"
+
+[hot_corners.top_left]
+enabled = true
+action = "scratchpad-toggle"
+
+[hot_corners.top_right]
+enabled = true
+action = "window-toggle-scratchpad:term"
+
+[hot_corners.bottom_left]
+enabled = true
+action = "window-restore-from-scratchpad:missing"
+)");
+  CHECK(store.reload().success);
+
+  const auto& corners = store.config().hotCorners.corners;
+  CHECK(!corners[0].action.has_value());
+  CHECK(corners[1].action.has_value());
+  CHECK(!corners[2].action.has_value());
+  const auto* configured = corners[1].action ? umbriel::payloadIf<umbriel::ScratchpadArg>(*corners[1].action) : nullptr;
+  CHECK(configured != nullptr);
+  CHECK(configured != nullptr && configured->name == "term");
+  CHECK(containsDiagnostic(store, "ignoring hot_corners.top_left.action (scratchpad name required)"));
+  CHECK(containsDiagnostic(store, "ignoring hot_corners.bottom_left.action (unknown scratchpad 'missing')"));
 }
 
 UMBRIEL_TEST(overviewBackgroundBlurLoads) {

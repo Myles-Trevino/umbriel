@@ -17,6 +17,7 @@
 #include "server/wine_color_manager.h"
 #include "view/view.h"
 #include "wlr.h"
+#include "workspace/scratchpad.h"
 #include "workspace/workspace.h"
 
 #include <algorithm>
@@ -751,6 +752,10 @@ namespace umbriel {
     m_localUsableArea = usableArea;
     m_arrangedLayoutX = m_sceneOutput->x;
     m_arrangedLayoutY = m_sceneOutput->y;
+
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager()) {
+      scratchpad->refreshOutputGeometry(this);
+    }
 
     const wlr_box layoutUsableArea = this->usableArea();
     kLog.debug(

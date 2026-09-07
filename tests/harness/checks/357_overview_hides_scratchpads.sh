@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # harness: outputs=2
-# Opening the overview hides every visible scratchpad, including scratchpads on outputs that do not hold focus. The
-# windows stay stored after the overview closes, and one toggle per output shows them again. Transparent overview
+# Opening the overview hides every visible named scratchpad, including scratchpads on outputs that do not hold focus.
+# The windows stay stored after the overview closes, and one toggle per name shows them again. Transparent overview
 # backgrounds make the scene transition observable instead of merely covering an incorrectly visible scratchpad.
 set -euo pipefail
 
@@ -13,6 +13,8 @@ readonly FIRST_TITLE=overview-scratch-first
 readonly SECOND_TITLE=overview-scratch-second
 readonly FIRST_OUTPUT=HEADLESS-1
 readonly SECOND_OUTPUT=HEADLESS-2
+readonly FIRST_SCRATCHPAD=overview-first
+readonly SECOND_SCRATCHPAD=overview-second
 readonly FIRST_LOG="$UMBRIEL_RUNTIME_DIR/overview-scratch-first.log"
 readonly SECOND_LOG="$UMBRIEL_RUNTIME_DIR/overview-scratch-second.log"
 
@@ -148,6 +150,12 @@ enabled = false
 background_blur = false
 shortcuts = false
 
+[[scratchpad]]
+name = "overview-first"
+
+[[scratchpad]]
+name = "overview-second"
+
 [[window_rule]]
 match.title = "^overview-scratch-first$"
 default_output = "HEADLESS-1"
@@ -168,18 +176,20 @@ EOF
 wait_for_count 1
 wait_for_workspace "$FIRST_TITLE" "$FIRST_OUTPUT"
 move_pointer_to_output "$FIRST_OUTPUT"
-"$UMBRIEL" msg "window-move-to-scratchpad:$FIRST_OUTPUT" > /dev/null
+"$UMBRIEL" msg "window-move-to-scratchpad:$FIRST_SCRATCHPAD" > /dev/null
 wait_for_empty_workspace "$FIRST_TITLE"
 
 "$CLIENT" "$SECOND_TITLE" 420 260 > "$SECOND_LOG" 2>&1 &
 wait_for_count 2
 wait_for_workspace "$SECOND_TITLE" "$SECOND_OUTPUT"
 move_pointer_to_output "$SECOND_OUTPUT"
-"$UMBRIEL" msg "window-move-to-scratchpad:$SECOND_OUTPUT" > /dev/null
+"$UMBRIEL" msg "window-move-to-scratchpad:$SECOND_SCRATCHPAD" > /dev/null
 wait_for_empty_workspace "$SECOND_TITLE"
 
-"$UMBRIEL" msg "scratchpad-toggle:$FIRST_OUTPUT" > /dev/null
-"$UMBRIEL" msg "scratchpad-toggle:$SECOND_OUTPUT" > /dev/null
+move_pointer_to_output "$FIRST_OUTPUT"
+"$UMBRIEL" msg "scratchpad-toggle:$FIRST_SCRATCHPAD" > /dev/null
+move_pointer_to_output "$SECOND_OUTPUT"
+"$UMBRIEL" msg "scratchpad-toggle:$SECOND_SCRATCHPAD" > /dev/null
 sleep 0.1
 
 read -r first_x first_y < <(window_center "$FIRST_TITLE" "$FIRST_OUTPUT")
@@ -209,16 +219,18 @@ second_closed=$(capture "$SECOND_OUTPUT" overview-scratch-second-closed)
 assert_dark "$FIRST_OUTPUT after overview-close" "$first_closed" "$first_x" "$first_y"
 assert_dark "$SECOND_OUTPUT after overview-close" "$second_closed" "$second_x" "$second_y"
 
-"$UMBRIEL" msg "scratchpad-toggle:$FIRST_OUTPUT" > /dev/null
+move_pointer_to_output "$FIRST_OUTPUT"
+"$UMBRIEL" msg "scratchpad-toggle:$FIRST_SCRATCHPAD" > /dev/null
 sleep 0.1
 first_restored=$(capture "$FIRST_OUTPUT" overview-scratch-first-restored)
 second_still_hidden=$(capture "$SECOND_OUTPUT" overview-scratch-second-still-hidden)
 assert_blue "$FIRST_OUTPUT after its first toggle" "$first_restored" "$first_x" "$first_y"
 assert_dark "$SECOND_OUTPUT before its first toggle" "$second_still_hidden" "$second_x" "$second_y"
 
-"$UMBRIEL" msg "scratchpad-toggle:$SECOND_OUTPUT" > /dev/null
+move_pointer_to_output "$SECOND_OUTPUT"
+"$UMBRIEL" msg "scratchpad-toggle:$SECOND_SCRATCHPAD" > /dev/null
 sleep 0.1
 second_restored=$(capture "$SECOND_OUTPUT" overview-scratch-second-restored)
 assert_blue "$SECOND_OUTPUT after its first toggle" "$second_restored" "$second_x" "$second_y"
 
-echo "overview-open hid both output scratchpads and preserved them for independent toggles"
+echo "overview-open hid both named scratchpads and preserved them for independent toggles"

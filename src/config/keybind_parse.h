@@ -163,6 +163,10 @@ namespace umbriel {
     std::string output; // empty = the focused output
     bool operator==(const OutputArg&) const = default;
   };
+  struct ScratchpadArg {
+    std::string name; // empty = the implicit default scratchpad
+    bool operator==(const ScratchpadArg&) const = default;
+  };
   struct WindowIdArg {
     std::string id; // empty = the focused window
     bool operator==(const WindowIdArg&) const = default;
@@ -177,7 +181,8 @@ namespace umbriel {
   };
 
   using KeybindPayload = std::variant<
-      std::monostate, SpawnArg, SubmapArg, WidthArg, WorkspaceArg, OutputArg, WindowIdArg, LayoutModeArg, QuitArg>;
+      std::monostate, SpawnArg, SubmapArg, WidthArg, WorkspaceArg, OutputArg, ScratchpadArg, WindowIdArg, LayoutModeArg,
+      QuitArg>;
 
   struct Keybind {
     // What triggers the bind.
@@ -229,6 +234,7 @@ namespace umbriel {
     WidthFraction,
     Workspace,
     OptionalOutput,
+    OptionalScratchpad,
     WindowId,
     OptionalWindowId,
     WidthDelta,

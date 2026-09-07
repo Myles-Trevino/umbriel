@@ -69,9 +69,9 @@ capture_box() {
 "$CLIENT" "$TITLE" 1000 300 > "$CLIENT_LOG" 2>&1 &
 wait_for_box 1000x300+100+200
 
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 wait_for_box 1000x300+100+200
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 0.2
 
 read -r before_x before_y before_w before_h < <(capture_box before)

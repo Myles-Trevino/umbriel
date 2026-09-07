@@ -93,12 +93,12 @@ assert_transition overview
 assert_transition overview-close
 
 configure scratchpad
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 sleep 1.4
 assert_no_red scratchpad
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 assert_transition scratchpad-show
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 assert_transition scratchpad-hide
 
 configure layers

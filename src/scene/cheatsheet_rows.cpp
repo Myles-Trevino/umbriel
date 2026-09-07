@@ -214,6 +214,12 @@ namespace {
           return name + ": " + output->output;
         }
         return name;
+      case umbriel::ActionArgKind::OptionalScratchpad:
+        if (const auto* scratchpad = umbriel::payloadIf<umbriel::ScratchpadArg>(bind);
+            scratchpad != nullptr && !scratchpad->name.empty()) {
+          return name + ": " + scratchpad->name;
+        }
+        return name;
       case umbriel::ActionArgKind::WindowId:
       case umbriel::ActionArgKind::OptionalWindowId:
         if (const auto* window = umbriel::payloadIf<umbriel::WindowIdArg>(bind);

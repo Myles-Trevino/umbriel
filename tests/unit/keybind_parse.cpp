@@ -486,24 +486,6 @@ UMBRIEL_TEST(parsesOptionalOutputActions) {
   };
 
   Keybind bind;
-  CHECK(parseAction("scratchpad-toggle", bind));
-  CHECK(bind.action == KeybindAction::ScratchpadToggle);
-  // The alternative is present even with no output, so the payload still says
-  // which action shape it belongs to.
-  CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) != nullptr);
-  CHECK(outputOf(bind).empty());
-
-  CHECK(parseAction("scratchpad-toggle:DP-2", bind));
-  CHECK_EQ(outputOf(bind), std::string{"DP-2"});
-
-  CHECK(parseAction("window-move-to-scratchpad", bind));
-  CHECK(bind.action == KeybindAction::WindowMoveToScratchpad);
-  CHECK(parseAction("window-restore-from-scratchpad:eDP-1", bind));
-  CHECK_EQ(outputOf(bind), std::string{"eDP-1"});
-  CHECK(parseAction("window-toggle-scratchpad", bind));
-  CHECK(bind.action == KeybindAction::WindowToggleScratchpad);
-  CHECK(parseAction("scratchpad-focus-next", bind));
-
   CHECK(parseAction("dpms-off", bind));
   CHECK(bind.action == KeybindAction::DpmsOff);
   CHECK(outputOf(bind).empty());
@@ -513,6 +495,40 @@ UMBRIEL_TEST(parsesOptionalOutputActions) {
   CHECK(bind.action == KeybindAction::DpmsOn);
   CHECK(parseAction("dpms-on:eDP-1", bind));
   CHECK_EQ(outputOf(bind), std::string{"eDP-1"});
+}
+
+UMBRIEL_TEST(parsesOptionalScratchpadActions) {
+  const auto scratchpadOf = [](const Keybind& bind) {
+    const auto* arg = umbriel::payloadIf<umbriel::ScratchpadArg>(bind);
+    return arg != nullptr ? arg->name : std::string{};
+  };
+
+  Keybind bind;
+  CHECK(parseAction("scratchpad-toggle", bind));
+  CHECK(bind.action == KeybindAction::ScratchpadToggle);
+  // The alternative is present even with no name, so the payload still says
+  // which action shape it belongs to.
+  CHECK(umbriel::payloadIf<umbriel::ScratchpadArg>(bind) != nullptr);
+  CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) == nullptr);
+  CHECK(scratchpadOf(bind).empty());
+
+  CHECK(parseAction("scratchpad-toggle:terminal", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"terminal"});
+
+  CHECK(parseAction("window-move-to-scratchpad:notes", bind));
+  CHECK(bind.action == KeybindAction::WindowMoveToScratchpad);
+  CHECK_EQ(scratchpadOf(bind), std::string{"notes"});
+  CHECK(parseAction("window-restore-from-scratchpad:music", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"music"});
+  CHECK(parseAction("window-toggle-scratchpad:chat", bind));
+  CHECK(bind.action == KeybindAction::WindowToggleScratchpad);
+  CHECK_EQ(scratchpadOf(bind), std::string{"chat"});
+  CHECK(parseAction("scratchpad-focus-next:terminal", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"terminal"});
+
+  CHECK(parseAction("window-move-to-scratchpad", bind));
+  CHECK(scratchpadOf(bind).empty());
+  CHECK(!parseAction("scratchpad-toggle:", bind));
 }
 
 UMBRIEL_TEST(parsesWindowIdActions) {
@@ -539,6 +555,7 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
     switch (spec.argKind) {
     case ActionArgKind::None:
     case ActionArgKind::OptionalOutput:
+    case ActionArgKind::OptionalScratchpad:
     case ActionArgKind::OptionalWindowId:
     case ActionArgKind::SkipConfirmation:
       break;
@@ -586,6 +603,9 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
     case ActionArgKind::OptionalOutput:
       CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) != nullptr);
       break;
+    case ActionArgKind::OptionalScratchpad:
+      CHECK(umbriel::payloadIf<umbriel::ScratchpadArg>(bind) != nullptr);
+      break;
     case ActionArgKind::WindowId:
     case ActionArgKind::OptionalWindowId:
       CHECK(umbriel::payloadIf<umbriel::WindowIdArg>(bind) != nullptr);
@@ -620,6 +640,7 @@ UMBRIEL_TEST(everyActionSpecRoundTripsThroughParseAction) {
     switch (spec.argKind) {
     case ActionArgKind::None:
     case ActionArgKind::OptionalOutput:
+    case ActionArgKind::OptionalScratchpad:
     case ActionArgKind::OptionalWindowId:
     case ActionArgKind::SkipConfirmation:
       break;
@@ -749,6 +770,8 @@ UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
       return ":1";
     case ActionArgKind::OptionalOutput:
       return ":DP-1";
+    case ActionArgKind::OptionalScratchpad:
+      return ":terminal";
     case ActionArgKind::WindowId:
     case ActionArgKind::OptionalWindowId:
       return ":window-1";
@@ -774,6 +797,8 @@ UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
       return "<workspace>[/<output>]";
     case ActionArgKind::OptionalOutput:
       return "[<output>]";
+    case ActionArgKind::OptionalScratchpad:
+      return "[<scratchpad>]";
     case ActionArgKind::WindowId:
       return "<window-id>";
     case ActionArgKind::OptionalWindowId:
@@ -796,6 +821,7 @@ UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
     CHECK(bind.action == spec.action);
     // An optional argument must also parse without one.
     if (spec.argKind == ActionArgKind::OptionalOutput
+        || spec.argKind == ActionArgKind::OptionalScratchpad
         || spec.argKind == ActionArgKind::OptionalWindowId
         || spec.argKind == ActionArgKind::SkipConfirmation) {
       Keybind bare;

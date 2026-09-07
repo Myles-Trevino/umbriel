@@ -192,6 +192,7 @@ namespace umbriel {
         .windowRules = true,
         .layerRules = true,
         .securityContextRules = true,
+        .scratchpads = true,
         .workspaceRules = true,
     };
   }
@@ -215,6 +216,7 @@ namespace umbriel {
         .windowRules = before.windowRules != after.windowRules,
         .layerRules = before.layerRules != after.layerRules,
         .securityContextRules = before.securityContextRules != after.securityContextRules,
+        .scratchpads = before.scratchpads != after.scratchpads,
         .workspaceRules = before.workspaceRules != after.workspaceRules,
     };
   }
@@ -247,6 +249,7 @@ namespace umbriel {
     add(windowRules, "window rules");
     add(layerRules, "layer rules");
     add(securityContextRules, "security context rules");
+    add(scratchpads, "scratchpads");
     add(workspaceRules, "workspace rules");
     return out;
   }

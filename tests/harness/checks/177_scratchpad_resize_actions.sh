@@ -102,9 +102,9 @@ wait_for_field "$SCRATCHPAD" h 260
 
 scratchpad_id=$(field_of "$SCRATCHPAD" id)
 "$UMBRIEL" msg "window-focus:$scratchpad_id" > /dev/null
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 wait_for_field "$SCRATCHPAD" workspace ""
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 wait_for_field "$SCRATCHPAD" active true
 assert_background_box setup
 

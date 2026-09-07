@@ -18,6 +18,9 @@ enabled = false
 [animation.scratchpad]
 scale = 0
 
+[[scratchpad]]
+name = "seat"
+
 [[window_rule]]
 match.title = "^scratchpad-seat-.*-background$"
 default_floating = true
@@ -105,9 +108,9 @@ wait_for_field "$SCRATCH" w 420
 wait_for_field "$SCRATCH" h 260
 scratch_id=$(field_of "$SCRATCH" id)
 "$UMBRIEL" msg "window-focus:$scratch_id" > /dev/null
-"$UMBRIEL" msg "window-move-to-scratchpad:$target_output" > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad:seat > /dev/null
 wait_for_field "$SCRATCH" workspace ""
-"$UMBRIEL" msg "scratchpad-toggle:$target_output" > /dev/null
+"$UMBRIEL" msg scratchpad-toggle:seat > /dev/null
 wait_for_field "$SCRATCH" active true
 
 # Return the pointer to the first output, then restore seat focus to the visible
