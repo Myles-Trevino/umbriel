@@ -200,6 +200,67 @@ namespace umbriel {
       }
     }
 
+    // libinput's on-button-down scrolling: while the configured button is held (or latched, with the lock), motion
+    // turns into scroll events and the button itself stops clicking.
+    void applyScrollButton(
+        libinput_device* libinputDevice, const wlr_input_device* device, std::optional<uint32_t> configuredButton,
+        std::optional<bool> configuredLock, std::string_view buttonSetting, std::string_view lockSetting
+    ) {
+      const bool supported =
+          (libinput_device_config_scroll_get_methods(libinputDevice) & LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN) != 0;
+      if (!supported) {
+        if (configuredButton) {
+          kLog.warn("input: '{}' does not support {}", deviceName(device), buttonSetting);
+        } else if (configuredLock) {
+          kLog.warn("input: '{}' does not support {}", deviceName(device), lockSetting);
+        }
+        return;
+      }
+
+      if (!configuredButton) {
+        if (configuredLock) {
+          kLog.warn("input: '{}' ignores {} because {} is not set", deviceName(device), lockSetting, buttonSetting);
+        }
+        // The device may still carry a button-down method from an earlier config, so every default has to go back.
+        if (libinput_device_config_scroll_set_method(
+                libinputDevice, libinput_device_config_scroll_get_default_method(libinputDevice)
+            ) != LIBINPUT_CONFIG_STATUS_SUCCESS
+            || libinput_device_config_scroll_set_button(
+                   libinputDevice, libinput_device_config_scroll_get_default_button(libinputDevice)
+               ) != LIBINPUT_CONFIG_STATUS_SUCCESS
+            || libinput_device_config_scroll_set_button_lock(
+                   libinputDevice, libinput_device_config_scroll_get_default_button_lock(libinputDevice)
+               ) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+          kLog.warn("input: failed to restore the default scroll button state for '{}'", deviceName(device));
+        }
+        return;
+      }
+
+      if (libinput_device_config_scroll_set_button(libinputDevice, *configuredButton)
+          != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        const char* name = mouseButtonName(*configuredButton);
+        kLog.warn(
+            "input: could not apply {} to '{}': the device has no {} button", buttonSetting, deviceName(device),
+            name != nullptr ? name : "such"
+        );
+        return;
+      }
+      if (libinput_device_config_scroll_set_method(libinputDevice, LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN)
+          != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        kLog.warn("input: failed to apply {} to '{}'", buttonSetting, deviceName(device));
+        return;
+      }
+      const auto lockState = configuredLock.value_or(
+                                 libinput_device_config_scroll_get_default_button_lock(libinputDevice)
+                                 == LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_ENABLED
+                             )
+          ? LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_ENABLED
+          : LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_DISABLED;
+      if (libinput_device_config_scroll_set_button_lock(libinputDevice, lockState) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        kLog.warn("input: failed to apply {} to '{}'", lockSetting, deviceName(device));
+      }
+    }
+
     void applyMouseAcceleration(
         libinput_device* libinputDevice, const wlr_input_device* device,
         const std::optional<AccelProfile>& configuredProfile, const std::optional<double>& configuredSensitivity,
@@ -361,6 +422,23 @@ namespace umbriel {
           override != nullptr && override->naturalScroll ? "input.device.natural_scroll"
               : isTouchpad                               ? "input.touchpad.natural_scroll"
                                                          : "input.mouse.natural_scroll"
+      );
+
+      // Button scrolling has no `[input.touchpad]` counterpart: a touchpad only gets it from its own device rule,
+      // never from `[input.mouse]`, since claiming a button there would cost the pad its two-finger scrolling.
+      const std::optional<uint32_t> scrollButton = override != nullptr && override->scrollButton
+          ? override->scrollButton
+          : isTouchpad ? std::nullopt
+                       : input.mouse.scrollButton;
+      const std::optional<bool> scrollButtonLock = override != nullptr && override->scrollButtonLock
+          ? override->scrollButtonLock
+          : isTouchpad ? std::nullopt
+                       : input.mouse.scrollButtonLock;
+      applyScrollButton(
+          libinputDevice, device, scrollButton, scrollButtonLock,
+          override != nullptr && override->scrollButton ? "input.device.scroll_button" : "input.mouse.scroll_button",
+          override != nullptr && override->scrollButtonLock ? "input.device.scroll_button_lock"
+                                                            : "input.mouse.scroll_button_lock"
       );
 
       const std::optional<AccelProfile> accelProfile = override != nullptr && override->accelProfile

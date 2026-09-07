@@ -226,6 +226,8 @@ tap = true                                      # Tap-to-click
 # accel_profile = "flat"                        # Omit to preserve the libinput default
 sensitivity = 0.0                               # Pointer speed, -1.0 to 1.0
 scroll_wheel_step = 60                          # Logical pixels per layout-scroll action, 1-1000
+# scroll_button = "MouseBack"                   # Hold to scroll with pointer motion; omit to leave the device alone
+# scroll_button_lock = false                    # One press latches scrolling instead of holding
 
 [input.tablet]
 enabled = true                                  # False disables tablet tools and pads
@@ -273,6 +275,8 @@ follows_mouse = false                           # Focus the pointer target after
 # name = "Acme Gaming Mouse"
 # accel_profile = "flat"
 # sensitivity = 0.0
+# scroll_button = "MouseBack"
+# scroll_button_lock = false
 
 # ─────────────────────────────── Keybinds ───────────────────────────────────
 # Bind chords to compositor actions. Configured chords replace matching

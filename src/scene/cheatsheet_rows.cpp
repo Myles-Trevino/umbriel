@@ -3,7 +3,6 @@
 // clang-format off
 // See keybind_parse.cpp: <cmath> must precede the wayland chain.
 #include <cmath>
-#include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
 extern "C" {
 #include <wlr/types/wlr_keyboard.h>
@@ -31,23 +30,6 @@ namespace {
       return "WheelLeft";
     case umbriel::WheelDirection::Right:
       return "WheelRight";
-    default:
-      return nullptr;
-    }
-  }
-
-  const char* mouseButtonName(uint32_t button) {
-    switch (button) {
-    case BTN_LEFT:
-      return "MouseLeft";
-    case BTN_RIGHT:
-      return "MouseRight";
-    case BTN_MIDDLE:
-      return "MouseMiddle";
-    case BTN_SIDE:
-      return "MouseBack";
-    case BTN_EXTRA:
-      return "MouseForward";
     default:
       return nullptr;
     }
@@ -125,7 +107,7 @@ namespace {
       const char* name = wheelName(bind.wheel);
       result += name != nullptr ? name : "Wheel?";
     } else if (bind.mouseButton != 0) {
-      const char* name = mouseButtonName(bind.mouseButton);
+      const char* name = umbriel::mouseButtonName(bind.mouseButton);
       result += name != nullptr ? name : "Mouse?";
     } else {
       char buf[64];

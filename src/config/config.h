@@ -693,6 +693,11 @@ namespace umbriel {
       struct Mouse {
         std::optional<bool> naturalScroll;
         std::optional<AccelProfile> accelProfile;
+        // Evdev BTN_* code libinput turns into a scroll modifier: holding it makes pointer motion scroll instead of
+        // clicking. Unset leaves the device's libinput default alone.
+        std::optional<uint32_t> scrollButton;
+        // One press latches scrolling on, the next releases it, instead of requiring a hold.
+        std::optional<bool> scrollButtonLock;
         double sensitivity = 0.0;
         int scrollWheelStep = 60;
         bool operator==(const Mouse&) const = default;
@@ -741,6 +746,8 @@ namespace umbriel {
         std::optional<double> sensitivity;
         std::optional<bool> disableWhileTyping;
         std::optional<ClickMethod> clickMethod;
+        std::optional<uint32_t> scrollButton;
+        std::optional<bool> scrollButtonLock;
         bool operator==(const Device&) const = default;
       };
 
