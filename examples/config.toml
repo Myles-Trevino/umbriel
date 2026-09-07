@@ -609,7 +609,8 @@ curve = "easeout"
 style = "fade"                                  # fade or slide
 # shader = "shaders/reveal.glsl"
 
-# Window movement, resizing, visible scratchpad keybind resizing, and floating maximize
+# Window movement, resizing, and floating maximize. Visible scratchpad keybind
+# resizing uses this event too.
 [animation.windows_move]
 enabled = true
 duration_ms = 250
