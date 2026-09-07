@@ -160,6 +160,21 @@ sense: `enum class FocusReason : uint8_t { Directional, PointerPress, ... }`.
 
 Getters are the noun, without a `get` prefix, and `[[nodiscard]]`: `toplevel()`, `mapped()`, `workspace()`.
 
+### Configuration vocabulary
+
+| | Convention | Example |
+|---|---|---|
+| TOML keys | snake_case | `scroll_wheel_step`, `click_method` |
+| Enumerated values Umbriel defines | snake_case | `top_left`, `button_areas`, `on` |
+| Action and IPC identifiers | kebab-case | `window-close`, `layout-scroll-left` |
+| Identifiers owned by another system | verbatim | `variant = "altgr-intl"`, output `DP-1`, `app_id` |
+
+If the reader checks a value against a list, the value is ours and gets our spelling. `click_method` is one:
+libinput offers only a C enum, and its own tools disagree anyway (`list-devices` prints `button-areas`,
+`debug-events` accepts `buttonareas`).
+
+If the value goes to another library untouched, keep that library's spelling.
+
 ### wlroots patterns
 
 - Headers use `#pragma once`.
