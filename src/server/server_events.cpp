@@ -163,7 +163,7 @@ namespace umbriel {
     }
 
     void applyClickMethod(
-        libinput_device* libinputDevice, const wlr_input_device* device, const std::optional<ClickMethod>& configured,
+        libinput_device* libinputDevice, const wlr_input_device* device, std::optional<ClickMethod> configured,
         std::string_view setting
     ) {
       const uint32_t methods = libinput_device_config_click_get_methods(libinputDevice);
@@ -176,7 +176,7 @@ namespace umbriel {
       enum libinput_config_click_method method = libinput_device_config_click_get_default_method(libinputDevice);
       if (configured) {
         enum libinput_config_click_method requested = LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS;
-        const char* requestedName = "button-areas";
+        const char* requestedName = "button_areas";
         switch (*configured) {
         case ClickMethod::ButtonAreas:
           break;
@@ -192,7 +192,11 @@ namespace umbriel {
         method = requested;
       }
       if (libinput_device_config_click_set_method(libinputDevice, method) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
-        kLog.warn("input: failed to apply {} to '{}'", setting, deviceName(device));
+        if (configured) {
+          kLog.warn("input: failed to apply {} to '{}'", setting, deviceName(device));
+        } else {
+          kLog.warn("input: failed to restore the default click method for '{}'", deviceName(device));
+        }
       }
     }
 
@@ -337,8 +341,16 @@ namespace umbriel {
               deviceName(device)
           );
         }
-        applyClickMethod(libinputDevice, device, input.touchpad.clickMethod, "input.touchpad.click_method");
       }
+
+      const bool hasClickOverride = override != nullptr && override->clickMethod.has_value();
+      const std::optional<ClickMethod> clickMethod = hasClickOverride ? override->clickMethod
+          : isTouchpad                                                ? input.touchpad.clickMethod
+                                                                      : std::nullopt;
+      applyClickMethod(
+          libinputDevice, device, clickMethod,
+          hasClickOverride ? "input.device.click_method" : "input.touchpad.click_method"
+      );
 
       const std::optional<bool>& naturalScroll = override != nullptr && override->naturalScroll
           ? override->naturalScroll

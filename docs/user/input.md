@@ -144,7 +144,7 @@ natural_scroll = true
 # scroll_factor = 1.5         # touchpad scroll speed, 0.1 to 10.0
 # disable_while_typing = true
 # disable_on_external_mouse = true
-# click_method = "clickfinger"  # "button-areas", or "clickfinger"
+# click_method = "clickfinger"  # "button_areas" or "clickfinger"
 ```
 
 Tap-to-click is enabled by default. Set `tap = false` to disable it globally,
@@ -154,15 +154,6 @@ corresponding libinput default. Set `disable_while_typing = false` to keep the
 touchpad active while typing. Removing either optional setting on reload
 restores the device default. Options are applied only when supported by the
 device; an explicitly configured unsupported option is reported in the log.
-
-`click_method` selects how a physical press is interpreted as a button click.
-`button-areas` uses the lower area of the pad as soft buttons, while `clickfinger`
-selects the button from the number of fingers: two fingers produce a right click 
-and three fingers produce a middle click. The setting is unset by default, 
-preserving each device's libinput default click method, and removing it on reload 
-restores that default. Most touchpads support both `button-areas` and `clickfinger`,
-while buttonpad-style devices, where the pad itself acts as the buttons 
-(such as some trackpoint keyboards), support only `button-areas`. 
 
 The effective `natural_scroll` value also controls Umbriel's three-finger
 gestures: horizontal strip scrolling, vertical workspace switching, and
@@ -175,6 +166,15 @@ including custom curves. Both remain unset by default, which uses each
 touchpad's libinput default profile and speed. Removing either setting on reload
 restores the corresponding default. `sensitivity` alone adjusts pointer speed
 under the device's default profile.
+
+`click_method` decides how a physical press becomes a button. `button_areas`
+splits the bottom of the pad into left, middle, and right zones, while
+`clickfinger` reads the finger count instead: one finger is a left click, two a
+right click, three a middle click, anywhere on the pad. It is unset by default,
+which keeps each device's libinput default, and removing it on reload restores
+that default. Clickpads that only expose software buttons support just
+`button_areas`; asking for `clickfinger` there is reported in the log and leaves
+the device alone.
 
 `scroll_factor` multiplies the smooth two-finger scroll a touchpad sends to the
 focused window, so `2.0` scrolls twice as fast and `0.5` half as fast. It
@@ -242,6 +242,7 @@ natural_scroll = false
 accel_profile = "flat"
 sensitivity = 0.0
 disable_while_typing = false
+click_method = "clickfinger"
 
 [[input.device]]
 name = "Acme Gaming Mouse"
@@ -251,8 +252,8 @@ sensitivity = 0.0
 
 Each rule inherits the matching class settings and overrides only the keys it
 contains. `layout`, `variant`, `options`, `repeat_rate`, and `repeat_delay`
-apply to keyboards. `tap` and `disable_while_typing` apply to touchpads.
-`natural_scroll` applies to touchpads and mice. `accel_profile` and
+apply to keyboards. `tap`, `disable_while_typing`, and `click_method` apply to
+touchpads. `natural_scroll` applies to touchpads and mice. `accel_profile` and
 `sensitivity` apply to mice and touchpads; for a touchpad the rule overrides
 `[input.touchpad]` rather than `[input.mouse]`. Unsupported libinput settings
 are reported in the log.

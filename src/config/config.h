@@ -132,6 +132,8 @@ namespace umbriel {
     Window,
   };
 
+  // How a touchpad turns a physical press into a button: soft button areas along
+  // the bottom edge, or the finger count at press time.
   enum class ClickMethod : uint8_t {
     ButtonAreas,
     ClickFinger,
@@ -738,6 +740,7 @@ namespace umbriel {
         std::optional<AccelProfile> accelProfile;
         std::optional<double> sensitivity;
         std::optional<bool> disableWhileTyping;
+        std::optional<ClickMethod> clickMethod;
         bool operator==(const Device&) const = default;
       };
 
