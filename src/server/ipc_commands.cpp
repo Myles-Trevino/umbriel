@@ -354,6 +354,8 @@ namespace umbriel {
       entry["focused"] = v->workspace() != nullptr && v->workspace()->focusedView() == v.get();
       entry["urgent"] = v->urgent();
       entry["xwayland"] = v->xwayland();
+      // -1 whenever the owning process is unknown, including for every XWayland view.
+      entry["pid"] = v->pid();
       // Tiled windows report their layout slot, which the layout computes even for hidden workspaces; floats report
       // their own position. Ordering a listing by these positions then matches the strip (scrolling) or tile tree
       // (dwindle) regardless of visibility or in-flight animations.
