@@ -115,8 +115,8 @@ namespace umbriel {
     // many times this is called in between: a touchpad swipe marks on every motion event, and unrelated paths reached
     // in the same frame (a focus change, a config reload, a client's fullscreen commit) each used to arrange on their
     // own. Prefer this to arrange(). Call arrange() directly only when the code immediately afterwards reads the
-    // arranged geometry back out of the layout, targetBox() is the only thing arrange() produces that is not simply
-    // applied to the scene, and a stale one would be read.
+    // arranged geometry back out of the layout, or when protocol state and size must land in one configure before the
+    // next frame. targetBox() is the only thing arrange() produces that is not simply applied to the scene.
     void markArrange(bool animate = true);
     void flushArrange();
     void syncViewPresentation(View* view);

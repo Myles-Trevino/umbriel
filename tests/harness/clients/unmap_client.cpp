@@ -359,19 +359,22 @@ namespace {
 
   void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* states) {
     auto& state = *static_cast<State*>(data);
+    bool fullscreen = false;
     if (state.logConfigures) {
       std::println("configured-size={}x{}", width, height);
-      std::fflush(stdout);
     }
     const auto* configured = static_cast<const uint32_t*>(states->data);
     const size_t count = states->size / sizeof(uint32_t);
     for (size_t index = 0; index < count; ++index) {
+      fullscreen = fullscreen || configured[index] == XDG_TOPLEVEL_STATE_FULLSCREEN;
       if (configured[index] == XDG_TOPLEVEL_STATE_MAXIMIZED) {
         std::println("configured-maximized");
-        std::fflush(stdout);
-        break;
       }
     }
+    if (state.logConfigures) {
+      std::println("configured-state={}x{} {}", width, height, fullscreen ? "fullscreen" : "windowed");
+    }
+    std::fflush(stdout);
   }
 
   void toplevelClose(void* data, xdg_toplevel*) {

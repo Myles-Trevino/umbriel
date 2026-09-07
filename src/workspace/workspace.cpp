@@ -574,11 +574,6 @@ namespace umbriel {
         }
         continue;
       }
-      // An unfullscreen configure with client-chosen size is in flight; the
-      // column size waits for the ack (View::handleCommit re-arranges).
-      if (view->awaitingUnfullscreenSize()) {
-        continue;
-      }
       const wlr_box target = tiledTargetBox(view, usable);
       const XdgSizeHints hints = xdgSizeHints(view->toplevel());
       const int width = view->maximizedToEdges() ? target.width : clampXdgWidth(target.width, hints);

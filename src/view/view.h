@@ -77,12 +77,8 @@ namespace umbriel {
     // True when unpinning puts the window back in the tiled layout, because
     // that is where it was pinned from.
     [[nodiscard]] bool restoresTiledOnUnpin() const { return m_restoreTiledAfterUnpin; }
-    // True while an unfullscreen configure with size 0x0 is unacknowledged;
-    // Workspace::arrange must not impose the column size yet.
-    [[nodiscard]] bool awaitingUnfullscreenSize() const { return m_pendingUnfullscreenSize; }
     [[nodiscard]] bool maximizedToEdges() const { return m_maximizedToEdges; }
-    // Fullscreen for layout purposes: a view inside the unfullscreen grace keeps its fullscreen slot and presentation
-    // so the strip does not reflow (and no resize leaks) while the client decides how to respond.
+    // Fullscreen for layout purposes follows the state already scheduled for the next configure.
     [[nodiscard]] bool layoutFullscreen() const;
     [[nodiscard]] bool urgent() const { return m_urgent; }
     // The window id the ext-foreign-toplevel protocol hands to clients, which the IPC surface reuses verbatim for its
@@ -247,6 +243,11 @@ namespace umbriel {
     friend class Overview;
     friend class Workspace;
 
+    enum class FullscreenExitLayout {
+      Immediate,
+      DeferToCaller,
+    };
+
     struct ViewSurfaceWatch {
       View* view = nullptr;
       wlr_surface* surface = nullptr;
@@ -292,7 +293,7 @@ namespace umbriel {
     void setMaximized(bool maximized, bool animate = true);
     void handleRequestFullscreen();
     void handleSetParent();
-    void setFullscreen(bool fullscreen);
+    void setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout = FullscreenExitLayout::Immediate);
     void handleSetTitle();
     void handleSetAppId();
     void handleForeignActivate();
@@ -462,18 +463,9 @@ namespace umbriel {
     // it). Cleared whenever fullscreen is left by any other path, so a client that chose windowed mode while floating
     // re-tiles as a regular column.
     bool m_refullscreenOnTile = false;
-    // Set while an unfullscreen configure with size 0x0 is in flight: the layout must not impose the column size until
-    // the client commits its non-fullscreen state (or re-requests fullscreen, avoiding any resize).
-    bool m_pendingUnfullscreenSize = false;
-    // 0 until the first frame tick after arming; the grace deadline counts
-    // from there so a stalled frame clock cannot expire it instantly.
-    uint64_t m_unfullscreenGraceStartMsec = 0;
     // Inactive client unfullscreen requests wait briefly for xdg or foreign activation. Any later client request or
     // compositor-driven fullscreen change clears the parked request.
     DeferredUnfullscreen m_deferredUnfullscreen;
-    // Geometry at unfullscreen time; a commit with a different geometry means
-    // the client accepted windowed mode and the grace can end early.
-    wlr_box m_unfullscreenGeometry{};
     bool m_onActiveWorkspace = false;
     bool m_scratchpadBorder = false;
     bool m_urgent = false;
