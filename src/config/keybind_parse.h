@@ -246,6 +246,13 @@ namespace umbriel {
     ActionArgKind argKind = ActionArgKind::None;
   };
 
+  // Evdev BTN_* code for a canonical mouse button name such as "MouseBack", or 0 when the name is not one. Matching is
+  // case-insensitive.
+  [[nodiscard]] uint32_t mouseButtonFromName(std::string_view name);
+
+  // Canonical name for an evdev BTN_* code, or nullptr for a button Umbriel does not name.
+  [[nodiscard]] const char* mouseButtonName(uint32_t button);
+
   // Parse a chord such as "Mod+Shift+h", "Ctrl+Alt+Delete", "Mod+WheelUp", "Mod+MouseBack", or "submap[resize],Escape".
   // Only the trigger fields are written; the action is set separately by parseAction. Returns false and leaves `output`
   // default-constructed on any malformed input.

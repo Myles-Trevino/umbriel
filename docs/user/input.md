@@ -190,9 +190,8 @@ natural_scroll = false
 # accel_profile = "flat"  # "flat", "adaptive", or a custom curve
 sensitivity = 0.0        # -1.0 to 1.0
 scroll_wheel_step = 60  # 1-1000, pixels per step for layout-scroll-left/right
-# scroll_method = "on_button_down"  # no_scroll, two_finger, edge, or on_button_down
-# scroll_button = 276               # evdev button code held to scroll with pointer motion
-# scroll_button_lock = false        # click toggles scrolling instead of holding
+# scroll_button = "MouseBack"       # Hold this button and move the mouse to scroll
+# scroll_button_lock = false        # One press latches scrolling instead of holding
 ```
 
 Omitting `accel_profile` preserves each device's libinput default, which is
@@ -214,21 +213,21 @@ strip bounds, so the columns never park
 past either edge. Wheel-triggered scrolling uses twice `scroll_wheel_step`
 during an active tiled window drag.
 
-`scroll_method` picks the gesture that makes a device scroll: `no_scroll`
-mutes touch scrolling, `two_finger` and `edge` are touchpad gestures, and
-`on_button_down` scrolls while the scroll button is down. A mouse's wheel
-ignores the method entirely and keeps scrolling under every value. Omitted,
-each device keeps its libinput default.
+`scroll_button` hands one button to libinput as a scroll modifier: while it is
+held, pointer motion scrolls the surface under the cursor instead of moving the
+cursor, and the button no longer clicks anything. It takes the same names as a
+mouse keybind, `MouseLeft`, `MouseRight`, `MouseMiddle`, `MouseBack`, or
+`MouseForward`, and a bind on that button stops firing while it is claimed,
+which the log reports on load. `scroll_button_lock = true` latches instead: one
+press starts scrolling, the next stops it, which suits a side button that is
+awkward to hold. Both keys are unset by default and removing them restores the
+device's libinput default. A device that cannot do button scrolling, or that
+has no such button, is reported in the log and left alone.
 
-`scroll_button` takes an evdev button code (find it with `libinput
-debug-events`; 275 is `BTN_SIDE`, 276 is `BTN_EXTRA`) and repurposes it: the
-button never clicks, motion while it is down scrolls the surface under the
-cursor like wheel input, and it implies `scroll_method = "on_button_down"`.
-`scroll_button_lock = true` toggles scrolling per press instead of requiring a
-hold; if your side button clicks instead of holding, use it. Scrolling applies
-to non-touchpad pointers, a touchpad only through an `[[input.device]]` rule;
-removing the keys restores the device default, and an unsupported value is
-ignored with a warning.
+`[input.mouse]` reaches every pointer that is not a touchpad. A touchpad takes
+a scroll button only from its own `[[input.device]]` rule, because a touchpad
+can run one scroll method at a time and button scrolling would cost it
+two-finger scrolling.
 
 ### Per-device overrides
 
@@ -256,18 +255,18 @@ disable_while_typing = false
 name = "Acme Gaming Mouse"
 accel_profile = "flat"
 sensitivity = 0.0
-scroll_method = "on_button_down"
-scroll_button = 275
+scroll_button = "MouseBack"
 scroll_button_lock = false
 ```
 
 Each rule inherits the matching class settings and overrides only the keys it
 contains. `layout`, `variant`, `options`, `repeat_rate`, and `repeat_delay`
 apply to keyboards. `tap` and `disable_while_typing` apply to touchpads.
-`natural_scroll` applies to touchpads and mice. `accel_profile` and
-`sensitivity` apply to mice and touchpads; for a touchpad the rule overrides
-`[input.touchpad]` rather than `[input.mouse]`. Unsupported libinput settings
-are reported in the log.
+`natural_scroll` applies to touchpads and mice. `scroll_button` and
+`scroll_button_lock` apply to any pointer, including a touchpad, which reads
+them nowhere else. `accel_profile` and `sensitivity` apply to mice and
+touchpads; for a touchpad the rule overrides `[input.touchpad]` rather than
+`[input.mouse]`. Unsupported libinput settings are reported in the log.
 
 Rules match every attached device with the exact name. Device overrides also
 apply when a device is connected after startup and when the configuration is

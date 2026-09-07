@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <linux/input-event-codes.h>
 #include <optional>
 #include <string>
 #include <unistd.h>
@@ -1459,8 +1460,7 @@ disable_on_external_mouse = true
 [input.mouse]
 accel_profile = "custom 0.2 0.0 0.5 1.0 2.0"
 sensitivity = 0.25
-scroll_method = "on_button_down"
-scroll_button = 276
+scroll_button = "MouseForward"
 scroll_button_lock = true
 
 [[input.device]]
@@ -1482,8 +1482,7 @@ disable_while_typing = false
 name = "Acme Gaming Mouse"
 accel_profile = "flat"
 sensitivity = -0.5
-scroll_method = "on_button_down"
-scroll_button = 275
+scroll_button = "MouseBack"
 scroll_button_lock = false
 )");
 
@@ -1498,9 +1497,7 @@ scroll_button_lock = false
   CHECK_EQ(input.mouse.accelProfile->step, 0.2);
   CHECK_EQ(input.mouse.accelProfile->points, std::vector<double>({0.0, 0.5, 1.0, 2.0}));
   CHECK_EQ(input.mouse.sensitivity, 0.25);
-  CHECK(input.mouse.scrollMethod.has_value());
-  CHECK(input.mouse.scrollMethod == std::optional(umbriel::ScrollMethod::OnButtonDown));
-  CHECK(input.mouse.scrollButton == std::optional<int>(276));
+  CHECK(input.mouse.scrollButton == std::optional<uint32_t>(BTN_EXTRA));
   CHECK(input.mouse.scrollButtonLock == std::optional<bool>(true));
   CHECK(input.touchpad.accelProfile.has_value());
   if (input.touchpad.accelProfile.has_value()) {
@@ -1540,9 +1537,7 @@ scroll_button_lock = false
     CHECK(mouse->accelProfile.has_value());
     CHECK(mouse->accelProfile->kind == umbriel::AccelProfile::Kind::Flat);
     CHECK(mouse->sensitivity == std::optional<double>(-0.5));
-    CHECK(mouse->scrollMethod.has_value());
-    CHECK(mouse->scrollMethod == std::optional(umbriel::ScrollMethod::OnButtonDown));
-    CHECK(mouse->scrollButton == std::optional<int>(275));
+    CHECK(mouse->scrollButton == std::optional<uint32_t>(BTN_SIDE));
     CHECK(mouse->scrollButtonLock == std::optional<bool>(false));
   }
 
@@ -1558,7 +1553,6 @@ UMBRIEL_TEST(mouseAccelerationPreservesDeviceProfileByDefault) {
 
 UMBRIEL_TEST(mouseScrollButtonDefaultsToUnset) {
   const umbriel::Config defaults;
-  CHECK(!defaults.input.mouse.scrollMethod.has_value());
   CHECK(!defaults.input.mouse.scrollButton.has_value());
   CHECK(!defaults.input.mouse.scrollButtonLock.has_value());
 }
@@ -1651,6 +1645,58 @@ accel_profile = "custom 0.2 1.0"
   CHECK(result.success);
   CHECK(!store.config().input.mouse.accelProfile.has_value());
   CHECK(containsDiagnostic(store, "custom <step> <points...>"));
+}
+
+UMBRIEL_TEST(scrollButtonRejectsEvdevCodesAndStillClaimsTheKey) {
+  const TempConfig file;
+  file.write(R"(
+[input.mouse]
+scroll_button = 275
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  CHECK(result.success);
+  CHECK(!store.config().input.mouse.scrollButton.has_value());
+  CHECK(containsDiagnostic(store, "input.mouse.scroll_button must be a string"));
+  CHECK(!containsDiagnostic(store, "unknown key input.mouse.scroll_button"));
+
+  file.write("[input.mouse]\nscroll_button = \"button8\"\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().input.mouse.scrollButton.has_value());
+  CHECK(containsDiagnostic(store, R"(invalid input.mouse.scroll_button "button8")"));
+}
+
+UMBRIEL_TEST(scrollButtonReportsBindsItTakesOver) {
+  const TempConfig file;
+  file.write(R"(
+[input.mouse]
+scroll_button = "MouseBack"
+
+[keybinds]
+"Mod+MouseBack" = "overview-toggle"
+"Mod+MouseForward" = "overview-close"
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult result = store.reload();
+
+  CHECK(result.success);
+  CHECK(store.config().input.mouse.scrollButton == std::optional<uint32_t>(BTN_SIDE));
+  CHECK(containsDiagnostic(store, "input.mouse.scroll_button takes MouseBack away from keybinds"));
+
+  file.write(R"(
+[input.mouse]
+scroll_button = "MouseBack"
+
+[keybinds]
+"Mod+MouseForward" = "overview-close"
+)");
+  CHECK(store.reload().success);
+  CHECK(!containsDiagnostic(store, "away from keybinds"));
 }
 
 UMBRIEL_TEST(keyboardOptionsLoadGloballyAndPerDevice) {

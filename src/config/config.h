@@ -40,13 +40,6 @@ namespace umbriel {
     bool operator==(const AccelProfile&) const = default;
   };
 
-  enum class ScrollMethod : std::uint8_t {
-    NoScroll,
-    TwoFinger,
-    Edge,
-    OnButtonDown,
-  };
-
   // Per-workspace layout overrides (all optional → inherit Config::Layout).
   struct WorkspaceLayoutOverrides {
     std::optional<LayoutMode> mode;
@@ -692,10 +685,10 @@ namespace umbriel {
       struct Mouse {
         std::optional<bool> naturalScroll;
         std::optional<AccelProfile> accelProfile;
-        std::optional<ScrollMethod> scrollMethod;
-        // Evdev button code (275 = BTN_SIDE, 276 = BTN_EXTRA) held to scroll with pointer motion; unset or 0 disables.
-        std::optional<int> scrollButton;
-        // With a scroll button configured: a click toggles scrolling instead of requiring a hold.
+        // Evdev BTN_* code libinput turns into a scroll modifier: holding it makes pointer motion scroll instead of
+        // clicking. Unset leaves the device's libinput default alone.
+        std::optional<uint32_t> scrollButton;
+        // One press latches scrolling on, the next releases it, instead of requiring a hold.
         std::optional<bool> scrollButtonLock;
         double sensitivity = 0.0;
         int scrollWheelStep = 60;
@@ -744,8 +737,7 @@ namespace umbriel {
         std::optional<AccelProfile> accelProfile;
         std::optional<double> sensitivity;
         std::optional<bool> disableWhileTyping;
-        std::optional<ScrollMethod> scrollMethod;
-        std::optional<int> scrollButton;
+        std::optional<uint32_t> scrollButton;
         std::optional<bool> scrollButtonLock;
         bool operator==(const Device&) const = default;
       };

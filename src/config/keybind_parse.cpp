@@ -47,25 +47,6 @@ namespace umbriel {
       return WheelDirection::None;
     }
 
-    uint32_t mouseButtonFromName(std::string_view lowered) {
-      if (lowered == "mouseleft") {
-        return BTN_LEFT;
-      }
-      if (lowered == "mouseright") {
-        return BTN_RIGHT;
-      }
-      if (lowered == "mousemiddle") {
-        return BTN_MIDDLE;
-      }
-      if (lowered == "mouseback") {
-        return BTN_SIDE;
-      }
-      if (lowered == "mouseforward") {
-        return BTN_EXTRA;
-      }
-      return 0;
-    }
-
     bool applyModifier(std::string_view token, Keybind& output) {
       const std::string modifier = toLower(token);
       if (modifier == "mod") {
@@ -320,6 +301,43 @@ namespace umbriel {
   } // namespace
 
   std::span<const ActionSpec> actionSpecs() { return kActionSpecs; }
+
+  uint32_t mouseButtonFromName(std::string_view name) {
+    const std::string lowered = toLower(name);
+    if (lowered == "mouseleft") {
+      return BTN_LEFT;
+    }
+    if (lowered == "mouseright") {
+      return BTN_RIGHT;
+    }
+    if (lowered == "mousemiddle") {
+      return BTN_MIDDLE;
+    }
+    if (lowered == "mouseback") {
+      return BTN_SIDE;
+    }
+    if (lowered == "mouseforward") {
+      return BTN_EXTRA;
+    }
+    return 0;
+  }
+
+  const char* mouseButtonName(uint32_t button) {
+    switch (button) {
+    case BTN_LEFT:
+      return "MouseLeft";
+    case BTN_RIGHT:
+      return "MouseRight";
+    case BTN_MIDDLE:
+      return "MouseMiddle";
+    case BTN_SIDE:
+      return "MouseBack";
+    case BTN_EXTRA:
+      return "MouseForward";
+    default:
+      return nullptr;
+    }
+  }
 
   bool parseChord(std::string_view chord, Keybind& output) {
     output = Keybind{};
