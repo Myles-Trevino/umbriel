@@ -19,6 +19,7 @@ extern "C" {
 // clang-format off
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <utility>
 #include "wlr.h"
 // clang-format on
@@ -436,8 +437,8 @@ namespace umbriel {
     wlr_scene_node_raise_to_top(&m_sceneTree->node);
 
     const auto views = m_server->registry().all();
-    for (auto it = views.rbegin(); it != views.rend(); ++it) {
-      View* child = it->get();
+    for (const auto& view : std::views::reverse(views)) {
+      View* child = view.get();
       if (child != this && child->transientParent() == this) {
         child->raiseTransientTree();
       }

@@ -25,7 +25,7 @@ namespace umbriel {
       warn(*node, "animation shader path must be a string");
       return result;
     }
-    if (value->empty() || value->find('\0') != std::string::npos) {
+    if (value->empty() || value->contains('\0')) {
       warn(*node, "animation shader path must not be empty or contain NUL bytes");
       return result;
     }
@@ -88,7 +88,7 @@ namespace umbriel {
       warn(*node, "animation shader source exceeds 256 KiB");
       return result;
     }
-    if (source.code.find('\0') != std::string::npos || source.code.find_first_not_of(" \t\r\n") == std::string::npos) {
+    if (source.code.contains('\0') || source.code.find_first_not_of(" \t\r\n") == std::string::npos) {
       warn(*node, "animation shader source must not be blank or contain NUL bytes");
       return result;
     }

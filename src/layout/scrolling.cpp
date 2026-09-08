@@ -318,7 +318,7 @@ namespace umbriel {
       // indivisible pixel between columns, rather than letting equal half-width columns overflow by one pixel when the
       // effective gap is odd.
       const int gap = m_config->totalGap;
-      const double slotExtent = static_cast<double>(viewportPrimary + gap);
+      const auto slotExtent = static_cast<double>(viewportPrimary + gap);
       double slotStart = 0.0;
       for (int i = 0; i < columnIndex; ++i) {
         slotStart += m_columns[static_cast<size_t>(i)].widthFrac * slotExtent;

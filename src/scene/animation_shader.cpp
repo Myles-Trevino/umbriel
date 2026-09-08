@@ -89,7 +89,7 @@ namespace umbriel {
       wlr_scene_node* node, wlr_renderer* renderer, AnimationEvent event, const AnimatedValue& value, float direction
   ) {
     const double distance = value.target() - value.from();
-    const float progress = static_cast<float>(
+    const auto progress = static_cast<float>(
         distance != 0.0 ? (value.current() - value.from()) / distance : evaluateCurve(value.curve(), value.progress())
     );
     update(node, renderer, event, value, progress, direction != 0.0F ? direction : (distance < 0.0 ? -1.0F : 1.0F));
