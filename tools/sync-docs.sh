@@ -6,8 +6,8 @@
 # H1. Stale .mdx files without a source document are removed after a successful
 # sync. A leading H1 is dropped from the body.
 # Source docs use relative .md links so they render correctly on GitHub. The docs site serves pages at
-# /umbriel/<route>/, so links are rewritten here: sibling docs become site URLs, and the packaged config example is copied as a static asset. A small
-# explicit map handles source filenames whose established site route differs.
+# /umbriel/<route>/, so sibling documentation links are rewritten here. The packaged configuration links directly to
+# its current repository version. A small explicit map handles source filenames whose established site route differs.
 # Design notes (docs/design) are maintainer-only and are never synced, so links
 # to them must not appear in user docs. Any .md link that survives the rewrite
 # is reported, since it would 404 on the site. After syncing, rebuild the site
@@ -18,10 +18,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 site_root="${1:-"$repo_root/../noctalia-docs"}"
 dest_dir="$site_root/src/content/docs/umbriel"
-asset_dir="$site_root/public/umbriel"
 
 mkdir -p "$dest_dir"
-mkdir -p "$asset_dir"
+rm -f "$site_root/public/umbriel/config.toml"
 
 site_route() {
     case "$1" in
@@ -43,8 +42,6 @@ for md in "$repo_root"/docs/user/*.md; do
     link_exprs+=(-e "s|]($base.md#|](/umbriel/$route/#|g")
 done
 
-cp "$repo_root/examples/config.toml" "$asset_dir/config.toml"
-link_exprs+=(-e 's|](../../examples/config.toml)|](/umbriel/config.toml)|g')
 
 for md in "$repo_root"/docs/*.md; do
     [[ -e "$md" ]] || continue
