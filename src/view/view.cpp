@@ -457,11 +457,11 @@ namespace umbriel {
     }
   }
 
-  void View::setScratchpadBorder(bool scratchpad) {
-    if (m_scratchpadBorder == scratchpad) {
+  void View::setInScratchpad(bool scratchpad) {
+    if (m_inScratchpad == scratchpad) {
       return;
     }
-    m_scratchpadBorder = scratchpad;
+    m_inScratchpad = scratchpad;
     setBorderFocused(m_borderFocusedState);
     refreshStateRuleEffects();
   }
@@ -849,7 +849,7 @@ namespace umbriel {
   void View::snapPosition(int x, int y) { setPosition(x, y); }
 
   void View::animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve) {
-    m_customFade = m_scratchpadBorder && animationShader(m_server->renderer(), AnimationEvent::Scratchpad) != nullptr;
+    m_customFade = m_inScratchpad && animationShader(m_server->renderer(), AnimationEvent::Scratchpad) != nullptr;
     m_fade.snap(m_fadeAlpha);
     m_fade.retarget(toAlpha, durationMs, curve);
     scheduleFrame();
@@ -912,12 +912,11 @@ namespace umbriel {
     updateAnimationShader(&target->node, renderer, AnimationEvent::WindowsMove, movement);
     updateAnimationShader(&target->node, renderer, AnimationEvent::DimUnfocused, m_focusDim);
     updateAnimationShader(
-        &target->node, renderer, m_scratchpadBorder ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn, m_fade
+        &target->node, renderer, m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn, m_fade
     );
     wlr_scene_node_set_animation(
-        &target->node,
-        static_cast<unsigned>(m_scratchpadBorder ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad), nullptr,
-        nullptr
+        &target->node, static_cast<unsigned>(m_inScratchpad ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad),
+        nullptr, nullptr
     );
     updateAnimationShader(
         border, renderer, AnimationEvent::Border, m_borderColorAnim, m_borderFocusedState ? 1.0F : -1.0F
@@ -968,7 +967,7 @@ namespace umbriel {
       m_customFade = m_customFade
           && m_fade.animating()
           && animationShader(
-                 m_server->renderer(), m_scratchpadBorder ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn
+                 m_server->renderer(), m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn
              ) != nullptr;
       setFadeAlpha(static_cast<float>(m_fade.current()));
       if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
@@ -1297,7 +1296,7 @@ namespace umbriel {
       setFadeAlpha(m_fadeAlpha);
     }
 
-    const auto& targetBase = m_scratchpadBorder
+    const auto& targetBase = m_inScratchpad
         ? (focused ? config().colors.border.scratchpadFocused : config().colors.border.scratchpadUnfocused)
         : (focused ? config().colors.border.focused : config().colors.border.unfocused);
 
@@ -1307,7 +1306,7 @@ namespace umbriel {
       scheduleFrame();
     } else {
       m_borderColorAnim.snap(targetBase);
-      m_decoration.setBorderColor(focused, m_scratchpadBorder, effectiveOpacity());
+      m_decoration.setBorderColor(focused, m_inScratchpad, effectiveOpacity());
     }
 
     if (focusChanged && m_mapped) {
@@ -3186,7 +3185,7 @@ namespace umbriel {
         .focused = m_borderFocusedState,
         .floating = !m_tiled,
         .pinned = m_pinned,
-        .scratchpad = m_scratchpadBorder,
+        .scratchpad = m_inScratchpad,
     };
   }
 

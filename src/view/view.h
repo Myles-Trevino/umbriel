@@ -145,7 +145,8 @@ namespace umbriel {
     void clearDisplaced() { m_displacedHome.reset(); }
 
     void setOnActiveWorkspace(bool active);
-    void setScratchpadBorder(bool scratchpad);
+    // Scratchpad membership: selects the scratchpad border palette and animation event, and matches is_scratchpad.
+    void setInScratchpad(bool scratchpad);
     void animateTo(int x, int y);
     void setPosition(int x, int y);
     // The authoritative layout position: where the window's slot is, not where its scene node happens to be
@@ -493,7 +494,7 @@ namespace umbriel {
     // compositor-driven fullscreen change clears the parked request.
     DeferredUnfullscreen m_deferredUnfullscreen;
     bool m_onActiveWorkspace = false;
-    bool m_scratchpadBorder = false;
+    bool m_inScratchpad = false;
     bool m_urgent = false;
     bool m_activated = false;
     // nullopt means no pre-map request, false means untrusted, true means trusted. A trusted request wins if both
