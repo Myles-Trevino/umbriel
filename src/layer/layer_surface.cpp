@@ -23,6 +23,22 @@ namespace umbriel {
     constexpr Logger kLog("layer");
   } // namespace
 
+  LayerSurface* LayerSurface::fromSurface(wlr_surface* surface) {
+    wlr_surface* walk = surface;
+    while (walk != nullptr) {
+      walk = wlr_surface_get_root_surface(walk);
+      if (wlr_layer_surface_v1* layer = wlr_layer_surface_v1_try_from_wlr_surface(walk)) {
+        return static_cast<LayerSurface*>(layer->data);
+      }
+      if (wlr_xdg_popup* popup = wlr_xdg_popup_try_from_wlr_surface(walk)) {
+        walk = popup->parent;
+        continue;
+      }
+      break;
+    }
+    return nullptr;
+  }
+
   LayerSurface::LayerSurface(Server& server, wlr_layer_surface_v1* layerSurface)
       : SceneNode(SceneNodeKind::LayerSurface), m_server(&server), m_layerSurface(layerSurface) {
     if (m_layerSurface->output == nullptr) {
@@ -220,10 +236,7 @@ namespace umbriel {
   }
 
   bool LayerSurface::hasKeyboardFocus() const {
-    if (m_layerSurface == nullptr) {
-      return false;
-    }
-    return m_server->seat()->wlr()->keyboard_state.focused_surface == m_layerSurface->surface;
+    return m_layerSurface != nullptr && fromSurface(m_server->seat()->wlr()->keyboard_state.focused_surface) == this;
   }
 
   void LayerSurface::reparentToLayer(uint32_t layer) {

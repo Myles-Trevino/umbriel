@@ -49,6 +49,10 @@ last valid configuration and never enters the implicit lookup chain.
 Output state and workspace inventory are independent effects.
 
 - Changing mode, scale, transform, or position reapplies output state.
+- Focus reconciliation after runtime effects preserves the exact focused
+  surface when its mapped view or keyboard-interactive layer remains usable on
+  an enabled output. This includes popup grabs. Explicit focus actions still
+  select their requested output or workspace.
 - Changing an output's `workspaces` value reconciles its workspace inventory
   and refreshes workspace layout.
 - Changing only layout settings refreshes workspace geometry without
@@ -95,5 +99,11 @@ The relevant regression coverage is in:
 - [`tests/harness/checks/144_output_scrolling_width.sh`](../../tests/harness/checks/144_output_scrolling_width.sh),
   which checks per-output initial scrolling widths and preserves existing
   column widths when that default changes on reload.
+- [`tests/harness/checks/179_scratchpad_seat_focus_output.sh`](../../tests/harness/checks/179_scratchpad_seat_focus_output.sh),
+  which checks that an output scale reload preserves keyboard focus when the
+  pointer and focused scratchpad are on different outputs.
+- [`tests/harness/checks/622_scratchpad_output_reposition.sh`](../../tests/harness/checks/622_scratchpad_output_reposition.sh),
+  which checks scratchpad geometry, backdrop, and focus across live output
+  changes.
 - [`tests/harness/checks/045_session_environment.sh`](../../tests/harness/checks/045_session_environment.sh),
   which checks that environment changes remain unapplied until restart.

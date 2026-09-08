@@ -342,7 +342,8 @@ namespace umbriel {
     // Input wake applies only when every configured output is powered off. A named DPMS action therefore remains in
     // effect while another configured output is still awake.
     void wakeDpmsOutputs();
-    void refocus(Output* preferred = nullptr) { m_focus.refocus(preferred); }
+    void refocus() { m_focus.refocus(); }
+    void refocus(Output* preferred) { m_focus.refocus(preferred); }
     void reconcileDynamicWorkspaces();
     void clearKeyboardFocus() { m_focus.clearKeyboardFocus(); }
     void deactivateViews(View* except = nullptr) { m_focus.deactivateViews(except); }

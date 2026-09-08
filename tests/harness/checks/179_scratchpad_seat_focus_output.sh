@@ -74,6 +74,22 @@ cursor_output() {
   "$UMBRIEL" workspaces --json | jq -r '.[] | select(.focused) | .output'
 }
 
+output_scale() {
+  "$UMBRIEL" outputs | awk -v name="$1" '$1 == name { found = 1; next } found && /Scale:/ { print $2; exit }'
+}
+
+wait_for_output_scale() {
+  local name=$1 expected=$2 actual=
+  for _ in $(seq 80); do
+    actual=$(output_scale "$name")
+    [[ $actual == "$expected" ]] && return 0
+    sleep 0.1
+  done
+  echo "expected $name scale $expected, got $actual"
+  "$UMBRIEL" outputs
+  return 1
+}
+
 background_signature() {
   windows | jq -c --arg pointer "$POINTER_BACKGROUND" --arg target "$TARGET_BACKGROUND" '
     [.[]
@@ -125,6 +141,23 @@ if [[ $(cursor_output) != "$pointer_output" ]]; then
   exit 1
 fi
 
+# Output reconfiguration must preserve the valid seat owner instead of
+# selecting the workspace under the pointer. This also proves the scale change
+# happened before inspecting focus.
+printf '\n[output.%s]\nscale = 1.25\n' "$target_output" >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+wait_for_output_scale "$target_output" 1.250000
+wait_for_field "$SCRATCH" active true
+if [[ $(field_of "$POINTER_BACKGROUND" active) != false
+    || $(field_of "$TARGET_BACKGROUND" active) != false ]]; then
+  echo "output scale reload moved focus from the visible scratchpad: $(windows)"
+  exit 1
+fi
+if [[ $(cursor_output) != "$pointer_output" ]]; then
+  echo "output scale reload moved the pointer away from $pointer_output"
+  exit 1
+fi
+
 baseline_background=$(background_signature)
 "$UMBRIEL" msg window-set-width:0.25 > /dev/null
 
@@ -135,7 +168,7 @@ for _ in $(seq 80); do
     echo "scratchpad resize followed the pointer output's workspace focus: $(windows)"
     exit 1
   fi
-  if [[ $(field_of "$SCRATCH" w) == 320
+  if [[ $(field_of "$SCRATCH" w) == 256
       && $(field_of "$SCRATCH" h) == 260
       && $(field_of "$SCRATCH" active) == true ]]; then
     resized=true
@@ -144,7 +177,7 @@ for _ in $(seq 80); do
   sleep 0.1
 done
 if [[ $resized != true ]]; then
-  echo "seat-focused scratchpad did not resize to 320x260: $(windows)"
+  echo "seat-focused scratchpad did not resize to 256x260: $(windows)"
   exit 1
 fi
 
@@ -161,4 +194,4 @@ if [[ $(cursor_output) != "$pointer_output" ]]; then
   exit 1
 fi
 
-echo "scratchpad window actions follow seat focus across outputs"
+echo "scratchpad focus survives output reload and actions follow seat focus across outputs"

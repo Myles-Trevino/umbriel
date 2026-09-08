@@ -10,6 +10,7 @@
 struct wlr_layer_surface_v1;
 struct wlr_scene_layer_surface_v1;
 struct wlr_scene_tree;
+struct wlr_surface;
 struct wlr_xdg_popup;
 
 namespace umbriel {
@@ -19,6 +20,9 @@ namespace umbriel {
 
   class LayerSurface : public SceneNode, public Animatable {
   public:
+    // Resolve a layer owner through subsurfaces and nested XDG popups.
+    [[nodiscard]] static LayerSurface* fromSurface(wlr_surface* surface);
+
     LayerSurface(Server& server, wlr_layer_surface_v1* layerSurface);
     ~LayerSurface();
 

@@ -1669,7 +1669,7 @@ namespace umbriel {
 
     if (relocatedViews > 0 || !activeSurvives) {
       m_server->cursor()->clearConstraint();
-      m_server->refocus(m_output);
+      m_server->refocus();
     }
     kLog.info(
         "reconciled {} to {} workspaces ({} windows relocated)",

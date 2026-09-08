@@ -165,6 +165,82 @@ namespace umbriel {
     return nullptr;
   }
 
+  bool FocusManager::retainCurrentKeyboardFocus() {
+    if (m_server.overview() != nullptr && m_server.overview()->active()) {
+      return false;
+    }
+
+    wlr_surface* focusedSurface = m_server.seat()->wlr()->keyboard_state.focused_surface;
+    if (focusedSurface == nullptr || !focusedSurface->mapped) {
+      return false;
+    }
+
+    const auto outputIsUsable = [this](Output* output) {
+      return output != nullptr
+          && output->wlr()->enabled
+          && wlr_output_layout_get(m_server.outputLayout(), output->wlr()) != nullptr;
+    };
+
+    if (View* view = View::fromSurface(focusedSurface)) {
+      if (!view->mapped() || (!view->onActiveWorkspace() && !view->pinned())) {
+        return false;
+      }
+
+      Output* output = nullptr;
+      if (ScratchpadManager* scratchpad = m_server.scratchpadManager();
+          scratchpad != nullptr && scratchpad->contains(view)) {
+        output = scratchpad->outputFor(view);
+      } else if (Workspace* workspace = view->workspace(); workspace != nullptr && workspace->group() != nullptr) {
+        output = workspace->group()->output();
+      } else if (view->pinned()) {
+        output = view->currentOutput();
+      }
+      if (!outputIsUsable(output)) {
+        return false;
+      }
+
+      // The seat surface is already correct. Refresh only the owner's chrome
+      // and stacking so a popup or input grab keeps the exact focused surface.
+      view->applySeatFocus(false);
+      if (Workspace* workspace = view->workspace(); workspace != nullptr && (!view->pinned() || workspace->active())) {
+        workspace->setFocusedView(view);
+      }
+      m_server.refreshOutputPolicies();
+      return true;
+    }
+
+    if (LayerSurface* layer = LayerSurface::fromSurface(focusedSurface);
+        layer != nullptr && layer->acceptsKeyboard() && outputIsUsable(layer->output())) {
+      // Preserve an on-demand layer and any popup grab it currently owns.
+      m_server.deactivateViews(nullptr);
+      m_server.refreshOutputPolicies();
+      return true;
+    }
+    return false;
+  }
+
+  void FocusManager::refocus() {
+    if (m_server.sessionLocked()) {
+      return;
+    }
+    if (LayerSurface* layer = exclusiveKeyboardLayer()) {
+      wlr_surface* focusedSurface = m_server.seat()->wlr()->keyboard_state.focused_surface;
+      if (focusedSurface != nullptr && focusedSurface->mapped && LayerSurface::fromSurface(focusedSurface) == layer) {
+        // Infrastructure changes must not replace this layer's popup with its
+        // root surface. Explicit interactions still call focus() directly.
+        m_server.deactivateViews(nullptr);
+        m_server.refreshOutputPolicies();
+        return;
+      }
+      layer->focus();
+      return;
+    }
+    if (retainCurrentKeyboardFocus()) {
+      return;
+    }
+    refocusFallback(nullptr);
+  }
+
   void FocusManager::refocus(Output* preferred) {
     if (m_server.sessionLocked()) {
       return;
@@ -173,7 +249,10 @@ namespace umbriel {
       layer->focus();
       return;
     }
+    refocusFallback(preferred);
+  }
 
+  void FocusManager::refocusFallback(Output* preferred) {
     const auto focusMappedOn = [this](Output* output) -> bool {
       if (output == nullptr || output->workspaceGroup() == nullptr) {
         return false;

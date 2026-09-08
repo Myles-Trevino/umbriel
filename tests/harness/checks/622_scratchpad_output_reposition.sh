@@ -14,6 +14,7 @@ readonly SECOND_SHOT="$UMBRIEL_RUNTIME_DIR/reposition-second.png"
 
 write_config() {
   local second_mode=${3:-1280x720}
+  local second_scale=${4:-1.0}
   {
     printf '%s\n' "$BASELINE"
     printf '\n[animation]\nenabled = false\n'
@@ -21,7 +22,7 @@ write_config() {
     printf '\n[colors]\nbackdrop = "#FFFFFFFF"\n'
     printf '\n[appearance]\nborder_width = 0\nouter_border_width = 0\ncorner_radius = 0\n'
     printf '\n[output.HEADLESS-1]\nenabled = true\nmode = "1280x720"\nposition = [%s, 0]\nworkspaces = ["LEFT"]\n' "$1"
-    printf '\n[output.HEADLESS-2]\nenabled = true\nmode = "%s"\nposition = [%s, 0]\nworkspaces = ["RIGHT"]\n' "$second_mode" "$2"
+    printf '\n[output.HEADLESS-2]\nenabled = true\nmode = "%s"\nscale = %s\nposition = [%s, 0]\nworkspaces = ["RIGHT"]\n' "$second_mode" "$second_scale" "$2"
     printf '\n[[scratchpad]]\nname = "%s"\n' "$NAME"
     printf '\n[[window_rule]]\nmatch.title = "^%s$"\ndefault_output = "HEADLESS-2"\ndefault_floating = true\ndefault_size = [360, 220]\ndefault_position = { x = 240, y = 180, anchor = "top_left" }\n' "$TITLE"
   } > "$UMBRIEL_CONFIG"
@@ -137,6 +138,15 @@ grim -o HEADLESS-2 "$FIRST_SHOT"
 assert_content "HEADLESS-2 before the layout change" "$FIRST_SHOT"
 assert_dimmed "HEADLESS-2 before the layout change" "$FIRST_SHOT"
 
+# Changing only the scale must preserve keyboard focus on the visible
+# scratchpad instead of selecting or clearing the workspace focus beneath it.
+write_config 0 1280 1280x720 1.25
+"$UMBRIEL" msg config-reload > /dev/null
+wait_for_output_origin HEADLESS-2 1280 0
+wait_for_field x 1472
+wait_for_field y 144
+wait_for_field active true
+
 # Swap the live outputs without touching the scratchpad. The same Output object
 # remains its owner, so its output-local geometry must stay at 240,180.
 write_config 1280 0
@@ -195,4 +205,4 @@ if [[ $workspace != HEADLESS-2:* ]]; then
   exit 1
 fi
 
-echo "scratchpad geometry and backdrop followed an enabled output layout move"
+echo "scratchpad geometry, backdrop, and focus followed enabled output changes"
