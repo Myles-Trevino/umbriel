@@ -19,7 +19,6 @@ namespace umbriel::configmerge {
   };
 
   [[nodiscard]] MergeResult mergeWithIncludes(const std::filesystem::path& rootFile);
-  void deepMerge(toml::table& base, const toml::table& overlay);
   void deepMerge(toml::table& base, toml::table&& overlay);
 
 } // namespace umbriel::configmerge

@@ -1644,6 +1644,99 @@ files = [")"
   CHECK_EQ(store.config().colors.background[0], 34.0F / 255.0F);
 }
 
+UMBRIEL_TEST(ruleCollectionsAccumulateAcrossIncludesWhilePlainArraysReplace) {
+  // Rules are a collection every file contributes to, so an include and the including file both apply, in merge
+  // order. Every other array is one value: appending would grow a fixed-arity array past what its reader accepts and
+  // would make an overridden autostart list run the include's commands as well.
+  const TempConfigTree tree;
+  tree.write(
+      "rules.toml",
+      "[general]\nautostart = [\"from-include\"]\n"
+      "[output.DP-1]\nposition = [0, 0]\n"
+      "[[window_rule]]\nmatch.app_id = \"^from-include$\"\n"
+      "[[layer_rule]]\nmatch.namespace = \"^bar$\"\nblur = true\n"
+  );
+  tree.write(
+      "config.toml",
+      "[include]\nfiles = [\"rules.toml\"]\n"
+      "[general]\nautostart = [\"from-root\"]\n"
+      "[output.DP-1]\nposition = [3072, 0]\n"
+      "[[window_rule]]\nmatch.app_id = \"^from-root$\"\n"
+  );
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(tree.path("config.toml"), true);
+  const umbriel::ConfigReloadResult loaded = store.reload();
+
+  std::vector<std::string> patterns;
+  for (const umbriel::WindowRule& rule : store.config().windowRules) {
+    patterns.push_back(rule.appIdPattern);
+  }
+  std::vector<std::string> namespaces;
+  for (const umbriel::LayerRule& rule : store.config().layerRules) {
+    namespaces.push_back(rule.namespacePattern);
+  }
+  const std::vector<std::string> expectedPatterns{"^from-include$", "^from-root$"};
+  const std::vector<std::string> expectedNamespaces{"^bar$"};
+  const std::vector<std::string> expectedAutostart{"from-root"};
+  const std::array<int, 2> expectedPosition{3072, 0};
+  const auto output =
+      std::ranges::find_if(store.config().outputs, [](const umbriel::OutputRule& rule) { return rule.name == "DP-1"; });
+  const bool foundOutput = output != store.config().outputs.end();
+
+  CHECK(loaded.success);
+  CHECK(patterns == expectedPatterns);
+  CHECK(namespaces == expectedNamespaces);
+  CHECK(store.config().general.autostart == expectedAutostart);
+  CHECK(foundOutput && output->position.has_value());
+  CHECK(foundOutput && output->position.value_or(std::array<int, 2>{}) == expectedPosition);
+  CHECK(!containsDiagnostic(store, "position"));
+}
+
+UMBRIEL_TEST(emptyRuleArrayDropsRulesFromIncludes) {
+  const TempConfig file;
+  file.write("window_rule = []\n[include]\nfiles = [\"" + file.includeName() + "\"]\n");
+  file.writeInclude("[[window_rule]]\nmatch.app_id = \"^dropped$\"\ndefault_floating = true\n");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  const umbriel::ConfigReloadResult loaded = store.reload();
+
+  CHECK(loaded.success);
+  CHECK(store.config().windowRules.empty());
+}
+
+UMBRIEL_TEST(duplicateDeviceRuleAcrossIncludesIsRejected) {
+  // Device rules accumulate like any other collection, so restating one in a later file is the same duplicate the
+  // reader already rejects within a single file, and the whole reload is refused rather than silently dropping the
+  // include's other rules.
+  const TempConfigTree tree;
+  tree.write("input.toml", "[[input.device]]\nname = \"Acme Keyboard\"\nrepeat_rate = 40\n");
+  tree.write(
+      "config.toml",
+      "[include]\nfiles = [\"input.toml\"]\n"
+      "[[input.device]]\nname = \"Acme Mouse\"\nsensitivity = -0.5\n"
+  );
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(tree.path("config.toml"), true);
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().input.devices.size(), size_t{2});
+  CHECK(store.config().input.findDevice("Acme Keyboard") != nullptr);
+  CHECK(store.config().input.findDevice("Acme Mouse") != nullptr);
+
+  tree.write(
+      "config.toml",
+      "[include]\nfiles = [\"input.toml\"]\n"
+      "[[input.device]]\nname = \"Acme Keyboard\"\nrepeat_rate = 60\n"
+  );
+  const umbriel::ConfigReloadResult duplicate = store.reload();
+
+  CHECK(!duplicate.success);
+  CHECK(containsDiagnostic(store, "duplicates device 'Acme Keyboard'"));
+  CHECK_EQ(store.config().input.devices.size(), size_t{2});
+}
+
 UMBRIEL_TEST(activationPolicyLoadsGloballyAndPerWindow) {
   const TempConfig file;
   file.write(R"(

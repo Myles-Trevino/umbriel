@@ -360,21 +360,19 @@ namespace umbriel::configmerge {
       return expandFile(path, std::move(parsed), visited, result);
     }
 
-  } // namespace
-
-  void deepMerge(toml::table& base, const toml::table& overlay) {
-    for (const auto& [key, value] : overlay) {
-      if (const auto* overlayTable = value.as_table()) {
-        if (auto* baseNode = base.get(key)) {
-          if (auto* baseTable = baseNode->as_table()) {
-            deepMerge(*baseTable, *overlayTable);
-            continue;
-          }
+    // Whether every element is a table. That shape is exactly the rule collections (`[[window_rule]]`,
+    // `[[layer_rule]]`, `[[security_context_rule]]`, `[[workspace]]`, `[[input.device]]`); nothing else in the
+    // vocabulary holds tables in an array, so the merge cannot drift away from the readers.
+    bool holdsOnlyTables(const toml::array& array) {
+      for (const toml::node& element : array) {
+        if (!element.is_table()) {
+          return false;
         }
       }
-      base.insert_or_assign(key, value);
+      return true;
     }
-  }
+
+  } // namespace
 
   void deepMerge(toml::table& base, toml::table&& overlay) {
     for (auto&& [key, value] : overlay) {
@@ -382,6 +380,20 @@ namespace umbriel::configmerge {
         if (auto* baseNode = base.get(key)) {
           if (auto* baseTable = baseNode->as_table()) {
             deepMerge(*baseTable, std::move(*overlayTable));
+            continue;
+          }
+        }
+      } else if (auto* overlayArray = value.as_array(); overlayArray != nullptr && !overlayArray->empty()) {
+        // Rule collections accumulate, so a rule in an include and a rule in the including file both apply, in merge
+        // order. Anything else is replaced, including an empty array: that is how a later file drops what earlier
+        // files contributed, and it keeps a fixed-arity array such as `output.<name>.position` from outgrowing it.
+        if (auto* baseNode = base.get(key)) {
+          auto* baseArray = baseNode->as_array();
+          if (baseArray != nullptr && holdsOnlyTables(*baseArray) && holdsOnlyTables(*overlayArray)) {
+            baseArray->reserve(baseArray->size() + overlayArray->size());
+            for (toml::node& element : *overlayArray) {
+              baseArray->push_back(std::move(*element.as_table()));
+            }
             continue;
           }
         }

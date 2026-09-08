@@ -16,7 +16,9 @@
 # Split large configurations into smaller files. Required files are applied in
 # list order, followed by optional files, then values in this main file.
 # Missing optional files are silently ignored and remain watched. Relative
-# paths start from the directory containing this file.
+# paths start from the directory containing this file. Rule lists such as
+# [[window_rule]] collect entries from every file; any other value is replaced
+# by the last file that sets it.
 # Documentation: https://docs.noctalia.dev/umbriel/configuration/#include
 # ────────────────────────────────────────────────────────────────────────────
 
