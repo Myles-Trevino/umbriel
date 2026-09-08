@@ -742,6 +742,50 @@ UMBRIEL_TEST(windowRulesMatchEmptyIdentityOnlyWhenTheClientSetIt) {
   CHECK(!emptyTitleOnly.defaultMaximize);
 }
 
+UMBRIEL_TEST(windowRulesMatchIsAlone) {
+  Config config;
+
+  WindowRule aloneOnly;
+  aloneOnly.appIdPattern = "^player$";
+  aloneOnly.appIdRegex = std::regex(aloneOnly.appIdPattern);
+  aloneOnly.matchAlone = true;
+  aloneOnly.defaultMaximize = true;
+  config.windowRules.push_back(std::move(aloneOnly));
+
+  WindowRule notAloneOnly;
+  notAloneOnly.appIdPattern = "^player$";
+  notAloneOnly.appIdRegex = std::regex(notAloneOnly.appIdPattern);
+  notAloneOnly.matchAlone = false;
+  notAloneOnly.defaultFloating = true;
+  config.windowRules.push_back(std::move(notAloneOnly));
+
+  // Alone windows take the is_alone=true rule and skip the is_alone=false one.
+  const auto alone =
+      umbriel::resolveWindowRules(config, "player", std::nullopt, std::nullopt, ContentType::None, {.alone = true}, 0);
+  CHECK(alone.defaultMaximize && *alone.defaultMaximize);
+  CHECK(!alone.defaultFloating);
+
+  // Windows that are not alone skip the is_alone=true rule and take the is_alone=false one.
+  const auto notAlone =
+      umbriel::resolveWindowRules(config, "player", std::nullopt, std::nullopt, ContentType::None, {}, 0);
+  CHECK(notAlone.defaultFloating && *notAlone.defaultFloating);
+  CHECK(!notAlone.defaultMaximize);
+
+  // A rule without the selector matches regardless of being alone.
+  WindowRule anyState;
+  anyState.appIdPattern = "^worker$";
+  anyState.appIdRegex = std::regex(anyState.appIdPattern);
+  anyState.defaultPinned = true;
+  config.windowRules.push_back(std::move(anyState));
+
+  const auto anyStateAlone =
+      umbriel::resolveWindowRules(config, "worker", std::nullopt, std::nullopt, ContentType::None, {.alone = true}, 0);
+  CHECK(anyStateAlone.defaultPinned && *anyStateAlone.defaultPinned);
+  const auto anyStateNotAlone =
+      umbriel::resolveWindowRules(config, "worker", std::nullopt, std::nullopt, ContentType::None, {}, 0);
+  CHECK(anyStateNotAlone.defaultPinned && *anyStateNotAlone.defaultPinned);
+}
+
 UMBRIEL_TEST(windowVrrRuleOverridesTheOutputPolicy) {
   CHECK(umbriel::effectiveVrrEnabled(VrrMode::Disabled, false, VrrMode::Always, false));
   CHECK(!umbriel::effectiveVrrEnabled(VrrMode::Always, false, VrrMode::Disabled, false));

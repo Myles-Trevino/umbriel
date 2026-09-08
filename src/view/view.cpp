@@ -1008,7 +1008,180 @@ namespace umbriel {
 
   bool View::layoutFullscreen() const { return m_toplevel->scheduled.fullscreen; }
 
+  // True when this is the only tiled window in the workspace.
+  bool View::isAloneInLayout() const {
+    if (!m_tiled || m_workspace == nullptr) {
+      return false;
+    }
+    View* sole = nullptr;
+    for (const Column& column : m_workspace->layout().columns()) {
+      for (View* view : column.views) {
+        if (sole != nullptr) {
+          return false;
+        }
+        sole = view;
+      }
+    }
+    return sole == this;
+  }
+
   pid_t View::pid() const { return m_xwayland ? -1 : surfaceClientPid(m_toplevel->base->surface); }
+
+  // Reads the rules as if the window were not alone, so the alone effect knows what it should change.
+  ResolvedWindowRule View::resolveAloneRules() const {
+    WindowRuleState notAlone = ruleState();
+    notAlone.alone = false;
+    return resolveWindowRules(
+        config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_xdgTag, m_contentType, notAlone,
+        m_server->uptimeMs()
+    );
+  }
+
+  // The difference between the alone and not-alone rules. Only the four size-related fields are kept: the others
+  // are handled by the normal dynamic rules.
+  ResolvedWindowRule View::aloneRuleDiff(const ResolvedWindowRule& alone, const ResolvedWindowRule& other) const {
+    ResolvedWindowRule diff;
+    if (alone.defaultFullscreen != other.defaultFullscreen) {
+      diff.defaultFullscreen = alone.defaultFullscreen;
+    }
+    if (alone.defaultMaximizeToEdges != other.defaultMaximizeToEdges) {
+      diff.defaultMaximizeToEdges = alone.defaultMaximizeToEdges;
+    }
+    if (alone.defaultMaximize != other.defaultMaximize) {
+      diff.defaultMaximize = alone.defaultMaximize;
+    }
+    if (alone.defaultWidth != other.defaultWidth) {
+      diff.defaultWidth = alone.defaultWidth;
+    }
+    return diff;
+  }
+
+  // Applies one effect at a time, in the same order as at map time. Returns whether the effect was applied: if the
+  // window is already there, or the layout cannot do it, nothing is claimed and leaving alone will not undo anything.
+  bool View::applyAloneRuleEffects(const ResolvedWindowRule& delta) {
+    if (delta.defaultFullscreen && *delta.defaultFullscreen) {
+      if (m_toplevel->scheduled.fullscreen) {
+        return false;
+      }
+      setFullscreen(true);
+      m_aloneAction = AloneAction::Fullscreen;
+      return true;
+    }
+    if (delta.defaultMaximizeToEdges && *delta.defaultMaximizeToEdges) {
+      if (m_maximizedToEdges || m_toplevel->scheduled.fullscreen) {
+        return false;
+      }
+      setMaximizedToEdges(true);
+      m_aloneAction = AloneAction::MaximizeToEdges;
+      return true;
+    }
+    if (m_toplevel->parent == nullptr && delta.defaultMaximize && *delta.defaultMaximize) {
+      if (m_toplevel->scheduled.maximized) {
+        return false;
+      }
+      setMaximized(true);
+      m_aloneAction = AloneAction::Maximize;
+      return true;
+    }
+    if (delta.defaultWidth
+        && m_workspace != nullptr
+        && !m_toplevel->scheduled.fullscreen
+        && !m_maximizedToEdges
+        && !m_toplevel->scheduled.maximized) {
+      ScrollingLayout* scrolling = m_workspace->scrollingLayout();
+      if (scrolling != nullptr) {
+        const int column = scrolling->columnOf(this);
+        if (column >= 0) {
+          const double target = *delta.defaultWidth;
+          const double current = scrolling->widthFraction(column);
+          if (target != current) {
+            m_aloneSavedWidthFrac = current;
+            scrolling->setWidthFraction(column, target);
+            m_workspace->markArrange();
+            m_aloneAction = AloneAction::Width;
+            return true;
+          }
+          m_aloneSavedWidthFrac = scrolling->widthFraction(-1);
+          m_aloneAction = AloneAction::Width;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Undoes the effect that was applied. For the width, the value saved before is restored, it is cleared even when
+  // the window no longer has a column (the layout changed).
+  void View::revertAloneRuleEffects() {
+    switch (m_aloneAction) {
+    case AloneAction::Fullscreen:
+      if (m_toplevel->scheduled.fullscreen) {
+        setFullscreen(false);
+      }
+      break;
+    case AloneAction::MaximizeToEdges:
+      if (m_maximizedToEdges) {
+        setMaximizedToEdges(false);
+      }
+      break;
+    case AloneAction::Maximize:
+      if (m_toplevel->scheduled.maximized && !m_maximizedToEdges) {
+        setMaximized(false);
+      }
+      break;
+    case AloneAction::Width:
+      if (m_workspace != nullptr) {
+        ScrollingLayout* scrolling = m_workspace->scrollingLayout();
+        if (scrolling != nullptr) {
+          const int column = scrolling->columnOf(this);
+          if (column >= 0) {
+            const std::optional<double> notAloneWidth = resolveAloneRules().defaultWidth;
+            const double restore = notAloneWidth.value_or(m_aloneSavedWidthFrac.value_or(scrolling->widthFraction(-1)));
+            scrolling->setWidthFraction(column, restore);
+            m_workspace->markArrange();
+          }
+        }
+        m_aloneSavedWidthFrac.reset();
+      }
+      break;
+    case AloneAction::None:
+      break;
+    }
+    m_aloneAction = AloneAction::None;
+  }
+
+  // Called by the workspace whenever the tiled windows change or the config reloads. If the window is no longer
+  // alone, the applied effect is undone. While alone, the four settings are only re-applied when they changed.
+  bool View::notifyAloneStateChanged() {
+    if (!m_mapped || m_workspace == nullptr) {
+      return false;
+    }
+    refreshStateRuleEffects();
+    const bool alone = isAloneInLayout();
+    if (!alone) {
+      if (!m_aloneEffectsActive) {
+        return false;
+      }
+      revertAloneRuleEffects();
+      m_lastAloneDelta = ResolvedWindowRule{};
+      m_aloneEffectsActive = false;
+      m_workspace->ensureFocusedVisible();
+      return true;
+    }
+    const ResolvedWindowRule delta = aloneRuleDiff(resolvedRules(), resolveAloneRules());
+    if (delta == m_lastAloneDelta) {
+      return false;
+    }
+    bool changed = false;
+    if (m_aloneEffectsActive) {
+      revertAloneRuleEffects();
+      changed = true;
+    }
+    const bool applied = applyAloneRuleEffects(delta);
+    m_lastAloneDelta = delta;
+    m_aloneEffectsActive = applied;
+    return changed || applied;
+  }
 
   void View::onMap(wl_listener* listener, void* /*data*/) {
     View* self = wl_container_of(listener, self, m_map);
@@ -1441,6 +1614,9 @@ namespace umbriel {
     updateBorderGeometry();
     applyCornerRadius();
     applyDynamicRules();
+    if (notifyAloneStateChanged() && m_workspace != nullptr) {
+      m_workspace->markArrange();
+    }
     updateShadow();
     reloadBackdropColor();
   }
@@ -2141,6 +2317,11 @@ namespace umbriel {
     m_ownsNamedScrollingColumnWidth = false;
     m_ruleOpacity = 1.0F;
     m_appliedRuleState = {};
+    // An unmapped window keeps no layout state, so the alone effect it owned is gone with it.
+    m_aloneEffectsActive = false;
+    m_aloneAction = AloneAction::None;
+    m_lastAloneDelta = {};
+    m_aloneSavedWidthFrac.reset();
     m_hasMaximizeRestoreBox = false;
     m_floating.clearSizeRequest();
     if (m_displacedHome) {
@@ -3034,10 +3215,13 @@ namespace umbriel {
       return;
     }
     // Late app ID or title settlement may select opening rules, but identity
-    // hints changed after map must not select new one-shot behavior.
+    // hints changed after map must not select new one-shot behavior. is_alone never selects opening settings: the
+    // alone effects are applied and undone separately, on every change to the workspace's tiled set.
+    WindowRuleState openingState = ruleState();
+    openingState.alone = false;
     const ResolvedWindowRule rule = resolveWindowRules(
         config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_initialRulesXdgTag,
-        m_initialRulesContentType, ruleState(), m_server->uptimeMs()
+        m_initialRulesContentType, openingState, m_server->uptimeMs()
     );
 
     const bool namedScrollingColumnNameChanged = rule.defaultScrollingColumn.has_value()
@@ -3186,6 +3370,7 @@ namespace umbriel {
         .floating = !m_tiled,
         .pinned = m_pinned,
         .scratchpad = m_inScratchpad,
+        .alone = isAloneInLayout(),
     };
   }
 

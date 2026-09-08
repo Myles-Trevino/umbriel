@@ -58,7 +58,6 @@ namespace umbriel {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> centerUnderfullStrip;
       std::optional<bool> centerFocused;
-      std::optional<bool> expandSingleColumn;
       bool operator==(const Scrolling&) const = default;
     } scrolling;
     struct Dwindle {
@@ -107,7 +106,6 @@ namespace umbriel {
       bool centerFocused = false;
       // Axis-agnostic layout state is preserved when config reload changes direction.
       ScrollingDirection direction = ScrollingDirection::Horizontal;
-      bool expandSingleColumn = false;
       bool operator==(const Scrolling&) const = default;
     } scrolling;
     struct Dwindle {
@@ -282,6 +280,7 @@ namespace umbriel {
     bool floating = false;
     bool pinned = false;
     bool scratchpad = false;
+    bool alone = false;
 
     [[nodiscard]] bool operator==(const WindowRuleState& other) const = default;
   };
@@ -298,6 +297,7 @@ namespace umbriel {
     std::optional<bool> matchFloating;
     std::optional<bool> matchPinned;
     std::optional<bool> matchScratchpad;
+    std::optional<bool> matchAlone;
     std::optional<bool> matchAtStartup;
     std::optional<std::string> defaultOutput;
     std::optional<bool> defaultFloating;
@@ -336,6 +336,7 @@ namespace umbriel {
           && matchFloating == other.matchFloating
           && matchPinned == other.matchPinned
           && matchScratchpad == other.matchScratchpad
+          && matchAlone == other.matchAlone
           && matchAtStartup == other.matchAtStartup
           && defaultOutput == other.defaultOutput
           && defaultFloating == other.defaultFloating
@@ -635,7 +636,6 @@ namespace umbriel {
         std::optional<double> defaultWidthFraction;
         bool centerUnderfullStrip = true;
         bool centerFocused = false;
-        bool expandSingleColumn = false;
         bool operator==(const Scrolling&) const = default;
       } scrolling;
       struct Dwindle {

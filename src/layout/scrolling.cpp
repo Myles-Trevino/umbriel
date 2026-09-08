@@ -128,10 +128,6 @@ namespace umbriel {
 
   bool ScrollingLayout::vertical() const { return m_config->scrolling.direction == ScrollingDirection::Vertical; }
 
-  bool ScrollingLayout::expandSingleColumn() const {
-    return m_config != nullptr && m_config->scrolling.expandSingleColumn;
-  }
-
   void ScrollingLayout::syncHeightWeights(Column& column) { ensureWeightCount(column); }
 
   int ScrollingLayout::columnOf(const View* view) const {
@@ -308,24 +304,14 @@ namespace umbriel {
       const int edgePad = m_config->edgePad;
       return std::max(1, viewportPrimary + 2 * edgePad);
     }
-    int width = 0;
-    if (m_columns.size() == 1 && expandSingleColumn()) {
-      // Fill the viewport without touching the stored fraction. Client size hints still apply to tiled columns.
-      width = viewportPrimary;
-    } else {
-      // Gap-aware: reserve one inter-lane gap per lane so fractions summing to 1 tile exactly across the viewport
-      // primary extent. Round cumulative slot boundaries instead of every width independently. This distributes an
-      // indivisible pixel between columns, rather than letting equal half-width columns overflow by one pixel when the
-      // effective gap is odd.
-      const int gap = m_config->totalGap;
-      const auto slotExtent = static_cast<double>(viewportPrimary + gap);
-      double slotStart = 0.0;
-      for (int i = 0; i < columnIndex; ++i) {
-        slotStart += m_columns[static_cast<size_t>(i)].widthFrac * slotExtent;
-      }
-      const double slotEnd = slotStart + column.widthFrac * slotExtent;
-      width = static_cast<int>(std::lround(slotEnd) - std::lround(slotStart)) - gap;
+    const int gap = m_config->totalGap;
+    const auto slotExtent = static_cast<double>(viewportPrimary + gap);
+    double slotStart = 0.0;
+    for (int i = 0; i < columnIndex; ++i) {
+      slotStart += m_columns[static_cast<size_t>(i)].widthFrac * slotExtent;
     }
+    const double slotEnd = slotStart + column.widthFrac * slotExtent;
+    int width = static_cast<int>(std::lround(slotEnd) - std::lround(slotStart)) - gap;
     width = std::max(width, columnMinPrimaryPx(column, *this));
     const int maxWidth = columnMaxPrimaryPx(column, *this);
     if (maxWidth > 0) {
@@ -761,10 +747,6 @@ namespace umbriel {
       const wlr_box& usable, std::optional<double> ruleWidthFraction, const View* /*splitAnchor*/
   ) const {
     const wlr_box content = contentArea(usable);
-    // The first window of a lone-column workspace opens full so its first buffer matches what arrange() will assign.
-    if (m_columns.empty() && expandSingleColumn()) {
-      return {.width = content.width, .height = content.height};
-    }
     const std::optional<double> fraction =
         ruleWidthFraction ? ruleWidthFraction : m_config->scrolling.defaultWidthFraction;
     if (!fraction) {

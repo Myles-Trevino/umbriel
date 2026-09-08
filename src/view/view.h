@@ -69,6 +69,7 @@ namespace umbriel {
     [[nodiscard]] bool onActiveWorkspace() const { return m_onActiveWorkspace; }
     [[nodiscard]] bool tiled() const { return m_tiled; }
     [[nodiscard]] bool floating() const { return !m_tiled; }
+    [[nodiscard]] bool isAloneInLayout() const;
     [[nodiscard]] const std::optional<std::string>& namedScrollingColumnName() const {
       return m_namedScrollingColumnName;
     }
@@ -416,8 +417,15 @@ namespace umbriel {
     // is work a terminal that retitles per command pays repeatedly.
     void applyDynamicRules(const ResolvedWindowRule* resolved = nullptr);
     void refreshStartupRuleEffects();
-    // Re-applies dynamic effects after a float, pin, or scratchpad transition, because those states select rules.
-    // A transition that also moved focus has already refreshed them, so this is a no-op there.
+    // Applies or undoes the alone size effect after the workspace's tiled set changes.
+    bool notifyAloneStateChanged();
+    [[nodiscard]] ResolvedWindowRule resolveAloneRules() const;
+    [[nodiscard]] ResolvedWindowRule
+    aloneRuleDiff(const ResolvedWindowRule& alone, const ResolvedWindowRule& other) const;
+    bool applyAloneRuleEffects(const ResolvedWindowRule& delta);
+    void revertAloneRuleEffects();
+    // Re-applies dynamic effects after a float, pin, scratchpad, or alone transition, because those states select
+    // rules. A transition that also moved focus has already refreshed them, so this is a no-op there.
     void refreshStateRuleEffects();
     // The live window state the `match.is_*` selectors test.
     [[nodiscard]] WindowRuleState ruleState() const;
@@ -439,6 +447,19 @@ namespace umbriel {
     // The state applyDynamicRules last applied effects for. Any resolvedRules() caller refreshes the cache above, so
     // only this tells a transition whether the effects on screen still match the window's state.
     WindowRuleState m_appliedRuleState;
+    // Alone effects: one of the four size effects applies while the window is alone, and the window remembers which
+    // one to undo once it is not alone anymore.
+    bool m_aloneEffectsActive = false;
+    enum class AloneAction {
+      None,
+      Fullscreen,
+      MaximizeToEdges,
+      Maximize,
+      Width,
+    };
+    AloneAction m_aloneAction = AloneAction::None;
+    ResolvedWindowRule m_lastAloneDelta;
+    std::optional<double> m_aloneSavedWidthFrac;
     // One-shot effects already applied at map. Late identity resolution only
     // reapplies a field when its resolved value changes.
     ResolvedWindowRule m_initialRules;

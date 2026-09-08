@@ -101,7 +101,6 @@ namespace umbriel {
     [[nodiscard]] int centeringOffset(int viewportPrimary) const;
     [[nodiscard]] double targetScrollForEnsureVisible(int columnIndex, int viewportPrimary, bool force = false) const;
     [[nodiscard]] bool vertical() const;
-    [[nodiscard]] bool expandSingleColumn() const;
     void syncHeightWeights(Column& column);
     // Weight for a row being added to `column` at `row`, taking over the column's edge gap when the row lands against
     // one. Shared by fresh inserts and by consume, so free space always becomes the incoming row's extent.

@@ -569,7 +569,6 @@ namespace umbriel {
               overrides.widthPresets = std::move(*presets);
             }
             s.sub("scrolling", [&](Section& sc) {
-              sc.boolean("expand_single_column", overrides.scrolling.expandSingleColumn);
               sc.real("default_width_fraction", 0.1, 1.0, overrides.scrolling.defaultWidthFraction)
                   .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip)
                   .boolean("center_focused", overrides.scrolling.centerFocused);
@@ -1197,7 +1196,6 @@ namespace umbriel {
           loaded.layout.widthPresets = std::move(*presets);
         }
         s.sub("scrolling", [&](Section& sc) {
-          sc.boolean("expand_single_column", loaded.layout.scrolling.expandSingleColumn);
           sc.real("default_width_fraction", 0.1, 1.0, loaded.layout.scrolling.defaultWidthFraction)
               .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip)
               .boolean("center_focused", loaded.layout.scrolling.centerFocused);
@@ -1927,6 +1925,14 @@ namespace umbriel {
                 rule.matchScratchpad = scratchpadNode->value<bool>();
               } else {
                 warnAt(scratchpadNode->source(), "ignoring window_rule.match.is_scratchpad (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* aloneNode = matchKeys.take("is_alone")) {
+              if (aloneNode->is_boolean()) {
+                rule.matchAlone = aloneNode->value<bool>();
+              } else {
+                warnAt(aloneNode->source(), "ignoring window_rule.match.is_alone (expected boolean)");
                 valid = false;
               }
             }

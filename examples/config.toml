@@ -477,7 +477,6 @@ bottom = 0
 default_width_fraction = 0.5                    # Initial width for new columns, 0.1-1.0
 center_underfull_strip = true                   # Center a strip narrower than the viewport
 center_focused = false                          # Always center the focused column
-expand_single_column = true                     # Let a lone column fill the viewport
 
 [layout.dwindle]
 # preserve_split = false                        # Keep every split direction fixed after creation
@@ -626,6 +625,16 @@ default_pinned = true
 # match.is_floating = true
 # match.is_scratchpad = false
 # blur = false
+
+# Fill the viewport for a workspace's lone tiled column.
+# [[window_rule]]
+# match.is_alone = true
+# default_maximize = true
+
+# 75% width when the window is alone, the default width when another window opens.
+# [[window_rule]]
+# match.is_alone = true
+# default_width = 0.75
 
 # ────────────────────────────── Layer Rules ─────────────────────────────────
 # Match layer-shell surfaces such as panels, launchers, notifications, and
