@@ -275,6 +275,17 @@ namespace umbriel {
     return "none";
   }
 
+  // Window state the `match.is_*` selectors test. Every field is a live
+  // property, so a change to any of them re-selects a window's rules.
+  struct WindowRuleState {
+    bool focused = false;
+    bool floating = false;
+    bool pinned = false;
+    bool scratchpad = false;
+
+    [[nodiscard]] bool operator==(const WindowRuleState& other) const = default;
+  };
+
   struct WindowRule {
     std::string appIdPattern;
     std::string titlePattern;
@@ -284,6 +295,9 @@ namespace umbriel {
     std::regex xdgTagRegex;
     std::optional<ContentType> matchContentType;
     std::optional<bool> matchFocused;
+    std::optional<bool> matchFloating;
+    std::optional<bool> matchPinned;
+    std::optional<bool> matchScratchpad;
     std::optional<bool> matchAtStartup;
     std::optional<std::string> defaultOutput;
     std::optional<bool> defaultFloating;
@@ -319,6 +333,9 @@ namespace umbriel {
           && xdgTagPattern == other.xdgTagPattern
           && matchContentType == other.matchContentType
           && matchFocused == other.matchFocused
+          && matchFloating == other.matchFloating
+          && matchPinned == other.matchPinned
+          && matchScratchpad == other.matchScratchpad
           && matchAtStartup == other.matchAtStartup
           && defaultOutput == other.defaultOutput
           && defaultFloating == other.defaultFloating
