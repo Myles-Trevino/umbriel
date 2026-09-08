@@ -12,6 +12,7 @@
 #include <string_view>
 #include <unistd.h>
 #include <utility>
+#include <variant>
 
 using umbriel::ConfigDiagnostic;
 using umbriel::ConfigStore;
@@ -1209,6 +1210,72 @@ UMBRIEL_TEST(windowOutputPoliciesLoadAndRejectInvalidValues) {
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   CHECK(!store.config().windowRules[0].hdr);
   CHECK(containsDiagnostic(store, "ignoring window_rule.hdr"));
+}
+
+UMBRIEL_TEST(windowRuleWorkspaceTargetPreservesIntegerAndStringSelectors) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[[window_rule]]\ndefault_workspace = 2\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  const auto& positionTarget = store.config().windowRules[0].defaultWorkspace;
+  const auto* position = positionTarget ? std::get_if<int>(&*positionTarget) : nullptr;
+  CHECK(position != nullptr);
+  CHECK(position != nullptr && *position == 2);
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_workspace"));
+
+  file.write("[[window_rule]]\ndefault_workspace = 64\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  const auto& limitTarget = store.config().windowRules[0].defaultWorkspace;
+  const auto* limit = limitTarget ? std::get_if<int>(&*limitTarget) : nullptr;
+  CHECK(limit != nullptr);
+  CHECK(limit != nullptr && *limit == 64);
+
+  file.write("[[window_rule]]\ndefault_workspace = \"CHAT\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  const auto& nameTarget = store.config().windowRules[0].defaultWorkspace;
+  const auto* name = nameTarget ? std::get_if<std::string>(&*nameTarget) : nullptr;
+  CHECK(name != nullptr);
+  CHECK(name != nullptr && *name == "CHAT");
+
+  // A numeric-looking string remains a name. It must not silently become a
+  // positional selector during parsing.
+  file.write("[[window_rule]]\ndefault_workspace = \"2\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  const auto& numericNameTarget = store.config().windowRules[0].defaultWorkspace;
+  const auto* numericName = numericNameTarget ? std::get_if<std::string>(&*numericNameTarget) : nullptr;
+  CHECK(numericName != nullptr);
+  CHECK(numericName != nullptr && *numericName == "2");
+
+  file.write("[[window_rule]]\ndefault_workspace = \"\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultWorkspace.has_value());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_workspace"));
+
+  file.write("[[window_rule]]\ndefault_workspace = false\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultWorkspace.has_value());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
+
+  file.write("[[window_rule]]\ndefault_workspace = 0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultWorkspace.has_value());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
+
+  file.write("[[window_rule]]\ndefault_workspace = 65\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultWorkspace.has_value());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
 }
 
 UMBRIEL_TEST(securityContextRulesLoadAndKeepTheManagerBlocked) {

@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace umbriel {
@@ -89,6 +90,10 @@ namespace umbriel {
     std::string name;
     bool operator==(const ScratchpadConfig&) const = default;
   };
+
+  // A workspace position or an exact workspace name. TOML integers select by
+  // position, while TOML strings select by name even when they contain digits.
+  using WorkspaceTarget = std::variant<int, std::string>;
 
   // Fully resolved layout config. Owned by each Workspace.
   struct ResolvedLayoutConfig {
@@ -286,7 +291,7 @@ namespace umbriel {
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;  // column width fraction override
     std::optional<double> defaultHeight; // floating height fraction of the usable area
-    std::optional<int> defaultWorkspace; // 1-64
+    std::optional<WorkspaceTarget> defaultWorkspace;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
@@ -349,7 +354,7 @@ namespace umbriel {
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;
     std::optional<double> defaultHeight;
-    std::optional<int> defaultWorkspace;
+    std::optional<WorkspaceTarget> defaultWorkspace;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;

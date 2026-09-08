@@ -145,6 +145,21 @@ namespace umbriel {
     }
     return owner;
   }
+
+  const OutputRule* uniqueFixedWorkspaceOwner(const Config& config, std::string_view name) {
+    const OutputRule* owner = nullptr;
+    for (const OutputRule& output : config.outputs) {
+      if (!output.workspaces || std::ranges::find(*output.workspaces, name) == output.workspaces->end()) {
+        continue;
+      }
+      if (owner != nullptr) {
+        return nullptr;
+      }
+      owner = &output;
+    }
+    return owner;
+  }
+
   const OutputRule* findOutputRule(const Config& config, const OutputIdentity& identity) {
     return matchingOutputRule(config, identity);
   }

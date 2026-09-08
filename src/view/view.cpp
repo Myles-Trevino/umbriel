@@ -21,6 +21,7 @@ extern "C" {
 #include <cmath>
 #include <ranges>
 #include <utility>
+#include <variant>
 #include "wlr.h"
 // clang-format on
 #include "workspace/scratchpad.h"
@@ -108,8 +109,13 @@ namespace umbriel {
       if (rule.defaultOutput) {
         targetOutput = server.outputFromName(*rule.defaultOutput);
       } else if (rule.defaultWorkspace) {
-        const auto index = static_cast<size_t>(*rule.defaultWorkspace - 1);
-        if (const OutputRule* owner = uniqueFixedWorkspaceOwner(config(), index)) {
+        const OutputRule* owner = nullptr;
+        if (const auto* position = std::get_if<int>(&*rule.defaultWorkspace)) {
+          owner = uniqueFixedWorkspaceOwner(config(), static_cast<size_t>(*position - 1));
+        } else if (const auto* name = std::get_if<std::string>(&*rule.defaultWorkspace)) {
+          owner = uniqueFixedWorkspaceOwner(config(), *name);
+        }
+        if (owner != nullptr) {
           targetOutput = server.outputFromName(owner->name);
         }
       }
@@ -123,7 +129,13 @@ namespace umbriel {
       }
       Workspace* target = group->active();
       if (rule.defaultWorkspace) {
-        if (Workspace* ruleTarget = group->workspaceAtClamped(static_cast<size_t>(*rule.defaultWorkspace - 1))) {
+        Workspace* ruleTarget = nullptr;
+        if (const auto* position = std::get_if<int>(&*rule.defaultWorkspace)) {
+          ruleTarget = group->workspaceAtClamped(static_cast<size_t>(*position - 1));
+        } else if (const auto* name = std::get_if<std::string>(&*rule.defaultWorkspace)) {
+          ruleTarget = group->workspaceNamed(*name);
+        }
+        if (ruleTarget != nullptr) {
           target = ruleTarget;
         }
       }

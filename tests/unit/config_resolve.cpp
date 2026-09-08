@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 using umbriel::Config;
@@ -375,17 +376,17 @@ UMBRIEL_TEST(workspaceRulesCannotOverrideTheResolvedStripDirection) {
   CHECK(resolved.scrolling.direction == umbriel::ScrollingDirection::Vertical);
 }
 
-UMBRIEL_TEST(fixedWorkspacePositionSelectsItsUniqueOutput) {
+UMBRIEL_TEST(fixedWorkspaceTargetSelectsItsUniqueOutput) {
   Config config;
 
   OutputRule primary;
   primary.name = "DP-1";
-  primary.workspaces = std::vector<std::string>{"1", "2", "3", "4"};
+  primary.workspaces = std::vector<std::string>{"1", "2", "3", "COMMON"};
   config.outputs.push_back(std::move(primary));
 
   OutputRule chat;
   chat.name = "HDMI-A-1";
-  chat.workspaces = std::vector<std::string>{"CHAT"};
+  chat.workspaces = std::vector<std::string>{"CHAT", "COMMON"};
   config.outputs.push_back(std::move(chat));
 
   OutputRule dynamic;
@@ -395,6 +396,10 @@ UMBRIEL_TEST(fixedWorkspacePositionSelectsItsUniqueOutput) {
   CHECK_EQ(umbriel::uniqueFixedWorkspaceOwner(config, 3), config.outputs.data());
   CHECK(umbriel::uniqueFixedWorkspaceOwner(config, 0) == nullptr);
   CHECK(umbriel::uniqueFixedWorkspaceOwner(config, 4) == nullptr);
+  CHECK_EQ(umbriel::uniqueFixedWorkspaceOwner(config, "1"), config.outputs.data());
+  CHECK_EQ(umbriel::uniqueFixedWorkspaceOwner(config, "CHAT"), config.outputs.data() + 1);
+  CHECK(umbriel::uniqueFixedWorkspaceOwner(config, "COMMON") == nullptr);
+  CHECK(umbriel::uniqueFixedWorkspaceOwner(config, "missing") == nullptr);
 }
 
 UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
@@ -469,6 +474,33 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
   CHECK(focused.opacity && *focused.opacity == 0.8);
   CHECK(!focused.defaultFloating);
   CHECK(umbriel::anyWindowRuleHasTitlePattern(config));
+}
+
+UMBRIEL_TEST(windowRulesMergeWorkspaceTargetsAcrossSelectorKinds) {
+  Config config;
+
+  WindowRule app;
+  app.appIdPattern = "^foot$";
+  app.appIdRegex = std::regex(app.appIdPattern);
+  app.defaultWorkspace = umbriel::WorkspaceTarget{2};
+  config.windowRules.push_back(std::move(app));
+
+  WindowRule title;
+  title.titlePattern = "chat";
+  title.titleRegex = std::regex(title.titlePattern);
+  title.defaultWorkspace = umbriel::WorkspaceTarget{std::string{"2"}};
+  config.windowRules.push_back(std::move(title));
+
+  const auto appOnly = umbriel::resolveWindowRules(config, "foot", "editor", std::nullopt, ContentType::None, false, 0);
+  const auto* position = appOnly.defaultWorkspace ? std::get_if<int>(&*appOnly.defaultWorkspace) : nullptr;
+  CHECK(position != nullptr);
+  CHECK(position != nullptr && *position == 2);
+
+  const auto merged =
+      umbriel::resolveWindowRules(config, "foot", "project chat", std::nullopt, ContentType::None, false, 0);
+  const auto* name = merged.defaultWorkspace ? std::get_if<std::string>(&*merged.defaultWorkspace) : nullptr;
+  CHECK(name != nullptr);
+  CHECK(name != nullptr && *name == "2");
 }
 
 UMBRIEL_TEST(windowRulesMergeFractionSizingLastWriterWins) {

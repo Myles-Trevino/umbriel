@@ -2059,11 +2059,22 @@ namespace umbriel {
         }
 
         if (const toml::node* n = keys.take("default_workspace")) {
-          const auto value = n->value<std::int64_t>();
-          if (!value || *value < 1 || *value > static_cast<std::int64_t>(kMaxWorkspaces)) {
-            warnAt(n->source(), "ignoring window_rule.default_workspace (expected integer 1-{})", kMaxWorkspaces);
+          if (const auto value = n->value<std::int64_t>()) {
+            if (*value < 1 || *value > static_cast<std::int64_t>(kMaxWorkspaces)) {
+              warnAt(
+                  n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",
+                  kMaxWorkspaces
+              );
+            } else {
+              rule.defaultWorkspace = WorkspaceTarget{static_cast<int>(*value)};
+            }
+          } else if (const auto value = n->value<std::string>(); value && !value->empty()) {
+            rule.defaultWorkspace = WorkspaceTarget{*value};
           } else {
-            rule.defaultWorkspace = static_cast<int>(*value);
+            warnAt(
+                n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",
+                kMaxWorkspaces
+            );
           }
         }
 

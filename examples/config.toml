@@ -526,12 +526,26 @@ default_position = { x = 0, y = 0, anchor = "bottom_right" }
 default_focused = false
 default_pinned = true
 
-# Optional placement recipe. Output names follow the same rules as [output.*].
+# Optional positional placement recipe. Output names follow the same rules as
+# [output.*]. `default_output` scopes the workspace lookup to that output, and
+# integer workspace selectors are 1-based positions.
+
+# [[window_rule]]
+# match.app_id = "^org[.]example[.]Editor$"
+# default_output = "DP-1"
+# default_workspace = 2
+# default_focused = false
+
+# A string workspace selector is an exact, case-sensitive name, so `"2"`
+# selects the workspace named `"2"` instead of position 2. The workspace must
+# already exist, usually in a static inventory such as
+# `workspaces = ["WEB", "CHAT"]`. This rule does not create CHAT or add a named
+# workspace to a dynamic output.
 
 # [[window_rule]]
 # match.app_id = "^org[.]example[.]Chat$"
 # default_output = "DP-1"
-# default_workspace = 2
+# default_workspace = "CHAT"
 # default_focused = false
 
 # Open an application maximized while keeping its parented dialogs natural-sized.
