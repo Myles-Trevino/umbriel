@@ -45,6 +45,8 @@ namespace umbriel {
     constexpr double kDragThreshold = 10.0;
     // How much of the focused border color mixes into the unfocused one for a landing target that is not the live one.
     constexpr float kLandingTargetBlend = 0.4F;
+    // Inset of a shortcut badge from the card edge it hugs.
+    constexpr int kBadgeMargin = 6;
 
     std::array<float, 4> mixColor(const std::array<float, 4>& from, const std::array<float, 4>& to, float amount) {
       std::array<float, 4> out{};
@@ -156,6 +158,10 @@ namespace umbriel {
     }
     const WorkspaceGroup* group = state.output->workspaceGroup();
     out.outputBox = outputBox;
+    out.usableBox = state.output->usableArea();
+    if (out.usableBox.width <= 0 || out.usableBox.height <= 0) {
+      out.usableBox = outputBox;
+    }
     out.zoom = zoom;
     out.axis = group != nullptr ? group->workspaceAxis() : WorkspaceAxis::Vertical;
     out.previewW = std::max(1, static_cast<int>(std::lround(outputBox.width * zoom)));
@@ -244,11 +250,29 @@ namespace umbriel {
     if (card.badge != nullptr) {
       const auto badgeAlpha = static_cast<float>(m_progress);
       const bool matched = card.shortcutMatched != SIZE_MAX;
-      const bool fits = contentW >= card.badgeWidth + 12 && contentH >= card.badgeHeight + 12;
+      const bool fits =
+          contentW >= card.badgeWidth + 2 * kBadgeMargin && contentH >= card.badgeHeight + 2 * kBadgeMargin;
       const bool badgeOn =
           !card.shortcut.empty() && matched && fits && !m_closing && &card != m_dragCard && badgeAlpha > 0.01F;
       wlr_scene_node_set_enabled(&card.badge->node, badgeOn);
       if (badgeOn) {
+        // The badge hugs the card's top-left corner, and only that corner can
+        // go missing: the output tree clips cards at the output edge, and the
+        // top and overlay layers draw their exclusive zones over the overview.
+        // So on each axis it slides just enough to clear the start of the usable
+        // area, never past the card's own opposite inset. A card whose corner
+        // has scrolled out of view keeps its badge at that inset, which is the
+        // bottom-left corner for a preview above the current workspace.
+        // `fits` is what keeps the card-local bounds ordered.
+        const auto inset = [](int origin, int extent, int badgeExtent, int clipStart) {
+          return std::clamp(
+              std::max(clipStart, origin) + kBadgeMargin - origin, kBadgeMargin, extent - badgeExtent - kBadgeMargin
+          );
+        };
+        wlr_scene_node_set_position(
+            &card.badge->node, inset(card.box.x, contentW, card.badgeWidth, metrics.usableBox.x),
+            inset(card.box.y, contentH, card.badgeHeight, metrics.usableBox.y)
+        );
         wlr_scene_buffer_set_opacity(card.badgeText, badgeAlpha);
         const std::array<float, 4> background = tint(card.badgeBackground, badgeAlpha);
         wlr_scene_rect_set_color(card.badgeRect, background.data());
@@ -1073,7 +1097,6 @@ namespace umbriel {
       wlr_buffer_drop(rendered.buffer);
       return;
     }
-    wlr_scene_node_set_position(&card.badge->node, 6, 6);
     // Keycap proportions: the label's line box sets the height, and the badge is
     // never narrower than it is tall, so a single character reads as a square.
     constexpr int kBadgeSidePad = 8;

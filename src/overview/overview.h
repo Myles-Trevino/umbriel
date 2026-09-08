@@ -201,6 +201,10 @@ namespace umbriel {
     // step along the output's workspace axis; the other axis stays centered.
     struct PreviewMetrics {
       wlr_box outputBox{};
+      // Output box minus the layer-shell exclusive zones. Panels of the top and
+      // overlay layers draw over the overview, so on-output is not the same as
+      // on-screen for anything the overview wants readable.
+      wlr_box usableBox{};
       double zoom = 1.0;
       WorkspaceAxis axis = WorkspaceAxis::Vertical;
       int previewW = 0;
