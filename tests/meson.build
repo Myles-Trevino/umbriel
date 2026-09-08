@@ -279,6 +279,13 @@ security_context_client = executable(
   dependencies: [wayland_client_dep],
 )
 
+# Harness helper that logs the seat input events a window receives, for input state checks.
+seat_log_client = executable(
+  'seat-log-client',
+  ['harness/clients/seat_log_client.cpp', xdg_shell_client_h, xdg_shell_client_c],
+  dependencies: [wayland_client_dep],
+)
+
 harness_client_targets = [
   pointer_client,
   keyboard_keymap_client,
@@ -296,4 +303,5 @@ harness_client_targets = [
   idle_inhibit_client,
   lock_client,
   security_context_client,
+  seat_log_client,
 ]

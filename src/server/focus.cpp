@@ -324,7 +324,7 @@ namespace umbriel {
   void FocusManager::clearNormalFocus() {
     // A lock takes the whole seat, so the pointer goes too. Everything else is
     // the same teardown as clearKeyboardFocus.
-    wlr_seat_pointer_clear_focus(m_server.seat()->wlr());
+    m_server.cursor()->clearPointerFocusOverridingGrab();
     clearKeyboardFocus();
   }
 
