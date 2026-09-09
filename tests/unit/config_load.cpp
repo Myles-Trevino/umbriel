@@ -1320,6 +1320,55 @@ UMBRIEL_TEST(windowRuleWorkspaceTargetPreservesIntegerAndStringSelectors) {
   CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
 }
 
+UMBRIEL_TEST(windowRuleDefaultScratchpadTargetsConfiguredInventory) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"terminal\"\n[[scratchpad]]\nname = \"terminal\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].defaultScratchpad == "terminal");
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_scratchpad"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"default\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].defaultScratchpad == "default");
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"terminal\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(store.config().windowRules[0].opacity == 0.5);
+  CHECK(containsDiagnostic(store, "unknown scratchpad 'terminal'"));
+
+  file.write("[[scratchpad]]\nname = \"terminal\"\n[[window_rule]]\ndefault_scratchpad = \"default\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(containsDiagnostic(store, "unknown scratchpad 'default'"));
+
+  file.write("[[scratchpad]]\nname = \"terminal\"\n[[window_rule]]\ndefault_scratchpad = \"missing\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(store.config().windowRules[0].opacity == 0.5);
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_scratchpad (unknown scratchpad 'missing')"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_scratchpad"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = 1\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_scratchpad (expected non-empty string)"));
+}
+
 UMBRIEL_TEST(securityContextRulesLoadAndKeepTheManagerBlocked) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();

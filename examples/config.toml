@@ -305,6 +305,10 @@ follows_mouse = false                           # Focus the pointer target after
 # [[scratchpad]]
 # name = "music"
 
+# A `default_scratchpad` window rule can store new matching windows
+# automatically. Use "default" while the definitions above remain commented,
+# or an exact configured name after enabling named mode.
+
 # ─────────────────────────────── Keybinds ───────────────────────────────────
 # Bind chords to compositor actions. A configuration file replaces the built-in
 # keybind set, so define every chord that should remain available.
@@ -549,6 +553,17 @@ default_pinned = true
 # default_output = "DP-1"
 # default_workspace = "CHAT"
 # default_focused = false
+
+# Store a dedicated terminal in the named `terminal` scratchpad. Enable its
+# [[scratchpad]] definition above, then launch
+# `foot --app-id scratchpad-terminal`. The output and workspace remain
+# its restore destination.
+
+# [[window_rule]]
+# match.app_id = "^scratchpad-terminal$"
+# default_scratchpad = "terminal"
+# default_output = "DP-1"
+# default_workspace = 2
 
 # Open an application maximized while keeping its parented dialogs natural-sized.
 

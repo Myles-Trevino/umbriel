@@ -2110,10 +2110,15 @@ namespace umbriel {
     m_presentation.setSize(mapGeo.width, mapGeo.height);
     resetSurfaceClip();
 
-    // Resolve window rules and apply one-shot effects. Copied, not referenced: the calls below can reach
-    // setBorderFocused and re-resolve into the same cache slot, which would change this value underneath the code still
-    // using it.
-    const ResolvedWindowRule rule = resolvedRules();
+    // Resolve opening rules before startup focus and placement can change
+    // state-based matches. Dynamic rules use the live state later.
+    m_initialRuleState = ruleState();
+    m_initialRuleState.focused = false;
+    m_initialRuleState.alone = false;
+    const ResolvedWindowRule rule = resolveWindowRules(
+        config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_xdgTag, m_contentType,
+        m_initialRuleState, m_server->uptimeMs()
+    );
     m_initialRules = rule;
     m_initialRulesXdgTag = m_xdgTag;
     m_initialRulesContentType = m_contentType;
@@ -2122,6 +2127,7 @@ namespace umbriel {
     if (rule.defaultFloating) {
       m_tiled = !*rule.defaultFloating;
     }
+    const bool restoreTiled = m_tiled;
     // Unsettled when any rule uses a title pattern: the first handleSetTitle after map re-applies disruptive effects
     // with the real title, even if the client mapped with a placeholder.
     m_initialRulesSettled = !anyWindowRuleHasTitlePattern(config());
@@ -2133,10 +2139,30 @@ namespace umbriel {
     } else if (!attachToAvailableWorkspace(rule)) {
       setOnActiveWorkspace(true);
     }
-    if (rule.defaultPinned && *rule.defaultPinned) {
+    bool assignedScratchpad = false;
+    if (rule.defaultScratchpad) {
+      if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
+          scratchpad != nullptr && scratchpad->hasScratchpad(*rule.defaultScratchpad)) {
+        Workspace* restoreWorkspace = m_workspace;
+        Output* restoreOutput = restoreWorkspace != nullptr && restoreWorkspace->group() != nullptr
+            ? restoreWorkspace->group()->output()
+            : currentOutput();
+        assignedScratchpad = scratchpad->assignByWindowRule(
+            this, *rule.defaultScratchpad, restoreOutput,
+            ScratchpadManager::WindowRuleAdmission{
+                .restoreOutput = restoreOutput,
+                .restoreWorkspace = restoreWorkspace,
+                .focusOrigin = restoreOutput,
+                .restoreTiled = restoreTiled,
+                .updateRestoreLocation = true,
+            }
+        );
+      }
+    }
+    if (!assignedScratchpad && rule.defaultPinned && *rule.defaultPinned) {
       setPinned(true, false);
     }
-    if (!m_tiled) {
+    if (!assignedScratchpad && !m_tiled) {
       // The initial commit already applied default_size. Re-requesting it here
       // races the client's first content-driven resize.
       placeInUsableArea(rule.defaultPosition);
@@ -2161,7 +2187,8 @@ namespace umbriel {
         && rule.focusOnActivate.value_or(*deferredActivation || config().general.focusOnActivate);
     const bool focusOnMap =
         activateOnMap || (!deferredActivation.value_or(false) && rule.defaultFocused.value_or(true));
-    if (!m_server->sessionLocked() && focusOnMap) {
+    const bool hiddenScratchpad = assignedScratchpad && !m_onActiveWorkspace;
+    if (!m_server->sessionLocked() && focusOnMap && !hiddenScratchpad) {
       m_server->focusView(this, activateOnMap ? FocusReason::XdgActivation : FocusReason::Startup);
     } else if (deferredActivation.has_value()) {
       setUrgent(true);
@@ -2172,18 +2199,18 @@ namespace umbriel {
     // layout's initial size.
     const bool ruleMaximized = m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize;
     const bool restoredMaximized = config().general.honorRestoredMaximize && m_toplevel->requested.maximized;
-    if (ruleMaximized || restoredMaximized) {
+    if (!assignedScratchpad && (ruleMaximized || restoredMaximized)) {
       setMaximized(true);
     }
 
     // After default_maximize so maximize-to-edges wins the column, but before
     // fullscreen: setFullscreen leaves and restores the maximize-to-edges state.
-    if (rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges) {
+    if (!assignedScratchpad && rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges) {
       setMaximizedToEdges(true);
     }
 
     // Fullscreen after workspace + focus so the view lands in the right place.
-    if (rule.defaultFullscreen && *rule.defaultFullscreen) {
+    if (!assignedScratchpad && rule.defaultFullscreen && *rule.defaultFullscreen) {
       setFullscreen(true);
     }
 
@@ -2328,6 +2355,7 @@ namespace umbriel {
     }
     m_initialRulesSettled = false;
     m_initialRules = {};
+    m_initialRuleState = {};
     m_initialRulesXdgTag.reset();
     m_initialRulesContentType = ContentType::None;
     m_namedScrollingColumnName.reset();
@@ -2418,14 +2446,32 @@ namespace umbriel {
     }
     if (m_toplevel->base->initial_commit || reconfigureOpeningState) {
       // Resolve window rules early to influence initial tiled/float decision and size.
-      const ResolvedWindowRule rule = resolvedRules();
-      const bool wantTiled = rule.defaultFloating ? !*rule.defaultFloating : looksTiled(m_toplevel);
-      const bool wantFullscreen =
-          m_toplevel->requested.fullscreen || (rule.defaultFullscreen && *rule.defaultFullscreen);
-      const bool wantMaximizeToEdges = rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges;
-      const bool wantMaximized = (m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize)
-          || wantMaximizeToEdges
-          || (config().general.honorRestoredMaximize && m_toplevel->requested.maximized);
+      WindowRuleState openingState = ruleState();
+      openingState.focused = false;
+      openingState.floating = !looksTiled(m_toplevel);
+      openingState.alone = false;
+      const ResolvedWindowRule rule = resolveWindowRules(
+          config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_xdgTag, m_contentType, openingState,
+          m_server->uptimeMs()
+      );
+      ScratchpadManager* scratchpadManager = m_server->scratchpadManager();
+      const bool openingInScratchpad = rule.defaultScratchpad
+          && scratchpadManager != nullptr
+          && scratchpadManager->hasScratchpad(*rule.defaultScratchpad);
+      const auto& scratchpadConfig = config().animation.scratchpad;
+      const bool wantTiled =
+          !openingInScratchpad && (rule.defaultFloating ? !*rule.defaultFloating : looksTiled(m_toplevel));
+      const bool wantFullscreen = openingInScratchpad
+          ? scratchpadConfig.fullscreen
+          : m_toplevel->requested.fullscreen || (rule.defaultFullscreen && *rule.defaultFullscreen);
+      const bool wantMaximizeToEdges = openingInScratchpad
+          ? !wantFullscreen && scratchpadConfig.maximize
+          : rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges;
+      const bool wantMaximized = openingInScratchpad
+          ? wantMaximizeToEdges
+          : (m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize)
+              || wantMaximizeToEdges
+              || (config().general.honorRestoredMaximize && m_toplevel->requested.maximized);
 
       // Resolve the workspace this view will attach to, so the output and layout that will actually arrange it are the
       // ones that size the first configure.
@@ -2438,6 +2484,9 @@ namespace umbriel {
         target = windowRuleWorkspace(targetGroup, rule);
       }
       Output* targetOutput = targetGroup != nullptr ? targetGroup->output() : preferred;
+      if (openingInScratchpad) {
+        targetOutput = scratchpadManager->presentationOutput(*rule.defaultScratchpad, targetOutput);
+      }
 
       wlr_xdg_toplevel_set_tiled(
           m_toplevel, wantTiled ? WLR_EDGE_TOP | WLR_EDGE_RIGHT | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT : 0
@@ -2506,6 +2555,12 @@ namespace umbriel {
           const wlr_box usable = openingUsableArea(targetOutput);
           requestFloatingSize(usable.width, usable.height);
           wlr_xdg_toplevel_set_maximized(m_toplevel, true);
+        } else if (openingInScratchpad && scratchpadConfig.scale > 0.0 && scratchpadConfig.scale <= 1.0) {
+          const wlr_box usable = openingUsableArea(targetOutput);
+          requestFloatingSize(
+              std::max(100, static_cast<int>(std::lround(usable.width * scratchpadConfig.scale))),
+              std::max(100, static_cast<int>(std::lround(usable.height * scratchpadConfig.scale)))
+          );
         } else if (rule.defaultSize) {
           requestFloatingSize(
               clampXdgWidth((*rule.defaultSize)[0], hints), clampXdgHeight((*rule.defaultSize)[1], hints)
@@ -3235,12 +3290,17 @@ namespace umbriel {
     // Late app ID or title settlement may select opening rules, but identity
     // hints changed after map must not select new one-shot behavior. is_alone never selects opening settings: the
     // alone effects are applied and undone separately, on every change to the workspace's tiled set.
-    WindowRuleState openingState = ruleState();
-    openingState.alone = false;
     const ResolvedWindowRule rule = resolveWindowRules(
         config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_initialRulesXdgTag,
-        m_initialRulesContentType, openingState, m_server->uptimeMs()
+        m_initialRulesContentType, m_initialRuleState, m_server->uptimeMs()
     );
+    ScratchpadManager* scratchpadManager = m_server->scratchpadManager();
+    const bool wasInScratchpad = scratchpadManager != nullptr && scratchpadManager->contains(this);
+    const bool scratchpadChanged = changedInitialRule(rule.defaultScratchpad, initiallyApplied.defaultScratchpad);
+    const bool defaultFloatingChanged = changedInitialRule(rule.defaultFloating, initiallyApplied.defaultFloating);
+    const bool placementChanged = (rule.defaultOutput.has_value() || rule.defaultWorkspace.has_value())
+        && (rule.defaultOutput != initiallyApplied.defaultOutput
+            || rule.defaultWorkspace != initiallyApplied.defaultWorkspace);
 
     const bool namedScrollingColumnNameChanged = rule.defaultScrollingColumn.has_value()
         && rule.defaultScrollingColumn != initiallyApplied.defaultScrollingColumn;
@@ -3259,17 +3319,14 @@ namespace umbriel {
 
     // Identity can arrive after map. Apply a newly selected one-shot value, but
     // never replay a value already applied at map over the user's later state.
-    if (changedInitialRule(rule.defaultFloating, initiallyApplied.defaultFloating)) {
+    if (!wasInScratchpad && defaultFloatingChanged) {
       const bool wantFloat = *rule.defaultFloating;
       if (wantFloat != !m_tiled) {
         setFloating(wantFloat);
       }
     }
 
-    const bool placementChanged = (rule.defaultOutput.has_value() || rule.defaultWorkspace.has_value())
-        && (rule.defaultOutput != initiallyApplied.defaultOutput
-            || rule.defaultWorkspace != initiallyApplied.defaultWorkspace);
-    if (placementChanged && m_workspace != nullptr) {
+    if (!wasInScratchpad && placementChanged && m_workspace != nullptr) {
       const bool wasActivated = m_activated;
       WorkspaceGroup* targetGroup = windowRuleWorkspaceGroup(*m_server, rule, m_workspace->group());
       Workspace* target = windowRuleWorkspace(targetGroup, rule);
@@ -3291,7 +3348,57 @@ namespace umbriel {
       m_workspace->applyNamedScrollingColumnRule(this, rule.defaultWidth, *namedScrollingColumnChange);
     }
 
-    if (changedInitialRule(rule.defaultPinned, initiallyApplied.defaultPinned)) {
+    std::optional<std::string_view> scratchpadTarget;
+    if ((!wasInScratchpad || scratchpadChanged)
+        && rule.defaultScratchpad
+        && scratchpadManager != nullptr
+        && scratchpadManager->hasScratchpad(*rule.defaultScratchpad)) {
+      scratchpadTarget = *rule.defaultScratchpad;
+    } else if (wasInScratchpad) {
+      scratchpadTarget = scratchpadManager->nameFor(this);
+    }
+    const bool updateScratchpad =
+        scratchpadTarget && (scratchpadChanged || (wasInScratchpad && (placementChanged || defaultFloatingChanged)));
+
+    bool assignedScratchpad = false;
+    if (updateScratchpad) {
+      Output* savedOutput = wasInScratchpad ? scratchpadManager->restoreOutputFor(this) : nullptr;
+      Workspace* targetWorkspace = !wasInScratchpad ? m_workspace : nullptr;
+      Output* targetOutput = targetWorkspace != nullptr && targetWorkspace->group() != nullptr
+          ? targetWorkspace->group()->output()
+          : savedOutput;
+      if (placementChanged) {
+        WorkspaceGroup* fallbackGroup = targetOutput != nullptr ? targetOutput->workspaceGroup() : nullptr;
+        WorkspaceGroup* targetGroup = windowRuleWorkspaceGroup(*m_server, rule, fallbackGroup);
+        targetWorkspace = windowRuleWorkspace(targetGroup, rule);
+        targetOutput = targetGroup != nullptr ? targetGroup->output() : targetOutput;
+      }
+      if (targetOutput == nullptr) {
+        targetOutput = currentOutput();
+      }
+      std::optional<bool> restoreTiled;
+      if (!wasInScratchpad) {
+        restoreTiled = m_pinned ? m_restoreTiledAfterUnpin : m_tiled;
+      }
+      if (defaultFloatingChanged) {
+        restoreTiled = !*rule.defaultFloating;
+      }
+      if (targetOutput != nullptr) {
+        assignedScratchpad = scratchpadManager->assignByWindowRule(
+            this, *scratchpadTarget, targetOutput,
+            ScratchpadManager::WindowRuleAdmission{
+                .restoreOutput = targetOutput,
+                .restoreWorkspace = targetWorkspace,
+                .focusOrigin = currentOutput(),
+                .restoreTiled = restoreTiled,
+                .updateRestoreLocation = !wasInScratchpad || placementChanged,
+            }
+        );
+      }
+    }
+    const bool inScratchpad = wasInScratchpad || assignedScratchpad;
+
+    if (!inScratchpad && changedInitialRule(rule.defaultPinned, initiallyApplied.defaultPinned)) {
       setPinned(*rule.defaultPinned, false);
     }
 
@@ -3319,7 +3426,8 @@ namespace umbriel {
       }
     }
 
-    if (!m_tiled
+    if (!inScratchpad
+        && !m_tiled
         && (changedInitialRule(rule.defaultSize, initiallyApplied.defaultSize)
             || changedInitialRule(rule.defaultWidth, initiallyApplied.defaultWidth)
             || changedInitialRule(rule.defaultHeight, initiallyApplied.defaultHeight))) {
@@ -3342,23 +3450,26 @@ namespace umbriel {
       placeInUsableArea();
     }
 
-    if (changedInitialRule(rule.defaultPosition, initiallyApplied.defaultPosition) && !m_tiled) {
+    if (!inScratchpad && changedInitialRule(rule.defaultPosition, initiallyApplied.defaultPosition) && !m_tiled) {
       placeInUsableArea(rule.defaultPosition);
     }
 
-    if (changedInitialRule(rule.defaultFullscreen, initiallyApplied.defaultFullscreen)
+    if (!inScratchpad
+        && changedInitialRule(rule.defaultFullscreen, initiallyApplied.defaultFullscreen)
         && *rule.defaultFullscreen
         && !m_toplevel->scheduled.fullscreen) {
       setFullscreen(true);
     }
 
-    if (changedInitialRule(rule.defaultMaximizeToEdges, initiallyApplied.defaultMaximizeToEdges)
+    if (!inScratchpad
+        && changedInitialRule(rule.defaultMaximizeToEdges, initiallyApplied.defaultMaximizeToEdges)
         && *rule.defaultMaximizeToEdges
         && !m_maximizedToEdges) {
       setMaximizedToEdges(true);
     }
 
-    if (m_toplevel->parent == nullptr
+    if (!inScratchpad
+        && m_toplevel->parent == nullptr
         && changedInitialRule(rule.defaultMaximize, initiallyApplied.defaultMaximize)
         && *rule.defaultMaximize
         && !m_toplevel->scheduled.maximized) {

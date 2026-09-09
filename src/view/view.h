@@ -465,6 +465,7 @@ namespace umbriel {
     // One-shot effects already applied at map. Late identity resolution only
     // reapplies a field when its resolved value changes.
     ResolvedWindowRule m_initialRules;
+    WindowRuleState m_initialRuleState;
     std::optional<std::string> m_initialRulesXdgTag;
     ContentType m_initialRulesContentType = ContentType::None;
     std::optional<std::string> m_namedScrollingColumnName;
