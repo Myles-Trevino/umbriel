@@ -746,6 +746,7 @@ curve = "easeout"
 # Configure the all-workspaces overview and pointer-triggered corner actions.
 # Overview: https://docs.noctalia.dev/umbriel/workspaces-overview/
 # Hot corners: https://docs.noctalia.dev/umbriel/keybinds/#hot-corners
+# Corners pause only while the keyboard-focused window on their output is fullscreen.
 # ────────────────────────────────────────────────────────────────────────────
 
 [overview]

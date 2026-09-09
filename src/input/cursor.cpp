@@ -284,10 +284,6 @@ namespace umbriel {
     if (output == nullptr) {
       return nullptr;
     }
-    if (Output* umbrielOutput = m_server->outputFromWlr(output);
-        umbrielOutput != nullptr && umbrielOutput->hasFullscreenView()) {
-      return nullptr;
-    }
     wlr_output_layout_get_box(m_server->outputLayout(), output, &box);
 
     // A small logical area lets delayed corners remain reachable beside another output.
@@ -312,6 +308,15 @@ namespace umbriel {
     }
     const Config::HotCorner& corner = configured.corners[index];
     if (!corner.enabled || !corner.action) {
+      return nullptr;
+    }
+    const Output* umbrielOutput = m_server->outputFromWlr(output);
+    View* focused = View::fromSurface(seat->keyboard_state.focused_surface);
+    if (focused != nullptr
+        && focused->mapped()
+        && focused->onActiveWorkspace()
+        && focused->currentOutput() == umbrielOutput
+        && (focused->layoutFullscreen() || focused->toplevel()->current.fullscreen)) {
       return nullptr;
     }
     if (cornerIndex != nullptr) {

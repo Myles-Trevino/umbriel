@@ -56,9 +56,9 @@ namespace umbriel {
     [[nodiscard]] wlr_box layoutBox() const;
     [[nodiscard]] wlr_box usableArea() const;
     [[nodiscard]] WorkspaceGroup* workspaceGroup() const { return m_workspaceGroup.get(); }
-    // True from the moment a view starts entering fullscreen until its client
-    // has committed the exit. Consumers such as hot corners must not act over
-    // fullscreen content during either transition.
+    // True from the moment any view starts entering fullscreen until its client
+    // has committed the exit. Output-wide fullscreen policies such as HDR and
+    // VRR must cover both transitions.
     [[nodiscard]] bool hasFullscreenView(const View* ignored = nullptr) const;
 
     void arrangeLayers();
