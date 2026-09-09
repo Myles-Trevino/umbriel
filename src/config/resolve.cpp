@@ -254,6 +254,9 @@ namespace umbriel {
       if (rule.defaultWorkspace) {
         resolved.defaultWorkspace = rule.defaultWorkspace;
       }
+      if (rule.defaultScratchpad) {
+        resolved.defaultScratchpad = rule.defaultScratchpad;
+      }
       if (rule.defaultScrollingColumn) {
         resolved.defaultScrollingColumn = rule.defaultScrollingColumn;
       }

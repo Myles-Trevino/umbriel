@@ -263,6 +263,10 @@ Scratchpads are global and roam between outputs. Each stored window keeps its
 own restore output and workspace. Removing a scratchpad definition during a
 config reload restores its windows to those saved destinations.
 
+An opening window rule can assign a matching window automatically. Use
+`default_scratchpad = "default"` in implicit mode or an exact configured name
+in named mode.
+
 See [Scratchpads](scratchpad.md) for action behavior, focus, dragging, and
 multi-output details.
 

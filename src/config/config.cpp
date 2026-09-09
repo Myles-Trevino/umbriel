@@ -697,6 +697,16 @@ namespace umbriel {
       return std::format("unknown scratchpad '{}'", scratchpad->name);
     }
 
+    std::optional<std::string> scratchpadTargetError(const Config& loaded, std::string_view name) {
+      if (loaded.scratchpads.empty()) {
+        return name == "default" ? std::nullopt : std::optional{std::format("unknown scratchpad '{}'", name)};
+      }
+      const bool configured = std::ranges::any_of(loaded.scratchpads, [name](const ScratchpadConfig& candidate) {
+        return candidate.name == name;
+      });
+      return configured ? std::nullopt : std::optional{std::format("unknown scratchpad '{}'", name)};
+    }
+
     WorkspaceConfig parseWorkspaceEntry(const toml::table& section, std::string_view context) {
       WorkspaceConfig ws;
       Section keys(section, std::string(context), configStore().mutableDiagnostics());
@@ -2181,6 +2191,17 @@ namespace umbriel {
                 n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",
                 kMaxWorkspaces
             );
+          }
+        }
+
+        if (const toml::node* n = keys.take("default_scratchpad")) {
+          const auto value = n->value<std::string>();
+          if (!value || value->empty()) {
+            warnAt(n->source(), "ignoring window_rule.default_scratchpad (expected non-empty string)");
+          } else if (const auto invalid = scratchpadTargetError(loaded, *value)) {
+            warnAt(n->source(), "ignoring window_rule.default_scratchpad ({})", *invalid);
+          } else {
+            rule.defaultScratchpad = *value;
           }
         }
 

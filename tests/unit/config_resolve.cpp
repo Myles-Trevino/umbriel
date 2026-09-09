@@ -646,6 +646,28 @@ UMBRIEL_TEST(windowRulesMergeWorkspaceTargetsAcrossSelectorKinds) {
   CHECK(name != nullptr && name->value == "2");
 }
 
+UMBRIEL_TEST(windowRulesMergeDefaultScratchpadLastWriterWins) {
+  Config config;
+
+  WindowRule app;
+  app.appIdPattern = "^foot$";
+  app.appIdRegex = std::regex(app.appIdPattern);
+  app.defaultScratchpad = "terminal";
+  config.windowRules.push_back(std::move(app));
+
+  WindowRule title;
+  title.titlePattern = "music";
+  title.titleRegex = std::regex(title.titlePattern);
+  title.defaultScratchpad = "media";
+  config.windowRules.push_back(std::move(title));
+
+  const auto appOnly = umbriel::resolveWindowRules(config, "foot", "shell", std::nullopt, ContentType::None, {}, 0);
+  CHECK(appOnly.defaultScratchpad == "terminal");
+
+  const auto merged = umbriel::resolveWindowRules(config, "foot", "music", std::nullopt, ContentType::None, {}, 0);
+  CHECK(merged.defaultScratchpad == "media");
+}
+
 UMBRIEL_TEST(windowRulesMergeFractionSizingLastWriterWins) {
   Config config;
 
