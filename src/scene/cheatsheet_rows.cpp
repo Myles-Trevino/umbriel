@@ -144,11 +144,24 @@ namespace {
     return {std::move(base), std::string(rest)};
   }
 
+  std::string workspaceReferenceLabel(const umbriel::WorkspaceReference& reference) {
+    if (const auto* index = std::get_if<umbriel::WorkspaceIndex>(&reference)) {
+      return std::to_string(index->value);
+    }
+    const auto* name = std::get_if<umbriel::WorkspaceName>(&reference);
+    if (name == nullptr) {
+      return {};
+    }
+    const bool needsQuotes = !name->value.empty()
+        && std::ranges::all_of(name->value, [](char value) { return value >= '0' && value <= '9'; });
+    return needsQuotes ? "\"" + name->value + "\"" : name->value;
+  }
+
   // Empty unless the bind targets a workspace. Used to collapse the runs of
-  // per-digit workspace binds into a single row.
+  // per-digit positional workspace binds into a single row.
   std::string workspaceSelectorName(const umbriel::Keybind& bind) {
     const auto* workspace = umbriel::payloadIf<umbriel::WorkspaceArg>(bind);
-    return workspace != nullptr ? workspace->name : std::string{};
+    return workspace != nullptr ? workspaceReferenceLabel(workspace->reference) : std::string{};
   }
 
   // Driven by the spec's argument kind and the bind's payload variant, so the
@@ -201,7 +214,7 @@ namespace {
         return name;
       case umbriel::ActionArgKind::Workspace:
         if (const auto* workspace = umbriel::payloadIf<umbriel::WorkspaceArg>(bind)) {
-          std::string label = name + ": " + workspace->name;
+          std::string label = name + ": " + workspaceReferenceLabel(workspace->reference);
           if (!workspace->output.empty()) {
             label += "/" + workspace->output;
           }

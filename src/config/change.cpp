@@ -110,6 +110,30 @@ namespace umbriel {
       return lhs.workspaces == rhs.workspaces && lhs.minWorkspaces == rhs.minWorkspaces;
     }
 
+    bool sameDynamicWorkspaceDeclarations(const Config& before, const Config& after) {
+      size_t beforeIndex = 0;
+      size_t afterIndex = 0;
+      while (true) {
+        while (beforeIndex < before.workspaceRules.size() && before.workspaceRules[beforeIndex].index) {
+          ++beforeIndex;
+        }
+        while (afterIndex < after.workspaceRules.size() && after.workspaceRules[afterIndex].index) {
+          ++afterIndex;
+        }
+        const bool beforeEnd = beforeIndex == before.workspaceRules.size();
+        const bool afterEnd = afterIndex == after.workspaceRules.size();
+        if (beforeEnd || afterEnd) {
+          return beforeEnd && afterEnd;
+        }
+
+        const WorkspaceConfig& lhs = before.workspaceRules[beforeIndex++];
+        const WorkspaceConfig& rhs = after.workspaceRules[afterIndex++];
+        if (lhs.name != rhs.name || !outputNamesEqual(lhs.output, rhs.output)) {
+          return false;
+        }
+      }
+    }
+
   } // namespace
 
   ConfigEffects ConfigEffects::between(const Config& before, const Config& after) {
@@ -125,7 +149,8 @@ namespace umbriel {
         outputNamesChanged || outputProjectionChanged(before, after, sameOutputDirectScanoutPolicy);
     const bool workspaceInventory = outputNamesChanged
         || outputProjectionChanged(before, after, sameWorkspaceInventory)
-        || before.workspaces.emptyAbove != after.workspaces.emptyAbove;
+        || before.workspaces.emptyAbove != after.workspaces.emptyAbove
+        || !sameDynamicWorkspaceDeclarations(before, after);
     const bool outputLayout = outputNamesChanged || outputProjectionChanged(before, after, sameOutputLayout);
     const bool sceneBlur =
         before.appearance.blur != after.appearance.blur || before.optimizedBlurNeeded() != after.optimizedBlurNeeded();

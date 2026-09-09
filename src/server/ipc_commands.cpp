@@ -396,6 +396,7 @@ namespace umbriel {
         workspaces.push_back({
             {"id", workspace->id()},
             {"name", workspace->name()},
+            {"named", workspace->named()},
             {"index", workspace->index() + 1},
             {"output", output->wlr()->name},
             {"active", workspace->active()},

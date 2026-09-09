@@ -110,10 +110,28 @@ namespace umbriel {
         targetOutput = server.outputFromName(*rule.defaultOutput);
       } else if (rule.defaultWorkspace) {
         const OutputRule* owner = nullptr;
-        if (const auto* position = std::get_if<int>(&*rule.defaultWorkspace)) {
-          owner = uniqueFixedWorkspaceOwner(config(), static_cast<size_t>(*position - 1));
-        } else if (const auto* name = std::get_if<std::string>(&*rule.defaultWorkspace)) {
-          owner = uniqueFixedWorkspaceOwner(config(), *name);
+        if (const auto* position = std::get_if<WorkspaceIndex>(&*rule.defaultWorkspace)) {
+          owner = uniqueFixedWorkspaceOwner(config(), position->value - 1);
+        } else if (const auto* name = std::get_if<WorkspaceName>(&*rule.defaultWorkspace)) {
+          WorkspaceGroup* match = nullptr;
+          bool ambiguous = false;
+          for (const auto& output : server.outputs()) {
+            WorkspaceGroup* group = output->workspaceGroup();
+            if (group == nullptr || group->workspaceNamed(name->value) == nullptr) {
+              continue;
+            }
+            if (match != nullptr) {
+              ambiguous = true;
+            } else {
+              match = group;
+            }
+          }
+          if (!ambiguous && match != nullptr) {
+            return match;
+          }
+          if (ambiguous && fallback != nullptr && fallback->workspaceNamed(name->value) != nullptr) {
+            return fallback;
+          }
         }
         if (owner != nullptr) {
           targetOutput = server.outputFromName(owner->name);
@@ -130,10 +148,10 @@ namespace umbriel {
       Workspace* target = group->active();
       if (rule.defaultWorkspace) {
         Workspace* ruleTarget = nullptr;
-        if (const auto* position = std::get_if<int>(&*rule.defaultWorkspace)) {
-          ruleTarget = group->workspaceAtClamped(static_cast<size_t>(*position - 1));
-        } else if (const auto* name = std::get_if<std::string>(&*rule.defaultWorkspace)) {
-          ruleTarget = group->workspaceNamed(*name);
+        if (const auto* position = std::get_if<WorkspaceIndex>(&*rule.defaultWorkspace)) {
+          ruleTarget = group->workspaceAtClamped(position->value - 1);
+        } else if (const auto* name = std::get_if<WorkspaceName>(&*rule.defaultWorkspace)) {
+          ruleTarget = group->workspaceNamed(name->value);
         }
         if (ruleTarget != nullptr) {
           target = ruleTarget;

@@ -175,11 +175,15 @@ namespace umbriel {
         .returnOutput = {},
         .displacedPosition = std::nullopt,
         .returnWorkspace = {},
+        .returnWorkspaceIndex = 0,
+        .returnWorkspaceNamed = false,
         .returnTiled = view->tiled(),
     };
     Output* sourceOutput = nullptr;
     if (Workspace* previous = view->workspace()) {
       entry.returnWorkspace = previous->name();
+      entry.returnWorkspaceIndex = previous->index();
+      entry.returnWorkspaceNamed = previous->named();
       if (previous->group() != nullptr && previous->group()->output() != nullptr) {
         sourceOutput = previous->group()->output();
         entry.returnOutput = sourceOutput->wlr()->name;
@@ -852,11 +856,19 @@ namespace umbriel {
     if (restoreOutput == nullptr) {
       restoreOutput = scratchpadOutput;
     }
-    Workspace* workspace = restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr
-        ? restoreOutput->workspaceGroup()->workspaceNamed(entry.returnWorkspace)
-        : nullptr;
-    if (workspace == nullptr && restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr) {
-      workspace = restoreOutput->workspaceGroup()->active();
+    Workspace* workspace = nullptr;
+    if (restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr) {
+      WorkspaceGroup* group = restoreOutput->workspaceGroup();
+      if (!entry.returnWorkspace.empty()) {
+        workspace = entry.returnWorkspaceNamed ? group->workspaceNamed(entry.returnWorkspace)
+                                               : group->workspaceAtClamped(entry.returnWorkspaceIndex);
+        if (!entry.returnWorkspaceNamed && group->dynamic() && workspace != nullptr && workspace->named()) {
+          workspace = group->insertDynamicWorkspace(entry.returnWorkspaceIndex);
+        }
+      }
+      if (workspace == nullptr) {
+        workspace = group->active();
+      }
     }
     view->moveToWorkspace(workspace, false);
     if (entry.returnTiled) {

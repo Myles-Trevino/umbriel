@@ -91,7 +91,7 @@ honor_restored_maximize = false                 # Honor restored maximized state
 # direct_scanout = true                         # False forces composition on this output
 # hdr = "auto"                                  # off, on, auto, or fullscreen
 # sdr_white = 203                               # SDR reference white in cd/m2 during HDR
-# workspaces = 5                                # Omit for dynamic workspaces
+# workspaces = 5                                # Anonymous fixed positions; omit for dynamic
 # workspace_axis = "horizontal"                 # vertical or horizontal workspace arrangement
 
 # Replace the count with ["WEB", "CHAT", "MEDIA"] for named static workspaces,
@@ -117,10 +117,11 @@ honor_restored_maximize = false                 # Honor restored maximized state
 back_and_forth = false                          # Re-select active workspace to switch back
 empty_above = false                             # Keep one empty workspace above active range
 
-# Workspace rules customize layout without creating workspaces. Select exactly
-# one `index` or `name`; `output` is optional. This recipe works with dynamic
-# inventories and static inventories that contain workspace 2. Uncomment the
-# complete block.
+# Workspace entries customize layout. An `index` follows the current position
+# without creating a workspace. A `name` also materializes a persistent named
+# member on matching dynamic outputs. On a static output, the rule applies only
+# when that inventory already has the selected member. Select exactly one, and
+# optionally scope by `output`.
 # Documentation: https://docs.noctalia.dev/umbriel/workspaces/#workspace-rules
 
 # [[workspace]]
@@ -132,12 +133,12 @@ empty_above = false                             # Keep one empty workspace above
 # layout.scrolling.center_underfull_strip = false
 # layout.dwindle.preserve_split = true
 
-# A name selector must exist in a static output inventory, for example
-# `workspaces = ["WEB", "CHAT"]` in the matching output block.
+# Without `output`, every dynamic output gets its own case-sensitive CHAT
+# workspace. Add `output = "DP-1"` to materialize it only there. A numeric
+# string such as name = "2" remains distinct from index = 2.
 
 # [[workspace]]
 # name = "CHAT"
-# output = "DP-1"
 # layout.mode = "master"
 
 # ─────────────────────────────── Colors ─────────────────────────────────────
@@ -354,7 +355,7 @@ follows_mouse = false                           # Focus the pointer target after
 "Mod+WheelUp" = "window-focus-left"
 "Mod+WheelDown" = "window-focus-right"
 
-# Workspaces
+# Workspaces. Bare digits are positions on the output under the pointer.
 "Mod+1" = "workspace-switch:1"
 "Mod+2" = "workspace-switch:2"
 "Mod+3" = "workspace-switch:3"
@@ -373,6 +374,8 @@ follows_mouse = false                           # Focus the pointer target after
 "Mod+Shift+7" = "window-move-to-workspace:7"
 "Mod+Shift+8" = "window-move-to-workspace:8"
 "Mod+Shift+9" = "window-move-to-workspace:9"
+# Quote an all-digit name to distinguish it from a position.
+# "Mod+Ctrl+2" = 'workspace-switch:"2"/DP-2'
 
 # Scratchpads
 # These bare actions use the implicit `default` scratchpad because no named
@@ -537,10 +540,9 @@ default_pinned = true
 # default_focused = false
 
 # A string workspace selector is an exact, case-sensitive name, so `"2"`
-# selects the workspace named `"2"` instead of position 2. The workspace must
-# already exist, usually in a static inventory such as
-# `workspaces = ["WEB", "CHAT"]`. This rule does not create CHAT or add a named
-# workspace to a dynamic output.
+# selects the workspace named `"2"` instead of position 2. The workspace can
+# come from a static name list or a name-based [[workspace]] entry on a dynamic
+# output. The window rule itself never creates a workspace.
 
 # [[window_rule]]
 # match.app_id = "^org[.]example[.]Chat$"

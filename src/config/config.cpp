@@ -587,15 +587,6 @@ namespace umbriel {
       );
     }
 
-    std::vector<std::string> numericWorkspaceNames(size_t count) {
-      std::vector<std::string> names;
-      names.reserve(count);
-      for (size_t i = 0; i < count; ++i) {
-        names.push_back(std::to_string(i + 1));
-      }
-      return names;
-    }
-
     void readScratchpads(Section& root, Config& loaded) {
       const toml::node* node = root.take("scratchpad");
       if (node == nullptr) {
@@ -761,7 +752,7 @@ namespace umbriel {
       }
 
       const auto sameSelector = [](const WorkspaceConfig& left, const WorkspaceConfig& right) {
-        if (left.output != right.output || left.index.has_value() != right.index.has_value()) {
+        if (!outputNamesEqual(left.output, right.output) || left.index.has_value() != right.index.has_value()) {
           return false;
         }
         return left.index ? left.index == right.index : left.name == right.name;
@@ -790,6 +781,60 @@ namespace umbriel {
             errorAt(current.source, "{}: {} does not match any workspace inventory", context, selector);
           } else {
             errorAt(current.source, "{}: {} does not exist on output '{}'", context, selector, ws.output);
+          }
+        }
+      }
+
+      const size_t sentinelCount = loaded.workspaces.emptyAbove ? 2 : 1;
+      const size_t namedCapacity = kMaxWorkspaces - sentinelCount;
+      const auto reportDynamicNameOverflow = [&](std::string_view output) {
+        std::vector<std::string> names;
+        for (const ParsedEntry& entry : entries) {
+          const WorkspaceConfig& ws = entry.ws;
+          if (ws.name.empty() || ws.index) {
+            continue;
+          }
+          const bool applies =
+              output.empty() ? ws.output.empty() : ws.output.empty() || outputNamesEqual(ws.output, output);
+          if (!applies || std::ranges::find(names, ws.name) != names.end()) {
+            continue;
+          }
+          names.push_back(ws.name);
+          if (names.size() <= namedCapacity) {
+            continue;
+          }
+          const std::string context = std::format("workspace[{}]", entry.arrayIndex);
+          const std::string target =
+              output.empty() ? "unscoped dynamic outputs" : std::format("dynamic output '{}'", output);
+          const std::string_view reservation = sentinelCount == 1
+              ? "one workspace slot is reserved for the empty sentinel"
+              : "two workspace slots are reserved for empty sentinels";
+          errorAt(
+              entry.source, "{} exceeds the limit of {} named workspaces for {} because {}", context, namedCapacity,
+              target, reservation
+          );
+          return true;
+        }
+        return false;
+      };
+
+      const bool globalOverflow = reportDynamicNameOverflow({});
+      if (!globalOverflow) {
+        std::vector<std::string> checkedOutputs;
+        for (const ParsedEntry& entry : entries) {
+          if (entry.ws.name.empty()
+              || entry.ws.output.empty()
+              || std::ranges::any_of(checkedOutputs, [&](const std::string& output) {
+                   return outputNamesEqual(output, entry.ws.output);
+                 })) {
+            continue;
+          }
+          checkedOutputs.push_back(entry.ws.output);
+          const auto configured = std::ranges::find_if(loaded.outputs, [&](const OutputRule& output) {
+            return outputNamesEqual(output.name, entry.ws.output);
+          });
+          if (configured == loaded.outputs.end() || !configured->workspaces) {
+            reportDynamicNameOverflow(entry.ws.output);
           }
         }
       }
@@ -1568,7 +1613,7 @@ namespace umbriel {
                   workspacesNode->source(), "output.{}.workspaces must be an integer from 1 to {}", name, kMaxWorkspaces
               );
             } else {
-              rule.workspaces = numericWorkspaceNames(static_cast<size_t>(*count));
+              rule.workspaces = static_cast<size_t>(*count);
             }
           } else if (const auto* names = workspacesNode->as_array()) {
             bool valid = true;
@@ -2066,10 +2111,10 @@ namespace umbriel {
                   kMaxWorkspaces
               );
             } else {
-              rule.defaultWorkspace = WorkspaceTarget{static_cast<int>(*value)};
+              rule.defaultWorkspace = WorkspaceReference{WorkspaceIndex{static_cast<size_t>(*value)}};
             }
           } else if (const auto value = n->value<std::string>(); value && !value->empty()) {
-            rule.defaultWorkspace = WorkspaceTarget{*value};
+            rule.defaultWorkspace = WorkspaceReference{WorkspaceName{*value}};
           } else {
             warnAt(
                 n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",

@@ -17,11 +17,11 @@
 #include "view/xdg_size.h"
 // clang-format off
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <format>
 #include <iterator>
+#include <ranges>
 #include <utility>
 #include "wlr.h"
 // clang-format on
@@ -97,9 +97,9 @@ namespace umbriel {
 
   Workspace::Workspace(
       WorkspaceGroup& group, wlr_ext_workspace_handle_v1* handle, std::string id, std::string name, size_t index,
-      ResolvedLayoutConfig layoutConfig
+      bool named, ResolvedLayoutConfig layoutConfig
   )
-      : m_group(&group), m_handle(handle), m_id(std::move(id)), m_name(std::move(name)), m_index(index),
+      : m_group(&group), m_handle(handle), m_id(std::move(id)), m_name(std::move(name)), m_index(index), m_named(named),
         m_layout(createLayout(layoutConfig.mode)), m_layoutConfig(std::move(layoutConfig)),
         m_layoutMode(m_layoutConfig.mode) {
     m_layout->setConfig(&m_layoutConfig);
@@ -1371,11 +1371,15 @@ namespace umbriel {
     applyLayoutConfig(std::move(copy));
   }
 
-  void Workspace::rename(std::string name, size_t index) {
+  void Workspace::rename(std::string name, size_t index, bool named) {
     bool changed = false;
     if (m_name != name) {
       m_name = std::move(name);
       wlr_ext_workspace_handle_v1_set_name(m_handle, m_name.c_str());
+      changed = true;
+    }
+    if (m_named != named) {
+      m_named = named;
       changed = true;
     }
     if (m_index != index) {
@@ -1440,6 +1444,13 @@ namespace umbriel {
     m_workspaceAxis = resolveWorkspaceAxis(config(), identity);
     auto resolved = resolveWorkspacesForOutput(config(), identity);
     m_dynamic = resolved.dynamic;
+    m_omittedConfiguredNames = resolved.omittedNamed;
+    if (m_omittedConfiguredNames > 0) {
+      kLog.error(
+          "{} named workspace declarations matching {} exceed the output limit and were omitted",
+          m_omittedConfiguredNames, identity.connector.empty() ? "output" : identity.connector
+      );
+    }
     const size_t count = resolved.workspaces.size();
     m_workspaces.reserve(count);
     for (size_t i = 0; i < count; ++i) {
@@ -1483,7 +1494,7 @@ namespace umbriel {
     // at idle time, after the caller has pushed the workspace into the list.
     m_server->scheduleIpcWorkspacesEvent();
     return std::make_unique<Workspace>(
-        *this, handle, std::move(id), std::move(workspace.name), index, std::move(workspace.layout)
+        *this, handle, std::move(id), std::move(workspace.name), index, workspace.named, std::move(workspace.layout)
     );
   }
 
@@ -1491,8 +1502,8 @@ namespace umbriel {
     const size_t index = m_workspaces.size();
     std::string name = std::to_string(index + 1);
     const OutputIdentity identity = m_output->identity();
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), identity, name, index);
-    auto workspace = createConfiguredWorkspace({std::move(name), std::move(layout)}, index);
+    ResolvedLayoutConfig layout = resolveUnnamedWorkspaceLayout(config(), identity, index);
+    auto workspace = createConfiguredWorkspace({std::move(name), false, std::move(layout)}, index);
     Workspace* result = workspace.get();
     m_workspaces.push_back(std::move(workspace));
     return result;
@@ -1501,8 +1512,8 @@ namespace umbriel {
   Workspace* WorkspaceGroup::prependDynamicWorkspace() {
     const std::string name = "1";
     const OutputIdentity identity = m_output->identity();
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), identity, name, 0);
-    auto workspace = createConfiguredWorkspace({name, std::move(layout)}, 0);
+    ResolvedLayoutConfig layout = resolveUnnamedWorkspaceLayout(config(), identity, 0);
+    auto workspace = createConfiguredWorkspace({name, false, std::move(layout)}, 0);
     Workspace* result = workspace.get();
     m_workspaces.insert(m_workspaces.begin(), std::move(workspace));
     return result;
@@ -1511,9 +1522,11 @@ namespace umbriel {
   void WorkspaceGroup::refreshDynamicWorkspaceMetadata() {
     const OutputIdentity identity = m_output->identity();
     for (size_t index = 0; index < m_workspaces.size(); ++index) {
-      const std::string name = std::to_string(index + 1);
-      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), identity, name, index);
       Workspace* workspace = m_workspaces[index].get();
+      const bool named = workspace->named();
+      const std::string name = named ? workspace->name() : std::to_string(index + 1);
+      ResolvedLayoutConfig layout = named ? resolveWorkspaceLayout(config(), identity, name, index)
+                                          : resolveUnnamedWorkspaceLayout(config(), identity, index);
       // Keep a runtime layout switch across structural changes to a dynamic
       // group, while allowing numeric workspace rules to follow the new index.
       if (const std::optional<LayoutMode> overrideMode = workspace->layoutModeOverride()) {
@@ -1523,7 +1536,7 @@ namespace umbriel {
         workspace->applyLayoutConfig(std::move(layout));
       }
       if (workspace->name() != name || workspace->index() != index) {
-        workspace->rename(name, index);
+        workspace->rename(name, index, named);
       }
     }
     if (m_previous == m_active) {
@@ -1538,8 +1551,8 @@ namespace umbriel {
     index = std::min(index, m_workspaces.size());
     const std::string name = std::to_string(index + 1);
     const OutputIdentity identity = m_output->identity();
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), identity, name, index);
-    auto workspace = createConfiguredWorkspace({name, std::move(layout)}, index);
+    ResolvedLayoutConfig layout = resolveUnnamedWorkspaceLayout(config(), identity, index);
+    auto workspace = createConfiguredWorkspace({name, false, std::move(layout)}, index);
     Workspace* result = workspace.get();
     m_workspaces.insert(m_workspaces.begin() + static_cast<std::ptrdiff_t>(index), std::move(workspace));
     refreshDynamicWorkspaceMetadata();
@@ -1561,12 +1574,13 @@ namespace umbriel {
     if (m_dynamic) {
       if (direction > 0) {
         const bool targetIsTrailingEmpty = static_cast<size_t>(target) == m_workspaces.size() - 1
+            && !m_workspaces[static_cast<size_t>(target)]->named()
             && !m_workspaces[static_cast<size_t>(target)]->hasViews();
         if (targetIsTrailingEmpty) {
           return false;
         }
       } else if (config().workspaces.emptyAbove) {
-        const bool targetIsLeadingEmpty = target == 0 && !m_workspaces[0]->hasViews();
+        const bool targetIsLeadingEmpty = target == 0 && !m_workspaces[0]->named() && !m_workspaces[0]->hasViews();
         if (targetIsLeadingEmpty) {
           return false;
         }
@@ -1578,14 +1592,102 @@ namespace umbriel {
       reconcileDynamic();
       return true;
     }
+    const OutputIdentity identity = m_output->identity();
     for (const size_t slot : {index, static_cast<size_t>(target)}) {
       Workspace* moved = m_workspaces[slot].get();
-      moved->rename(moved->name(), slot);
+      const bool named = moved->named();
+      const std::string name = named ? moved->name() : std::to_string(slot + 1);
+      ResolvedLayoutConfig layout = named ? resolveWorkspaceLayout(config(), identity, name, slot)
+                                          : resolveUnnamedWorkspaceLayout(config(), identity, slot);
+      if (const std::optional<LayoutMode> overrideMode = moved->layoutModeOverride()) {
+        layout.mode = *overrideMode;
+      }
+      if (moved->layoutConfig() != layout) {
+        moved->applyLayoutConfig(std::move(layout));
+      }
+      moved->rename(name, slot, named);
     }
     if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
       overview->onWorkspaceInventoryChanged(this);
     }
     return true;
+  }
+
+  void WorkspaceGroup::reconcileDynamicNames(const std::vector<ResolvedWorkspace>& resolved) {
+    std::vector<std::string> desired;
+    desired.reserve(resolved.size());
+    for (const ResolvedWorkspace& workspace : resolved) {
+      if (workspace.named) {
+        desired.push_back(workspace.name);
+      }
+    }
+
+    std::vector<std::string> claimed;
+    claimed.reserve(desired.size());
+    for (const auto& workspace : m_workspaces) {
+      if (!workspace->named()) {
+        continue;
+      }
+      const bool wanted = std::ranges::find(desired, workspace->name()) != desired.end();
+      const bool duplicate = std::ranges::find(claimed, workspace->name()) != claimed.end();
+      if (wanted && !duplicate) {
+        claimed.push_back(workspace->name());
+        continue;
+      }
+      workspace->rename(std::to_string(workspace->index() + 1), workspace->index(), false);
+    }
+
+    // As in niri, declarations added during a live reload enter at the top of
+    // the dynamic list. Preserve declaration order among names added together,
+    // and keep the optional leading unnamed sentinel first.
+    for (const std::string& entry : std::views::reverse(desired)) {
+      if (std::ranges::find(claimed, entry) != claimed.end()) {
+        continue;
+      }
+
+      if (m_workspaces.size() >= kMaxWorkspaces) {
+        Workspace* leadingSentinel = nullptr;
+        if (config().workspaces.emptyAbove
+            && !m_workspaces.empty()
+            && !m_workspaces.front()->named()
+            && !m_workspaces.front()->hasViews()) {
+          leadingSentinel = m_workspaces.front().get();
+        }
+        Workspace* trailingSentinel = nullptr;
+        if (!m_workspaces.empty() && !m_workspaces.back()->named() && !m_workspaces.back()->hasViews()) {
+          trailingSentinel = m_workspaces.back().get();
+        }
+        auto reusable = std::ranges::find_if(m_workspaces, [&](const auto& workspace) {
+          return workspace.get() != leadingSentinel
+              && workspace.get() != trailingSentinel
+              && !workspace->named()
+              && !workspace->hasViews();
+        });
+        if (reusable == m_workspaces.end()) {
+          // The declaration remains pending until an ordinary anonymous
+          // workspace becomes empty. Sentinels are never repurposed as names.
+          continue;
+        }
+        Workspace* workspace = reusable->get();
+        ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), m_output->identity(), entry, workspace->index());
+        workspace->rename(entry, workspace->index(), true);
+        workspace->applyLayoutConfig(std::move(layout));
+        claimed.push_back(entry);
+        continue;
+      }
+
+      size_t index = 0;
+      if (config().workspaces.emptyAbove
+          && !m_workspaces.empty()
+          && !m_workspaces.front()->named()
+          && !m_workspaces.front()->hasViews()) {
+        index = 1;
+      }
+      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), m_output->identity(), entry, index);
+      auto workspace = createConfiguredWorkspace({entry, true, std::move(layout)}, index);
+      m_workspaces.insert(m_workspaces.begin() + static_cast<std::ptrdiff_t>(index), std::move(workspace));
+      claimed.push_back(entry);
+    }
   }
 
   void WorkspaceGroup::reconcileInventory() {
@@ -1602,6 +1704,7 @@ namespace umbriel {
       );
       return;
     }
+    m_omittedConfiguredNames = 0;
 
     auto& resolved = resolvedSet.workspaces;
     auto old = std::move(m_workspaces);
@@ -1610,7 +1713,7 @@ namespace umbriel {
     // Preserve workspace identity by name before using position as a fallback.
     for (size_t i = 0; i < resolved.size(); ++i) {
       const auto match = std::ranges::find_if(old, [&](const auto& workspace) {
-        return workspace != nullptr && workspace->name() == resolved[i].name;
+        return resolved[i].named && workspace != nullptr && workspace->named() && workspace->name() == resolved[i].name;
       });
       if (match != old.end()) {
         next[i] = std::move(*match);
@@ -1621,7 +1724,7 @@ namespace umbriel {
         next[i] = std::move(old[i]);
       }
       if (next[i] != nullptr) {
-        next[i]->rename(resolved[i].name, i);
+        next[i]->rename(resolved[i].name, i, resolved[i].named);
       } else {
         next[i] = createConfiguredWorkspace(std::move(resolved[i]), i);
       }
@@ -1694,7 +1797,9 @@ namespace umbriel {
       // A config reload reasserts the configured mode, dropping any runtime
       // workspace-set-layout override.
       workspace->clearLayoutModeOverride();
-      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), identity, workspace->name(), workspace->index());
+      ResolvedLayoutConfig layout = workspace->named()
+          ? resolveWorkspaceLayout(config(), identity, workspace->name(), workspace->index())
+          : resolveUnnamedWorkspaceLayout(config(), identity, workspace->index());
       if (workspace->layoutConfig() != layout) {
         workspace->applyLayoutConfig(std::move(layout));
       }
@@ -1714,24 +1819,57 @@ namespace umbriel {
       return;
     }
 
-    // Dynamic groups keep a trailing empty below the limit. Prefer an empty active workspace so closing its last window
-    // does not destroy the workspace the user is currently viewing; otherwise retain the existing trailing empty to
-    // avoid replacing its protocol identity on every reconciliation.
+    const OutputIdentity identity = m_output->identity();
+    ResolvedWorkspaceSet resolved = resolveWorkspacesForOutput(config(), identity);
+    // Config is committed before reload side effects run. Overview teardown can therefore reach this method while
+    // m_dynamic still reflects the old inventory type; leave the transition to reconcileInventory().
+    if (!resolved.dynamic) {
+      return;
+    }
+    if (resolved.omittedNamed != m_omittedConfiguredNames) {
+      if (resolved.omittedNamed > 0) {
+        kLog.error(
+            "{} named workspace declarations matching {} exceed the output limit and were omitted",
+            resolved.omittedNamed, identity.connector.empty() ? "output" : identity.connector
+        );
+      } else if (m_omittedConfiguredNames > 0) {
+        kLog.info(
+            "all named workspace declarations now fit on {}", identity.connector.empty() ? "output" : identity.connector
+        );
+      }
+      m_omittedConfiguredNames = resolved.omittedNamed;
+    }
+    reconcileDynamicNames(resolved.workspaces);
+
+    // Dynamic groups keep their active empty workspace until the user leaves it. It can serve as the trailing sentinel
+    // when every workspace after it is another anonymous empty, but not when a named or occupied workspace follows it.
     const bool emptyAbove = config().workspaces.emptyAbove;
-    const size_t minimum = resolveDynamicWorkspaceMinimum(config(), m_output->identity());
+    const size_t minimum = resolveDynamicWorkspaceMinimum(config(), identity);
     Workspace* frontKeeper = nullptr;
-    if (emptyAbove && !m_workspaces.empty() && !m_workspaces.front()->hasViews()) {
+    if (emptyAbove && !m_workspaces.empty() && !m_workspaces.front()->named() && !m_workspaces.front()->hasViews()) {
       frontKeeper = m_workspaces.front().get();
     }
 
     // The optional leading empty and the trailing empty are distinct inventory entries, including before the first
     // view maps. A leading empty therefore cannot also serve as the trailing keeper.
+    Workspace* activeKeeper = nullptr;
+    if (m_active != nullptr && !m_active->named() && !m_active->hasViews()) {
+      activeKeeper = m_active;
+    }
     Workspace* backKeeper = nullptr;
-    if (m_active != nullptr && !m_active->hasViews() && m_active != frontKeeper) {
-      backKeeper = m_active;
+    if (activeKeeper != nullptr && activeKeeper != frontKeeper) {
+      const auto active =
+          std::ranges::find_if(m_workspaces, [&](const auto& workspace) { return workspace.get() == activeKeeper; });
+      const bool substantiveWorkspaceFollows = active != m_workspaces.end()
+          && std::ranges::any_of(active + 1, m_workspaces.end(),
+                                 [](const auto& workspace) { return workspace->named() || workspace->hasViews(); });
+      if (!substantiveWorkspaceFollows) {
+        backKeeper = activeKeeper;
+      }
     }
     if (backKeeper == nullptr
         && !m_workspaces.empty()
+        && !m_workspaces.back()->named()
         && !m_workspaces.back()->hasViews()
         && m_workspaces.back().get() != frontKeeper) {
       backKeeper = m_workspaces.back().get();
@@ -1744,7 +1882,11 @@ namespace umbriel {
         break;
       }
       Workspace* workspace = m_workspaces[index].get();
-      if (!workspace->hasViews() && workspace != backKeeper && workspace != frontKeeper) {
+      if (!workspace->named()
+          && !workspace->hasViews()
+          && workspace != activeKeeper
+          && workspace != backKeeper
+          && workspace != frontKeeper) {
         if (m_previous == workspace) {
           m_previous = nullptr;
         }
@@ -1756,7 +1898,11 @@ namespace umbriel {
     while (m_workspaces.size() < minimum) {
       backKeeper = appendDynamicWorkspace();
     }
-    if (backKeeper == nullptr && m_workspaces.size() < kMaxWorkspaces) {
+    if ((m_workspaces.empty()
+         || m_workspaces.back()->named()
+         || m_workspaces.back()->hasViews()
+         || m_workspaces.back().get() == frontKeeper)
+        && m_workspaces.size() < kMaxWorkspaces) {
       appendDynamicWorkspace();
     }
     if (emptyAbove && frontKeeper == nullptr && m_workspaces.size() < kMaxWorkspaces) {
@@ -1786,29 +1932,11 @@ namespace umbriel {
 
   Workspace* WorkspaceGroup::workspaceNamed(std::string_view name) const {
     for (const auto& entry : m_workspaces) {
-      if (entry->name() == name) {
+      if (entry->named() && entry->name() == name) {
         return entry.get();
       }
     }
     return nullptr;
-  }
-
-  Workspace* WorkspaceGroup::workspaceForSelector(std::string_view name) const {
-    if (Workspace* workspace = workspaceNamed(name)) {
-      return workspace;
-    }
-    if (name.empty() || !std::ranges::all_of(name, [](char value) { return value >= '0' && value <= '9'; })) {
-      return nullptr;
-    }
-    size_t index = 0;
-    const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), index);
-    if (error != std::errc{} || end != name.data() + name.size() || index < 1 || m_workspaces.empty()) {
-      return nullptr;
-    }
-    if (!m_dynamic) {
-      return index <= m_workspaces.size() ? m_workspaces[index - 1].get() : nullptr;
-    }
-    return m_workspaces.back().get();
   }
 
   Workspace* WorkspaceGroup::workspaceFromHandle(wlr_ext_workspace_handle_v1* handle) const {
@@ -2033,32 +2161,28 @@ namespace umbriel {
     m_server->refocus(m_output);
   }
 
-  Workspace* WorkspaceGroup::createWorkspace(const char* name) {
-    if (m_dynamic) {
-      const auto empty = std::ranges::find_if(m_workspaces.rbegin(), m_workspaces.rend(), [](const auto& workspace) {
-        return !workspace->hasViews();
-      });
-      if (empty != m_workspaces.rend()) {
-        kLog.debug("using empty dynamic workspace for create request on {}", m_output->wlr()->name);
-        return empty->get();
-      }
-      return insertDynamicWorkspace(m_workspaces.size());
-    }
-    if (m_workspaces.size() >= kMaxWorkspaces) {
+  Workspace* WorkspaceGroup::createWorkspace(const char* /*name*/) {
+    if (!m_dynamic) {
       return nullptr;
     }
+    const auto empty = std::ranges::find_if(m_workspaces.rbegin(), m_workspaces.rend(), [](const auto& workspace) {
+      return !workspace->named() && !workspace->hasViews();
+    });
+    if (empty != m_workspaces.rend()) {
+      kLog.debug("using empty dynamic workspace for create request on {}", m_output->wlr()->name);
+      return empty->get();
+    }
+    return insertDynamicWorkspace(m_workspaces.size());
+  }
 
-    wlr_ext_workspace_manager_v1* manager = m_server->workspaceManager();
-    const size_t index = m_workspaces.size();
-    std::string id = nextWorkspaceId();
-    std::string wsName = (name != nullptr && name[0] != '\0') ? name : std::to_string(index + 1);
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), m_output->identity(), wsName, index);
-    wlr_ext_workspace_handle_v1* handle = wlr_ext_workspace_handle_v1_create(manager, id.c_str(), kWorkspaceCaps);
-    m_workspaces.push_back(
-        std::make_unique<Workspace>(*this, handle, std::move(id), std::move(wsName), index, std::move(layout))
-    );
-    m_server->scheduleIpcWorkspacesEvent();
-    return m_workspaces.back().get();
+  Workspace* WorkspaceGroup::transferDestination() {
+    if (m_dynamic) {
+      return createWorkspace(nullptr);
+    }
+    const auto empty = std::ranges::find_if(m_workspaces.rbegin(), m_workspaces.rend(), [](const auto& workspace) {
+      return !workspace->hasViews();
+    });
+    return empty != m_workspaces.rend() ? empty->get() : nullptr;
   }
 
 } // namespace umbriel

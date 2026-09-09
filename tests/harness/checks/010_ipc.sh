@@ -132,6 +132,7 @@ if ! jq -e '
   and all(.[];
     (has("id") and (.id | type == "string"))
     and (has("name") and (.name | type == "string"))
+    and (has("named") and (.named | type == "boolean"))
     and (has("index") and (.index | type == "number") and .index >= 1)
     and (has("output") and (.output | type == "string"))
     and (has("active") and (.active | type == "boolean"))
@@ -149,6 +150,7 @@ fi
 if ! jq -e '
   .[0].index == 1
   and .[0].name == "1"
+  and .[0].named == false
   and .[0].output == "HEADLESS-1"
   and (.[0].id | test("^HEADLESS-1:[0-9]+$"))
 ' <<< "$workspaces" > /dev/null; then
@@ -219,7 +221,7 @@ if line is None:
 initial = json.loads(line)
 if initial.get("event") != "workspaces" or not isinstance(initial.get("data"), list) or not initial["data"]:
     raise SystemExit(f"initial workspaces event has the wrong shape: {line!r}")
-for key in ("id", "name", "index", "output", "active", "focused", "layout"):
+for key in ("id", "name", "named", "index", "output", "active", "focused", "layout"):
     if key not in initial["data"][0]:
         raise SystemExit(f"workspaces event entry lacks '{key}': {initial['data'][0]}")
 if focused_layout(initial) != "scrolling":

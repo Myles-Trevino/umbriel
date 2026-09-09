@@ -12,6 +12,7 @@ using umbriel::ModifierKey;
 using umbriel::OutputRule;
 using umbriel::SecurityContextRule;
 using umbriel::WindowRule;
+using umbriel::WorkspaceConfig;
 
 UMBRIEL_TEST(anIdenticalConfigChangesNothing) {
   const Config before;
@@ -418,6 +419,76 @@ UMBRIEL_TEST(workspaceRuleStrutsOnlyRefreshWorkspaceLayout) {
   CHECK(!effects.layerEffects);
 }
 
+UMBRIEL_TEST(namedWorkspaceDeclarationChangesRefreshDynamicInventory) {
+  const Config empty;
+  Config configured;
+  WorkspaceConfig named;
+  named.name = "dev";
+  configured.workspaceRules.push_back(std::move(named));
+
+  const ConfigEffects added = ConfigEffects::between(empty, configured);
+  CHECK(added.workspaceInventory);
+  CHECK(added.workspaceLayout);
+  CHECK(!added.outputState);
+
+  const ConfigEffects removed = ConfigEffects::between(configured, empty);
+  CHECK(removed.workspaceInventory);
+  CHECK(removed.workspaceLayout);
+  CHECK(!removed.outputState);
+
+  Config renamed = configured;
+  renamed.workspaceRules[0].name = "web";
+  const ConfigEffects renameEffects = ConfigEffects::between(configured, renamed);
+  CHECK(renameEffects.workspaceInventory);
+  CHECK(renameEffects.workspaceLayout);
+  CHECK(!renameEffects.outputState);
+
+  Config retargeted = configured;
+  retargeted.workspaceRules[0].output = "DP-1";
+  const ConfigEffects retargetEffects = ConfigEffects::between(configured, retargeted);
+  CHECK(retargetEffects.workspaceInventory);
+  CHECK(retargetEffects.workspaceLayout);
+  CHECK(!retargetEffects.outputState);
+}
+
+UMBRIEL_TEST(workspaceRuleLayoutAndIndexEditsDoNotRefreshDynamicInventory) {
+  Config named;
+  WorkspaceConfig namedRule;
+  namedRule.name = "dev";
+  namedRule.output = "DP-1";
+  namedRule.layout.mode = umbriel::LayoutMode::Scrolling;
+  named.workspaceRules.push_back(std::move(namedRule));
+
+  Config layoutChanged = named;
+  layoutChanged.workspaceRules[0].layout.mode = umbriel::LayoutMode::Master;
+  const ConfigEffects layoutEffects = ConfigEffects::between(named, layoutChanged);
+  CHECK(layoutEffects.workspaceLayout);
+  CHECK(!layoutEffects.workspaceInventory);
+  CHECK(!layoutEffects.outputState);
+  CHECK_EQ(layoutEffects.summary(), std::string{"workspace layout"});
+
+  Config indexAdded = named;
+  WorkspaceConfig indexRule;
+  indexRule.index = 2;
+  indexRule.output = "DP-1";
+  indexRule.layout.mode = umbriel::LayoutMode::Dwindle;
+  indexAdded.workspaceRules.push_back(std::move(indexRule));
+  const ConfigEffects indexAddedEffects = ConfigEffects::between(named, indexAdded);
+  CHECK(indexAddedEffects.workspaceLayout);
+  CHECK(!indexAddedEffects.workspaceInventory);
+  CHECK(!indexAddedEffects.outputState);
+  CHECK_EQ(indexAddedEffects.summary(), std::string{"workspace layout"});
+
+  Config indexRetargeted = indexAdded;
+  indexRetargeted.workspaceRules[1].index = 3;
+  indexRetargeted.workspaceRules[1].output = "DP-2";
+  const ConfigEffects indexRetargetedEffects = ConfigEffects::between(indexAdded, indexRetargeted);
+  CHECK(indexRetargetedEffects.workspaceLayout);
+  CHECK(!indexRetargetedEffects.workspaceInventory);
+  CHECK(!indexRetargetedEffects.outputState);
+  CHECK_EQ(indexRetargetedEffects.summary(), std::string{"workspace layout"});
+}
+
 UMBRIEL_TEST(outputStateAndWorkspaceInventoryAreIndependent) {
   Config before;
   OutputRule original;
@@ -455,6 +526,15 @@ UMBRIEL_TEST(outputStateAndWorkspaceInventoryAreIndependent) {
   CHECK(!inventoryEffects.outputState);
   CHECK(inventoryEffects.workspaceInventory);
   CHECK(inventoryEffects.workspaceLayout);
+
+  Config countedInventory = before;
+  countedInventory.outputs[0].workspaces = size_t{2};
+  Config namedInventory = countedInventory;
+  namedInventory.outputs[0].workspaces = std::vector<std::string>{"1", "2"};
+  const ConfigEffects inventoryKindEffects = ConfigEffects::between(countedInventory, namedInventory);
+  CHECK(!inventoryKindEffects.outputState);
+  CHECK(inventoryKindEffects.workspaceInventory);
+  CHECK(inventoryKindEffects.workspaceLayout);
 
   Config minimumChanged = before;
   minimumChanged.outputs[0].minWorkspaces = 3;

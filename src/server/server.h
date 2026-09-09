@@ -636,6 +636,7 @@ namespace umbriel {
       std::string outputName;
       std::string workspaceName;
       size_t workspaceIndex = 0;
+      bool workspaceNamed = false;
     };
     // Output objects do not survive physical hotplug, so selected workspaces
     // wait here until the output with the same stable name returns.

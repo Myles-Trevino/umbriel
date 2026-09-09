@@ -5,6 +5,7 @@
 
 #include "layout/layout.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -14,6 +15,8 @@
 #include <vector>
 
 namespace umbriel {
+
+  inline constexpr size_t kMaxWorkspaces = 64;
 
   enum class WheelDirection {
     None,
@@ -154,9 +157,18 @@ namespace umbriel {
     double fraction = 0.0;
     bool operator==(const WidthArg&) const = default;
   };
+  struct WorkspaceIndex {
+    size_t value = 0;
+    bool operator==(const WorkspaceIndex&) const = default;
+  };
+  struct WorkspaceName {
+    std::string value;
+    bool operator==(const WorkspaceName&) const = default;
+  };
+  using WorkspaceReference = std::variant<WorkspaceIndex, WorkspaceName>;
   struct WorkspaceArg {
-    std::string name;
-    std::string output; // empty = resolve against the focused output
+    WorkspaceReference reference;
+    std::string output; // empty = positions use the cursor-preferred output, names resolve globally
     bool operator==(const WorkspaceArg&) const = default;
   };
   struct OutputArg {
@@ -264,8 +276,9 @@ namespace umbriel {
   // default-constructed on any malformed input.
   bool parseChord(std::string_view chord, Keybind& output);
 
-  // Parse an action such as "window-close", "spawn:foot", "window-set-width:0.5", or "workspace-switch:2/DP-1", writing
-  // the action and its payload into `output` without touching the trigger fields.
+  // Parse an action such as "window-close", "spawn:foot", "window-set-width:0.5", or "workspace-switch:2/DP-1",
+  // writing the action and its payload into `output` without touching the trigger fields. Numeric workspace selectors
+  // are positions; surround a name with double quotes when the name itself contains only digits.
   bool parseAction(std::string_view value, Keybind& output);
 
   std::span<const ActionSpec> actionSpecs();

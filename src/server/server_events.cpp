@@ -25,8 +25,6 @@
 #include "workspace/workspace.h"
 
 #include <algorithm>
-#include <charconv>
-#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -35,13 +33,6 @@ namespace umbriel {
 
   namespace {
     constexpr Logger kLog("server");
-
-    // Dynamic workspaces are numbered, static ones can be named; sort the numbers by value and push names to the end.
-    size_t workspaceOrder(std::string_view name) {
-      size_t index = 0;
-      const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), index);
-      return error == std::errc{} && end == name.data() + name.size() ? index : std::numeric_limits<size_t>::max();
-    }
 
     View* viewForToplevel(Server& server, wlr_xdg_toplevel* toplevel) {
       if (toplevel == nullptr) {
@@ -1835,6 +1826,7 @@ namespace umbriel {
             .outputName = sourceName,
             .workspaceName = sourceGroup->active()->name(),
             .workspaceIndex = sourceGroup->active()->index(),
+            .workspaceNamed = sourceGroup->active()->named(),
         });
       }
     }
@@ -1862,6 +1854,8 @@ namespace umbriel {
         View::DisplacedHome home{
             .outputName = output->wlr()->name,
             .workspaceName = workspace->name(),
+            .workspaceIndex = workspace->index(),
+            .workspaceNamed = workspace->named(),
             .layoutSnapshot = nullptr,
             .layoutMember = 0,
             .ownsNamedScrollingColumnWidth = view->m_ownsNamedScrollingColumnWidth,
@@ -1979,9 +1973,8 @@ namespace umbriel {
       if (left.outputName != right.outputName) {
         return left.outputName < right.outputName;
       }
-      const size_t leftIndex = workspaceOrder(left.workspaceName);
-      const size_t rightIndex = workspaceOrder(right.workspaceName);
-      return leftIndex != rightIndex ? leftIndex < rightIndex : left.workspaceName < right.workspaceName;
+      return left.workspaceIndex != right.workspaceIndex ? left.workspaceIndex < right.workspaceIndex
+                                                         : left.workspaceName < right.workspaceName;
     });
 
     struct RestoredViewport {
@@ -1999,6 +1992,8 @@ namespace umbriel {
         const View::DisplacedHome& candidate = *displaced[last]->displacedHome();
         if (candidate.outputName != groupHome.outputName
             || candidate.workspaceName != groupHome.workspaceName
+            || candidate.workspaceIndex != groupHome.workspaceIndex
+            || candidate.workspaceNamed != groupHome.workspaceNamed
             || candidate.layoutProtectionOnly != groupHome.layoutProtectionOnly) {
           break;
         }
@@ -2029,21 +2024,23 @@ namespace umbriel {
       }
 
       Workspace* workspace = nullptr;
-      if (targetGroup->dynamic()) {
-        const size_t desired = workspaceOrder(groupHome.workspaceName);
-        if (desired != std::numeric_limits<size_t>::max() && desired >= 1) {
-          // A recreated dynamic group starts with workspace 1. Materialize an
-          // empty active workspace before a surviving workspace 2 is restored,
-          // then ordinary reconciliation can retain both.
-          while (targetGroup->workspaceCount() < desired) {
+      if (groupHome.workspaceNamed) {
+        workspace = targetGroup->workspaceNamed(groupHome.workspaceName);
+      } else {
+        if (targetGroup->dynamic()) {
+          // A recreated dynamic group starts with its configured names and
+          // sentinel. Materialize the saved anonymous position before
+          // restoring its surviving windows.
+          while (targetGroup->workspaceCount() <= groupHome.workspaceIndex) {
             if (targetGroup->insertDynamicWorkspace(targetGroup->workspaceCount()) == nullptr) {
               break;
             }
           }
-          workspace = targetGroup->workspaceNamed(groupHome.workspaceName);
         }
-      } else {
-        workspace = targetGroup->workspaceForSelector(groupHome.workspaceName);
+        workspace = targetGroup->workspaceAt(groupHome.workspaceIndex);
+        if (targetGroup->dynamic() && workspace != nullptr && workspace->named()) {
+          workspace = targetGroup->insertDynamicWorkspace(groupHome.workspaceIndex);
+        }
       }
       const bool selectorMatched = workspace != nullptr;
       if (workspace == nullptr) {
@@ -2285,14 +2282,18 @@ namespace umbriel {
         continue;
       }
 
-      Workspace* workspace = group->workspaceNamed(selection->workspaceName);
-      if (workspace == nullptr && group->dynamic()) {
+      Workspace* workspace = selection->workspaceNamed ? group->workspaceNamed(selection->workspaceName) : nullptr;
+      if (!selection->workspaceNamed && group->dynamic()) {
         while (group->workspaceCount() <= selection->workspaceIndex) {
           if (group->insertDynamicWorkspace(group->workspaceCount()) == nullptr) {
             break;
           }
         }
-        workspace = group->workspaceNamed(selection->workspaceName);
+        workspace = group->workspaceAt(selection->workspaceIndex);
+        if (workspace != nullptr && workspace->named()) {
+          Workspace* inserted = group->insertDynamicWorkspace(selection->workspaceIndex);
+          workspace = inserted != nullptr ? inserted : group->active();
+        }
       }
       if (workspace == nullptr && group->workspaceCount() > 0) {
         workspace = group->workspaceAt(std::min(selection->workspaceIndex, group->workspaceCount() - 1));

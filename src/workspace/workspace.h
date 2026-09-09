@@ -34,7 +34,7 @@ namespace umbriel {
 
     Workspace(
         WorkspaceGroup& group, wlr_ext_workspace_handle_v1* handle, std::string id, std::string name, size_t index,
-        ResolvedLayoutConfig layoutConfig
+        bool named, ResolvedLayoutConfig layoutConfig
     );
     ~Workspace();
 
@@ -47,6 +47,9 @@ namespace umbriel {
     // identical across the ext protocol and the IPC surface.
     [[nodiscard]] const std::string& id() const { return m_id; }
     [[nodiscard]] const std::string& name() const { return m_name; }
+    // True for an explicit configured or client-created name. Numeric labels
+    // generated for anonymous static or dynamic positions leave this false.
+    [[nodiscard]] bool named() const { return m_named; }
     [[nodiscard]] size_t index() const { return m_index; }
     [[nodiscard]] bool active() const { return m_active; }
     [[nodiscard]] Layout& layout() { return *m_layout; }
@@ -156,7 +159,7 @@ namespace umbriel {
     void endSwitchTransition();
     void setSlideOffset(double x, double y);
     void applyLayoutConfig(ResolvedLayoutConfig layoutConfig);
-    void rename(std::string name, size_t index);
+    void rename(std::string name, size_t index, bool named);
 
     [[nodiscard]] const std::vector<View*>& allViews() const noexcept { return m_views; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
@@ -189,6 +192,7 @@ namespace umbriel {
     std::string m_id;
     std::string m_name;
     size_t m_index = 0;
+    bool m_named = false;
     bool m_active = false;
     std::vector<View*> m_views;
     std::vector<View*> m_floatingStack;
@@ -226,8 +230,8 @@ namespace umbriel {
     [[nodiscard]] bool dynamic() const { return m_dynamic; }
     [[nodiscard]] Workspace* workspaceAt(size_t index) const;
     [[nodiscard]] Workspace* workspaceAtClamped(size_t index) const;
+    // Match an explicit name only. Anonymous numeric labels are positions.
     [[nodiscard]] Workspace* workspaceNamed(std::string_view name) const;
-    [[nodiscard]] Workspace* workspaceForSelector(std::string_view name) const;
     [[nodiscard]] Workspace* workspaceFromHandle(wlr_ext_workspace_handle_v1* handle) const;
     [[nodiscard]] size_t workspaceCount() const { return m_workspaces.size(); }
     // Direction this output arranges its workspaces along, cached from configuration
@@ -237,9 +241,12 @@ namespace umbriel {
     void activate(Workspace* workspace, bool animate = true);
     void select(Workspace* workspace);
     void deactivate(Workspace* workspace);
-    // Dynamic groups reuse their highest empty workspace before appending. Returns null when no workspace can be
-    // allocated within the per-output limit.
+    // Dynamic groups reuse their highest empty anonymous workspace before appending. Static groups reject protocol
+    // create requests because their configured inventory is exact.
     Workspace* createWorkspace(const char* name);
+    // Acquire a destination for moving every window from another workspace. Static groups reuse their highest empty
+    // configured workspace without changing its identity; dynamic groups use the ordinary create behavior.
+    Workspace* transferDestination();
     // Insert an empty numbered workspace into a dynamic group and renumber the following workspaces. Static configured
     // groups cannot be extended this way and return null.
     Workspace* insertDynamicWorkspace(size_t index);
@@ -270,6 +277,7 @@ namespace umbriel {
     std::string nextWorkspaceId();
     Workspace* appendDynamicWorkspace();
     Workspace* prependDynamicWorkspace();
+    void reconcileDynamicNames(const std::vector<ResolvedWorkspace>& resolved);
     void refreshDynamicWorkspaceMetadata();
 
     struct Slide {
@@ -286,6 +294,7 @@ namespace umbriel {
     Workspace* m_active = nullptr;
     Workspace* m_previous = nullptr;
     bool m_dynamic = false;
+    size_t m_omittedConfiguredNames = 0;
     WorkspaceAxis m_workspaceAxis = WorkspaceAxis::Vertical;
     uint32_t m_nextHandleSerial = 1;
     std::vector<std::unique_ptr<Workspace>> m_workspaces;

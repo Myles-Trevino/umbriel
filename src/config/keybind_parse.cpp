@@ -128,6 +128,48 @@ namespace umbriel {
       return true;
     }
 
+    bool parseWorkspaceArg(std::string_view arg, WorkspaceArg& workspace) {
+      std::string_view selector = arg;
+      const size_t separator = selector.find('/');
+      if (separator != std::string_view::npos) {
+        if (separator == 0
+            || separator + 1 == selector.size()
+            || selector.find('/', separator + 1) != std::string_view::npos) {
+          return false;
+        }
+        workspace.output = selector.substr(separator + 1);
+        selector = selector.substr(0, separator);
+      }
+
+      const bool beginsQuoted = selector.starts_with('"');
+      const bool endsQuoted = selector.ends_with('"');
+      if (beginsQuoted || endsQuoted) {
+        if (!beginsQuoted || !endsQuoted || selector.size() <= 2) {
+          return false;
+        }
+        selector.remove_prefix(1);
+        selector.remove_suffix(1);
+        if (selector.contains('"')) {
+          return false;
+        }
+        workspace.reference = WorkspaceName{std::string(selector)};
+        return true;
+      }
+
+      if (std::ranges::all_of(selector, [](char value) { return value >= '0' && value <= '9'; })) {
+        size_t index = 0;
+        const auto [end, error] = std::from_chars(selector.data(), selector.data() + selector.size(), index);
+        if (error != std::errc{} || end != selector.data() + selector.size() || index < 1 || index > kMaxWorkspaces) {
+          return false;
+        }
+        workspace.reference = WorkspaceIndex{index};
+        return true;
+      }
+
+      workspace.reference = WorkspaceName{std::string(selector)};
+      return true;
+    }
+
     constexpr ActionSpec kActionSpecs[] = {
         {"cheatsheet-close", "", "Hide the keybind cheatsheet", KeybindAction::CheatsheetClose},
         {"cheatsheet-open", "", "Show the keybind cheatsheet", KeybindAction::CheatsheetOpen},
@@ -457,18 +499,9 @@ namespace umbriel {
           break;
         }
         WorkspaceArg workspace;
-        std::string_view selector = arg;
-        const size_t separator = selector.find('/');
-        if (separator != std::string_view::npos) {
-          if (separator == 0
-              || separator + 1 == selector.size()
-              || selector.find('/', separator + 1) != std::string_view::npos) {
-            break;
-          }
-          workspace.output = selector.substr(separator + 1);
-          selector = selector.substr(0, separator);
+        if (!parseWorkspaceArg(arg, workspace)) {
+          break;
         }
-        workspace.name = selector;
         output.action = spec.action;
         output.payload = std::move(workspace);
         return true;
@@ -622,7 +655,7 @@ namespace umbriel {
         bind.keysym = keysym;
         bind.action = action;
         WorkspaceArg workspace;
-        workspace.name = std::to_string(index + 1);
+        workspace.reference = WorkspaceIndex{static_cast<size_t>(index + 1)};
         bind.payload = std::move(workspace);
         keybinds.push_back(std::move(bind));
       };

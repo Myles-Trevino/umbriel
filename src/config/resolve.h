@@ -44,6 +44,10 @@ namespace umbriel {
   [[nodiscard]] ResolvedLayoutConfig resolveGlobalLayout(const Config& config);
   [[nodiscard]] ResolvedLayoutConfig
   resolveWorkspaceLayout(const Config& config, const OutputIdentity& identity, std::string_view name, size_t index);
+  // Resolve an unnamed dynamic workspace. Its numeric protocol label is not an
+  // explicit name selector, so only index rules match it.
+  [[nodiscard]] ResolvedLayoutConfig
+  resolveUnnamedWorkspaceLayout(const Config& config, const OutputIdentity& identity, size_t index);
   [[nodiscard]] ResolvedWorkspaceSet resolveWorkspacesForOutput(const Config& config, const OutputIdentity& identity);
   // Workspace count a dynamic output never shrinks below.
   [[nodiscard]] size_t resolveDynamicWorkspaceMinimum(const Config& config, const OutputIdentity& identity);

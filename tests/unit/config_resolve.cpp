@@ -215,17 +215,53 @@ UMBRIEL_TEST(workspaceInventoryResolvesStaticAndDynamicOutputs) {
   web.layout.gap = 24;
   config.workspaceRules.push_back(std::move(web));
 
+  OutputRule counted;
+  counted.name = "DP-3";
+  counted.workspaces = size_t{3};
+  config.outputs.push_back(std::move(counted));
+
+  WorkspaceConfig countedIndex;
+  countedIndex.index = 2;
+  countedIndex.output = "DP-3";
+  countedIndex.layout.gap = 31;
+  CHECK(umbriel::workspaceRuleTargetExists(config, countedIndex));
+  config.workspaceRules.push_back(std::move(countedIndex));
+
+  WorkspaceConfig countedName;
+  countedName.name = "2";
+  countedName.output = "DP-3";
+  countedName.layout.mode = LayoutMode::Master;
+  CHECK(!umbriel::workspaceRuleTargetExists(config, countedName));
+  config.workspaceRules.push_back(std::move(countedName));
+
   const auto staticSet = umbriel::resolveWorkspacesForOutput(config, identity("DP-1"));
   CHECK(!staticSet.dynamic);
   CHECK_EQ(staticSet.workspaces.size(), size_t{2});
   CHECK_EQ(staticSet.workspaces[0].name, std::string{"main"});
+  CHECK(staticSet.workspaces[0].named);
   CHECK_EQ(staticSet.workspaces[1].name, std::string{"web"});
+  CHECK(staticSet.workspaces[1].named);
   CHECK_EQ(staticSet.workspaces[1].layout.gap, 24);
+
+  const auto countedSet = umbriel::resolveWorkspacesForOutput(config, identity("DP-3"));
+  CHECK(!countedSet.dynamic);
+  CHECK_EQ(countedSet.workspaces.size(), size_t{3});
+  if (countedSet.workspaces.size() == 3) {
+    CHECK_EQ(countedSet.workspaces[0].name, std::string{"1"});
+    CHECK(!countedSet.workspaces[0].named);
+    CHECK_EQ(countedSet.workspaces[1].name, std::string{"2"});
+    CHECK(!countedSet.workspaces[1].named);
+    CHECK_EQ(countedSet.workspaces[1].layout.gap, 31);
+    CHECK(countedSet.workspaces[1].layout.mode == LayoutMode::Scrolling);
+    CHECK_EQ(countedSet.workspaces[2].name, std::string{"3"});
+    CHECK(!countedSet.workspaces[2].named);
+  }
 
   const auto dynamicSet = umbriel::resolveWorkspacesForOutput(config, identity("DP-2"));
   CHECK(dynamicSet.dynamic);
   CHECK_EQ(dynamicSet.workspaces.size(), size_t{1});
   CHECK_EQ(dynamicSet.workspaces[0].name, std::string{"1"});
+  CHECK(!dynamicSet.workspaces[0].named);
 
   config.workspaces.emptyAbove = true;
   const auto dynamicSetWithEmptyAbove = umbriel::resolveWorkspacesForOutput(config, identity("DP-2"));
@@ -233,8 +269,113 @@ UMBRIEL_TEST(workspaceInventoryResolvesStaticAndDynamicOutputs) {
   CHECK_EQ(dynamicSetWithEmptyAbove.workspaces.size(), size_t{2});
   if (dynamicSetWithEmptyAbove.workspaces.size() == 2) {
     CHECK_EQ(dynamicSetWithEmptyAbove.workspaces[0].name, std::string{"1"});
+    CHECK(!dynamicSetWithEmptyAbove.workspaces[0].named);
     CHECK_EQ(dynamicSetWithEmptyAbove.workspaces[1].name, std::string{"2"});
+    CHECK(!dynamicSetWithEmptyAbove.workspaces[1].named);
   }
+}
+
+UMBRIEL_TEST(dynamicWorkspaceNamesMaterializeWithScopeAndRemainDistinctFromNumericLabels) {
+  Config config;
+  config.workspaces.emptyAbove = true;
+
+  WorkspaceConfig numericName;
+  numericName.name = "1";
+  numericName.layout.mode = LayoutMode::Master;
+  config.workspaceRules.push_back(std::move(numericName));
+
+  WorkspaceConfig global;
+  global.name = "GLOBAL";
+  config.workspaceRules.push_back(std::move(global));
+
+  WorkspaceConfig globalLeftOverride;
+  globalLeftOverride.name = "GLOBAL";
+  globalLeftOverride.output = "DP-1";
+  globalLeftOverride.layout.mode = LayoutMode::Dwindle;
+  config.workspaceRules.push_back(std::move(globalLeftOverride));
+
+  WorkspaceConfig leftOnly;
+  leftOnly.name = "LEFT";
+  leftOnly.output = "DP-1";
+  leftOnly.layout.mode = LayoutMode::Dwindle;
+  config.workspaceRules.push_back(std::move(leftOnly));
+
+  const auto left = umbriel::resolveWorkspacesForOutput(config, identity("DP-1"));
+  CHECK(left.dynamic);
+  CHECK_EQ(left.workspaces.size(), size_t{5});
+  if (left.workspaces.size() == 5) {
+    CHECK_EQ(left.workspaces[0].name, std::string{"1"});
+    CHECK(!left.workspaces[0].named);
+    CHECK(left.workspaces[0].layout.mode == LayoutMode::Scrolling);
+
+    CHECK_EQ(left.workspaces[1].name, std::string{"1"});
+    CHECK(left.workspaces[1].named);
+    CHECK(left.workspaces[1].layout.mode == LayoutMode::Master);
+
+    CHECK_EQ(left.workspaces[2].name, std::string{"GLOBAL"});
+    CHECK(left.workspaces[2].named);
+    CHECK(left.workspaces[2].layout.mode == LayoutMode::Dwindle);
+    CHECK_EQ(left.workspaces[3].name, std::string{"LEFT"});
+    CHECK(left.workspaces[3].named);
+    CHECK(left.workspaces[3].layout.mode == LayoutMode::Dwindle);
+
+    CHECK_EQ(left.workspaces[4].name, std::string{"5"});
+    CHECK(!left.workspaces[4].named);
+  }
+
+  const auto right = umbriel::resolveWorkspacesForOutput(config, identity("DP-2"));
+  CHECK(right.dynamic);
+  CHECK_EQ(right.workspaces.size(), size_t{4});
+  if (right.workspaces.size() == 4) {
+    CHECK_EQ(right.workspaces[0].name, std::string{"1"});
+    CHECK(!right.workspaces[0].named);
+    CHECK(right.workspaces[0].layout.mode == LayoutMode::Scrolling);
+
+    CHECK_EQ(right.workspaces[1].name, std::string{"1"});
+    CHECK(right.workspaces[1].named);
+    CHECK(right.workspaces[1].layout.mode == LayoutMode::Master);
+
+    CHECK_EQ(right.workspaces[2].name, std::string{"GLOBAL"});
+    CHECK(right.workspaces[2].named);
+    CHECK(right.workspaces[2].layout.mode == LayoutMode::Scrolling);
+    CHECK_EQ(right.workspaces[3].name, std::string{"4"});
+    CHECK(!right.workspaces[3].named);
+  }
+  CHECK(!std::ranges::any_of(right.workspaces, [](const auto& workspace) { return workspace.name == "LEFT"; }));
+
+  const auto unnamedNumericLabel = umbriel::resolveUnnamedWorkspaceLayout(config, identity("DP-1"), 0);
+  const auto explicitNumericName = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "1", 0);
+  CHECK(unnamedNumericLabel.mode == LayoutMode::Scrolling);
+  CHECK(explicitNumericName.mode == LayoutMode::Master);
+}
+
+UMBRIEL_TEST(dynamicWorkspaceResolutionReportsNamesOmittedAcrossOutputAliases) {
+  Config config;
+  for (size_t index = 0; index < 63; ++index) {
+    WorkspaceConfig named;
+    named.name = "connector-" + std::to_string(index);
+    named.output = "HDMI-A-1";
+    config.workspaceRules.push_back(std::move(named));
+  }
+  WorkspaceConfig descriptor;
+  descriptor.name = "descriptor";
+  descriptor.output = "Microstep MSI G2712F CD6T084401192";
+  config.workspaceRules.push_back(std::move(descriptor));
+
+  constexpr OutputIdentity monitor = identity("HDMI-A-1", "Microstep", "MSI G2712F", "CD6T084401192");
+  const auto resolved = umbriel::resolveWorkspacesForOutput(config, monitor);
+  CHECK(resolved.dynamic);
+  CHECK_EQ(resolved.workspaces.size(), umbriel::kMaxWorkspaces);
+  CHECK_EQ(resolved.omittedNamed, size_t{1});
+  CHECK_EQ(
+      std::ranges::count_if(resolved.workspaces, [](const auto& workspace) { return workspace.named; }),
+      static_cast<std::ptrdiff_t>(umbriel::kMaxWorkspaces - 1)
+  );
+  CHECK_EQ(resolved.workspaces.back().name, std::string{"64"});
+  CHECK(!resolved.workspaces.back().named);
+  CHECK(!std::ranges::any_of(resolved.workspaces, [](const auto& workspace) {
+    return workspace.name == "descriptor";
+  }));
 }
 
 UMBRIEL_TEST(dynamicWorkspaceMinimumIsPerOutput) {
@@ -482,25 +623,26 @@ UMBRIEL_TEST(windowRulesMergeWorkspaceTargetsAcrossSelectorKinds) {
   WindowRule app;
   app.appIdPattern = "^foot$";
   app.appIdRegex = std::regex(app.appIdPattern);
-  app.defaultWorkspace = umbriel::WorkspaceTarget{2};
+  app.defaultWorkspace = umbriel::WorkspaceReference{umbriel::WorkspaceIndex{2}};
   config.windowRules.push_back(std::move(app));
 
   WindowRule title;
   title.titlePattern = "chat";
   title.titleRegex = std::regex(title.titlePattern);
-  title.defaultWorkspace = umbriel::WorkspaceTarget{std::string{"2"}};
+  title.defaultWorkspace = umbriel::WorkspaceReference{umbriel::WorkspaceName{"2"}};
   config.windowRules.push_back(std::move(title));
 
   const auto appOnly = umbriel::resolveWindowRules(config, "foot", "editor", std::nullopt, ContentType::None, false, 0);
-  const auto* position = appOnly.defaultWorkspace ? std::get_if<int>(&*appOnly.defaultWorkspace) : nullptr;
+  const auto* position =
+      appOnly.defaultWorkspace ? std::get_if<umbriel::WorkspaceIndex>(&*appOnly.defaultWorkspace) : nullptr;
   CHECK(position != nullptr);
-  CHECK(position != nullptr && *position == 2);
+  CHECK(position != nullptr && position->value == 2);
 
   const auto merged =
       umbriel::resolveWindowRules(config, "foot", "project chat", std::nullopt, ContentType::None, false, 0);
-  const auto* name = merged.defaultWorkspace ? std::get_if<std::string>(&*merged.defaultWorkspace) : nullptr;
+  const auto* name = merged.defaultWorkspace ? std::get_if<umbriel::WorkspaceName>(&*merged.defaultWorkspace) : nullptr;
   CHECK(name != nullptr);
-  CHECK(name != nullptr && *name == "2");
+  CHECK(name != nullptr && name->value == "2");
 }
 
 UMBRIEL_TEST(windowRulesMergeFractionSizingLastWriterWins) {

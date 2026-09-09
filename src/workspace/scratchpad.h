@@ -3,6 +3,7 @@
 #include "core/animation.h"
 
 #include <array>
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
@@ -83,6 +84,8 @@ namespace umbriel {
       // Full-output-relative x/y fractions retained until the displaced output returns.
       std::optional<std::array<double, 2>> displacedPosition;
       std::string returnWorkspace;
+      size_t returnWorkspaceIndex = 0;
+      bool returnWorkspaceNamed = false;
       bool returnTiled = false;
     };
 

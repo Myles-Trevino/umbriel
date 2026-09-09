@@ -442,31 +442,48 @@ UMBRIEL_TEST(parsesArgumentFreeNewActions) {
 }
 
 UMBRIEL_TEST(parsesWorkspaceSelectors) {
-  const auto selector = [](const Keybind& bind) {
-    static const umbriel::WorkspaceArg empty;
-    const auto* arg = umbriel::payloadIf<umbriel::WorkspaceArg>(bind);
-    return arg != nullptr ? *arg : empty;
-  };
+  const auto selector = [](const Keybind& bind) { return umbriel::payloadIf<umbriel::WorkspaceArg>(bind); };
 
   Keybind bind;
   CHECK(parseAction("workspace-switch:3", bind));
   CHECK(bind.action == KeybindAction::WorkspaceSwitch);
-  CHECK_EQ(selector(bind).name, std::string{"3"});
-  CHECK(selector(bind).output.empty());
+  const auto* position = selector(bind);
+  CHECK(position != nullptr);
+  const auto* positionValue =
+      position != nullptr ? std::get_if<umbriel::WorkspaceIndex>(&position->reference) : nullptr;
+  CHECK(positionValue != nullptr);
+  CHECK(positionValue != nullptr && positionValue->value == 3);
+  CHECK(position != nullptr && position->output.empty());
 
   CHECK(parseAction("workspace-switch:web/DP-1", bind));
-  CHECK_EQ(selector(bind).name, std::string{"web"});
-  CHECK_EQ(selector(bind).output, std::string{"DP-1"});
+  const auto* named = selector(bind);
+  CHECK(named != nullptr);
+  const auto* nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "web");
+  CHECK(named != nullptr && named->output == "DP-1");
 
   CHECK(parseAction("window-move-to-workspace:2/HDMI-A-1", bind));
   CHECK(bind.action == KeybindAction::WindowMoveToWorkspace);
-  CHECK_EQ(selector(bind).name, std::string{"2"});
-  CHECK_EQ(selector(bind).output, std::string{"HDMI-A-1"});
+  position = selector(bind);
+  positionValue = position != nullptr ? std::get_if<umbriel::WorkspaceIndex>(&position->reference) : nullptr;
+  CHECK(positionValue != nullptr);
+  CHECK(positionValue != nullptr && positionValue->value == 2);
+  CHECK(position != nullptr && position->output == "HDMI-A-1");
 
-  CHECK(parseAction("column-move-to-workspace:chat/DP-1", bind));
+  CHECK(parseAction("column-move-to-workspace:\"2\"/DP-1", bind));
   CHECK(bind.action == KeybindAction::ColumnMoveToWorkspace);
-  CHECK_EQ(selector(bind).name, std::string{"chat"});
-  CHECK_EQ(selector(bind).output, std::string{"DP-1"});
+  named = selector(bind);
+  nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "2");
+  CHECK(named != nullptr && named->output == "DP-1");
+
+  CHECK(parseAction("workspace-switch:name:2", bind));
+  named = selector(bind);
+  nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "name:2");
 }
 
 UMBRIEL_TEST(rejectsMalformedWorkspaceSelectors) {
@@ -475,6 +492,11 @@ UMBRIEL_TEST(rejectsMalformedWorkspaceSelectors) {
   CHECK(!parseAction("workspace-switch:/DP-1", bind)); // empty workspace
   CHECK(!parseAction("workspace-switch:web/", bind));  // empty output
   CHECK(!parseAction("workspace-switch:a/b/c", bind)); // two separators
+  CHECK(!parseAction("workspace-switch:0", bind));
+  CHECK(!parseAction("workspace-switch:65", bind));
+  CHECK(!parseAction("workspace-switch:\"\"", bind));
+  CHECK(!parseAction("workspace-switch:\"2", bind));
+  CHECK(!parseAction("workspace-switch:2\"", bind));
   CHECK(!parseAction("column-move-to-workspace:", bind));
   CHECK(!parseAction("column-move-to-workspace:/DP-1", bind));
 }

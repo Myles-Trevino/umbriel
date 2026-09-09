@@ -715,6 +715,37 @@ UMBRIEL_TEST(keybindTableLoadsAllowWhenLocked) {
   CHECK(!containsDiagnostic(store, "allow_when_locked"));
 }
 
+UMBRIEL_TEST(keybindTablePreservesWorkspaceReferenceKinds) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(
+      "[keybinds]\n"
+      "\"Mod+2\" = \"workspace-switch:2\"\n"
+      "\"Mod+Ctrl+2\" = 'workspace-switch:\"2\"'\n"
+  );
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().keybinds.size(), size_t{2});
+
+  bool foundPosition = false;
+  bool foundNumericName = false;
+  for (const auto& bind : store.config().keybinds) {
+    const auto* workspace = umbriel::payloadIf<umbriel::WorkspaceArg>(bind);
+    if (workspace == nullptr) {
+      continue;
+    }
+    if (const auto* index = std::get_if<umbriel::WorkspaceIndex>(&workspace->reference)) {
+      foundPosition = foundPosition || index->value == 2;
+    }
+    if (const auto* name = std::get_if<umbriel::WorkspaceName>(&workspace->reference)) {
+      foundNumericName = foundNumericName || name->value == "2";
+    }
+  }
+  CHECK(foundPosition);
+  CHECK(foundNumericName);
+}
+
 UMBRIEL_TEST(keybindTableLoadsCooldown) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
@@ -1221,26 +1252,26 @@ UMBRIEL_TEST(windowRuleWorkspaceTargetPreservesIntegerAndStringSelectors) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& positionTarget = store.config().windowRules[0].defaultWorkspace;
-  const auto* position = positionTarget ? std::get_if<int>(&*positionTarget) : nullptr;
+  const auto* position = positionTarget ? std::get_if<umbriel::WorkspaceIndex>(&*positionTarget) : nullptr;
   CHECK(position != nullptr);
-  CHECK(position != nullptr && *position == 2);
+  CHECK(position != nullptr && position->value == 2);
   CHECK(!containsDiagnostic(store, "unknown key window_rule.default_workspace"));
 
   file.write("[[window_rule]]\ndefault_workspace = 64\n");
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& limitTarget = store.config().windowRules[0].defaultWorkspace;
-  const auto* limit = limitTarget ? std::get_if<int>(&*limitTarget) : nullptr;
+  const auto* limit = limitTarget ? std::get_if<umbriel::WorkspaceIndex>(&*limitTarget) : nullptr;
   CHECK(limit != nullptr);
-  CHECK(limit != nullptr && *limit == 64);
+  CHECK(limit != nullptr && limit->value == 64);
 
   file.write("[[window_rule]]\ndefault_workspace = \"CHAT\"\n");
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& nameTarget = store.config().windowRules[0].defaultWorkspace;
-  const auto* name = nameTarget ? std::get_if<std::string>(&*nameTarget) : nullptr;
+  const auto* name = nameTarget ? std::get_if<umbriel::WorkspaceName>(&*nameTarget) : nullptr;
   CHECK(name != nullptr);
-  CHECK(name != nullptr && *name == "CHAT");
+  CHECK(name != nullptr && name->value == "CHAT");
 
   // A numeric-looking string remains a name. It must not silently become a
   // positional selector during parsing.
@@ -1248,9 +1279,9 @@ UMBRIEL_TEST(windowRuleWorkspaceTargetPreservesIntegerAndStringSelectors) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& numericNameTarget = store.config().windowRules[0].defaultWorkspace;
-  const auto* numericName = numericNameTarget ? std::get_if<std::string>(&*numericNameTarget) : nullptr;
+  const auto* numericName = numericNameTarget ? std::get_if<umbriel::WorkspaceName>(&*numericNameTarget) : nullptr;
   CHECK(numericName != nullptr);
-  CHECK(numericName != nullptr && *numericName == "2");
+  CHECK(numericName != nullptr && numericName->value == "2");
 
   file.write("[[window_rule]]\ndefault_workspace = \"\"\n");
   CHECK(store.reload().success);
@@ -1518,6 +1549,27 @@ UMBRIEL_TEST(outputEnabledFlagParsesAndDefaultsTrue) {
   CHECK(containsDiagnostic(store, "ignoring output.DP-1.enabled"));
 }
 
+UMBRIEL_TEST(outputWorkspaceInventoryPreservesCountAndNames) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[output.DP-1]\nworkspaces = 9\n[output.DP-2]\nworkspaces = [\"3\", \"CHAT\"]\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{2});
+  if (store.config().outputs.size() == 2) {
+    const auto& count = store.config().outputs[0].workspaces;
+    const auto& names = store.config().outputs[1].workspaces;
+    CHECK(count.has_value());
+    CHECK(names.has_value());
+    CHECK(count && std::get_if<size_t>(&*count) != nullptr);
+    CHECK(count && std::get_if<size_t>(&*count) != nullptr && *std::get_if<size_t>(&*count) == 9);
+    const auto* values = names ? std::get_if<std::vector<std::string>>(&*names) : nullptr;
+    CHECK(values != nullptr);
+    CHECK(values != nullptr && *values == std::vector<std::string>({"3", "CHAT"}));
+  }
+}
+
 UMBRIEL_TEST(outputMinWorkspacesLoadsAndRequiresDynamicWorkspaces) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
@@ -1545,6 +1597,41 @@ UMBRIEL_TEST(outputMinWorkspacesLoadsAndRequiresDynamicWorkspaces) {
   CHECK(!store.reload().success);
   CHECK(containsDiagnostic(store, "output.DP-1.min_workspaces requires dynamic workspaces"));
   CHECK(!containsDiagnostic(store, "unknown key output.DP-1.min_workspaces"));
+}
+
+UMBRIEL_TEST(dynamicNamedWorkspaceDeclarationsReserveEmptySentinelCapacity) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  const auto declarations = [](size_t count, std::string_view prefix, std::string_view output = {}) {
+    std::string text;
+    for (size_t index = 0; index < count; ++index) {
+      text += "[[workspace]]\nname = \"" + std::string(prefix) + std::to_string(index) + "\"\n";
+      if (!output.empty()) {
+        text += "output = \"" + std::string(output) + "\"\n";
+      }
+    }
+    return text;
+  };
+
+  file.write("[output.DP-1]\nworkspaces = \"dynamic\"\n\n[[workspace]]\nname = \"chat\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().workspaceRules.size(), size_t{1});
+
+  file.write(declarations(63, "global-"));
+  CHECK(store.reload().success);
+
+  file.write(declarations(64, "global-"));
+  CHECK(!store.reload().success);
+  CHECK(containsDiagnostic(store, "exceeds the limit of 63 named workspaces for unscoped dynamic outputs"));
+
+  file.write("[workspaces]\nempty_above = true\n\n" + declarations(63, "global-"));
+  CHECK(!store.reload().success);
+  CHECK(containsDiagnostic(store, "exceeds the limit of 62 named workspaces for unscoped dynamic outputs"));
+
+  file.write(declarations(63, "left-", "DP-1") + declarations(63, "right-", "DP-2"));
+  CHECK(store.reload().success);
 }
 
 UMBRIEL_TEST(semanticColorsLoadFromTheirOwnSection) {

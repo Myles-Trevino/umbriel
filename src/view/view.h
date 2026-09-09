@@ -124,6 +124,8 @@ namespace umbriel {
     struct DisplacedHome {
       std::string outputName;
       std::string workspaceName;
+      size_t workspaceIndex = 0;
+      bool workspaceNamed = false;
       std::shared_ptr<const LayoutSnapshot> layoutSnapshot;
       LayoutMemberId layoutMember = 0;
       bool ownsNamedScrollingColumnWidth = false;

@@ -78,9 +78,15 @@ namespace umbriel {
       return true;
     }
 
-    // Resolve `<workspace>` or `<workspace>/<output>` against the current output layout. Qualified selectors address
-    // exactly one group. Unqualified selectors resolve exact names globally, using the focused output to disambiguate
-    // duplicates, then fall back to a position on the focused output.
+    std::string workspaceNameToken(std::string_view name) {
+      const bool needsQuotes =
+          !name.empty() && std::ranges::all_of(name, [](char value) { return value >= '0' && value <= '9'; });
+      return needsQuotes ? "\"" + std::string(name) + "\"" : std::string(name);
+    }
+
+    // Resolve a typed workspace reference against the current output layout. Indices stay on the preferred output;
+    // names resolve globally, using that output only to disambiguate duplicates. An output qualifier confines either
+    // kind to exactly one group.
     std::expected<Workspace*, std::string> resolveWorkspaceSelector(Server& server, const Keybind& bind) {
       const auto* selector = payloadIf<WorkspaceArg>(bind);
       if (selector == nullptr) {
@@ -95,9 +101,19 @@ namespace umbriel {
         if (group == nullptr) {
           return std::unexpected("output has no workspace group: " + selector->output);
         }
-        Workspace* target = group->workspaceForSelector(selector->name);
+        Workspace* target = nullptr;
+        std::string reference;
+        if (const auto* index = std::get_if<WorkspaceIndex>(&selector->reference)) {
+          reference = std::to_string(index->value);
+          if (index->value > 0) {
+            target = group->workspaceAtClamped(index->value - 1);
+          }
+        } else if (const auto* name = std::get_if<WorkspaceName>(&selector->reference)) {
+          reference = name->value;
+          target = group->workspaceNamed(name->value);
+        }
         if (target == nullptr) {
-          return std::unexpected("unknown workspace on output " + selector->output + ": " + selector->name);
+          return std::unexpected("unknown workspace on output " + selector->output + ": " + reference);
         }
         return target;
       }
@@ -105,11 +121,26 @@ namespace umbriel {
       Output* preferred = server.outputFromWlr(server.preferredOutput());
       WorkspaceGroup* preferredGroup = preferred != nullptr ? preferred->workspaceGroup() : nullptr;
 
+      if (const auto* index = std::get_if<WorkspaceIndex>(&selector->reference)) {
+        Workspace* target = index->value > 0 && preferredGroup != nullptr
+            ? preferredGroup->workspaceAtClamped(index->value - 1)
+            : nullptr;
+        if (target == nullptr) {
+          return std::unexpected("unknown workspace position: " + std::to_string(index->value));
+        }
+        return target;
+      }
+
+      const auto* name = std::get_if<WorkspaceName>(&selector->reference);
+      if (name == nullptr) {
+        return std::unexpected(std::string("action carries an invalid workspace selector"));
+      }
+
       Workspace* target = nullptr;
       bool ambiguous = false;
       for (const auto& output : server.outputs()) {
         WorkspaceGroup* group = output->workspaceGroup();
-        Workspace* match = group != nullptr ? group->workspaceNamed(selector->name) : nullptr;
+        Workspace* match = group != nullptr ? group->workspaceNamed(name->value) : nullptr;
         if (match == nullptr) {
           continue;
         }
@@ -121,20 +152,14 @@ namespace umbriel {
       }
 
       if (target == nullptr) {
-        target = preferredGroup != nullptr ? preferredGroup->workspaceForSelector(selector->name) : nullptr;
-        if (target == nullptr) {
-          return std::unexpected("unknown workspace: " + selector->name);
-        }
-        return target;
+        return std::unexpected("unknown workspace: " + name->value);
       }
 
       if (ambiguous) {
-        Workspace* preferredMatch =
-            preferredGroup != nullptr ? preferredGroup->workspaceNamed(selector->name) : nullptr;
+        Workspace* preferredMatch = preferredGroup != nullptr ? preferredGroup->workspaceNamed(name->value) : nullptr;
         if (preferredMatch == nullptr) {
-          return std::unexpected(
-              "ambiguous workspace: " + selector->name + " (qualify it as " + selector->name + "/<output>)"
-          );
+          const std::string token = workspaceNameToken(name->value);
+          return std::unexpected("ambiguous workspace: " + name->value + " (qualify it as " + token + "/<output>)");
         }
         return preferredMatch;
       }
@@ -1246,9 +1271,11 @@ namespace umbriel {
       if (targetGroup == nullptr) {
         return reject(error, "output has no workspace");
       }
-      Workspace* destination = targetGroup->createWorkspace(source->name().c_str());
+      Workspace* destination = targetGroup->transferDestination();
       if (destination == nullptr) {
-        return reject(error, "output workspace limit reached");
+        return reject(
+            error, targetGroup->dynamic() ? "output workspace limit reached" : "output has no empty fixed workspace"
+        );
       }
       View* focused = source->focusedView();
 

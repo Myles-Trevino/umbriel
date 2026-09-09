@@ -20,7 +20,6 @@
 
 namespace umbriel {
 
-  inline constexpr size_t kMaxWorkspaces = 64;
   struct ConfigReloadResult;
 
   // Direction along which an output's workspaces are arranged. Scrolling layouts
@@ -75,7 +74,8 @@ namespace umbriel {
     bool operator==(const WorkspaceLayoutOverrides&) const = default;
   };
 
-  // Layout rule parsed from a [[workspace]] entry. Exactly one selector is set.
+  // Rule parsed from a [[workspace]] entry. Exactly one selector is set. A
+  // name also declares a persistent member of matching dynamic inventories.
   struct WorkspaceConfig {
     std::string name;
     std::string output;       // optional output selector
@@ -90,10 +90,6 @@ namespace umbriel {
     std::string name;
     bool operator==(const ScratchpadConfig&) const = default;
   };
-
-  // A workspace position or an exact workspace name. TOML integers select by
-  // position, while TOML strings select by name even when they contain digits.
-  using WorkspaceTarget = std::variant<int, std::string>;
 
   // Fully resolved layout config. Owned by each Workspace.
   struct ResolvedLayoutConfig {
@@ -126,14 +122,18 @@ namespace umbriel {
     bool operator==(const ResolvedLayoutConfig&) const = default;
   };
 
-  // Resolved workspace entry for a specific output (name + layout config).
+  // Resolved workspace entry for a specific output. Anonymous entries use
+  // their current one-based position as the protocol label; `named` keeps an
+  // explicit configured name stable across inventory reconciliation.
   struct ResolvedWorkspace {
     std::string name;
+    bool named = false;
     ResolvedLayoutConfig layout;
     bool operator==(const ResolvedWorkspace&) const = default;
   };
   struct ResolvedWorkspaceSet {
     bool dynamic = false;
+    size_t omittedNamed = 0;
     std::vector<ResolvedWorkspace> workspaces;
     bool operator==(const ResolvedWorkspaceSet&) const = default;
   };
@@ -216,8 +216,10 @@ namespace umbriel {
     bool directScanout = true;
     HdrMode hdr = HdrMode::Off;
     float sdrWhite = 203.0F;
-    // Explicit workspace inventory. Omitted means dynamic workspaces.
-    std::optional<std::vector<std::string>> workspaces;
+    // Explicit workspace inventory. A count creates anonymous positional
+    // members, while a string list creates named members. Omitted is dynamic.
+    using WorkspaceInventory = std::variant<size_t, std::vector<std::string>>;
+    std::optional<WorkspaceInventory> workspaces;
     // Smallest workspace count a dynamic output keeps. Rejected alongside an
     // explicit inventory, which already states an exact count.
     int minWorkspaces = 1;
@@ -291,7 +293,7 @@ namespace umbriel {
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;  // column width fraction override
     std::optional<double> defaultHeight; // floating height fraction of the usable area
-    std::optional<WorkspaceTarget> defaultWorkspace;
+    std::optional<WorkspaceReference> defaultWorkspace;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
@@ -354,7 +356,7 @@ namespace umbriel {
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;
     std::optional<double> defaultHeight;
-    std::optional<WorkspaceTarget> defaultWorkspace;
+    std::optional<WorkspaceReference> defaultWorkspace;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
@@ -792,7 +794,7 @@ namespace umbriel {
     std::vector<LayerRule> layerRules;
     std::vector<SecurityContextRule> securityContextRules;
     std::vector<ScratchpadConfig> scratchpads;   // [[scratchpad]] definitions
-    std::vector<WorkspaceConfig> workspaceRules; // [[workspace]] layout rules
+    std::vector<WorkspaceConfig> workspaceRules; // [[workspace]] declarations and layout rules
 
     // True when any surface may sample the cached background blur, so every
     // output has to keep its optimized blur node alive.

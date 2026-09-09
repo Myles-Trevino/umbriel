@@ -40,10 +40,18 @@ namespace {
     return result;
   }
 
-  Keybind workspaceBind(uint32_t keysym, const std::string& name, uint32_t modifiers = 0) {
+  Keybind workspaceIndexBind(uint32_t keysym, size_t index, uint32_t modifiers = 0) {
     Keybind result = bind(KeybindAction::WorkspaceSwitch, keysym, modifiers);
     umbriel::WorkspaceArg workspace;
-    workspace.name = name;
+    workspace.reference = umbriel::WorkspaceIndex{index};
+    result.payload = std::move(workspace);
+    return result;
+  }
+
+  Keybind workspaceNameBind(uint32_t keysym, const std::string& name, uint32_t modifiers = 0) {
+    Keybind result = bind(KeybindAction::WorkspaceSwitch, keysym, modifiers);
+    umbriel::WorkspaceArg workspace;
+    workspace.reference = umbriel::WorkspaceName{name};
     result.payload = std::move(workspace);
     return result;
   }
@@ -179,8 +187,8 @@ UMBRIEL_TEST(perDigitWorkspaceBindsCollapseToOneRow) {
   for (int i = 0; i < 9; ++i) {
     const auto digit = static_cast<uint32_t>(XKB_KEY_1 + i);
     const auto keypad = static_cast<uint32_t>(XKB_KEY_KP_1 + i);
-    binds.push_back(workspaceBind(digit, std::to_string(i + 1)));
-    binds.push_back(workspaceBind(keypad, std::to_string(i + 1)));
+    binds.push_back(workspaceIndexBind(digit, static_cast<size_t>(i + 1)));
+    binds.push_back(workspaceIndexBind(keypad, static_cast<size_t>(i + 1)));
   }
 
   const auto rows = buildCheatsheetRows(binds);
@@ -192,13 +200,33 @@ UMBRIEL_TEST(perDigitWorkspaceBindsCollapseToOneRow) {
   }
 }
 
+UMBRIEL_TEST(numericWorkspaceNamesStayDistinctFromPositionalBinds) {
+  const std::vector<Keybind> binds = {
+      workspaceIndexBind(XKB_KEY_1, 2),
+      workspaceNameBind(XKB_KEY_2, "2"),
+  };
+  const auto rows = buildCheatsheetRows(binds);
+  CHECK_EQ(rows.size(), size_t{2});
+  CHECK(std::ranges::any_of(rows, [](const CheatsheetRow& row) { return row.action.ends_with(": 2"); }));
+  CHECK(std::ranges::any_of(rows, [](const CheatsheetRow& row) { return row.action.ends_with(": \"2\""); }));
+}
+
+UMBRIEL_TEST(numericNamedWorkspaceBindsDoNotCollapseAsAPositionalRun) {
+  std::vector<Keybind> binds;
+  binds.reserve(9);
+  for (int i = 0; i < 9; ++i) {
+    binds.push_back(workspaceNameBind(static_cast<uint32_t>(XKB_KEY_1 + i), std::to_string(i + 1)));
+  }
+  CHECK_EQ(buildCheatsheetRows(binds).size(), size_t{9});
+}
+
 UMBRIEL_TEST(anIncompleteWorkspaceRunIsLeftAlone) {
   // Only three digits bound: collapsing would misreport the range, so the rows
   // stay as they are.
   std::vector<Keybind> binds;
   binds.reserve(3);
   for (int i = 0; i < 3; ++i) {
-    binds.push_back(workspaceBind(static_cast<uint32_t>(XKB_KEY_1 + i), std::to_string(i + 1)));
+    binds.push_back(workspaceIndexBind(static_cast<uint32_t>(XKB_KEY_1 + i), static_cast<size_t>(i + 1)));
   }
   const auto rows = buildCheatsheetRows(binds);
   CHECK_EQ(countRows(rows, KeybindAction::WorkspaceSwitch), size_t{3});
@@ -207,7 +235,7 @@ UMBRIEL_TEST(anIncompleteWorkspaceRunIsLeftAlone) {
 UMBRIEL_TEST(workspaceRunsKeepPostActionSubmapTransitions) {
   std::vector<Keybind> binds;
   for (int i = 0; i < 9; ++i) {
-    Keybind workspace = workspaceBind(static_cast<uint32_t>(XKB_KEY_1 + i), std::to_string(i + 1));
+    Keybind workspace = workspaceIndexBind(static_cast<uint32_t>(XKB_KEY_1 + i), static_cast<size_t>(i + 1));
     workspace.submapAfter = umbriel::SubmapArg{.name = "inner"};
     binds.push_back(std::move(workspace));
   }
