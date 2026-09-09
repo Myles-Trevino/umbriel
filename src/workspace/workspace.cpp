@@ -1302,6 +1302,14 @@ namespace umbriel {
     scrolling->ensureVisible(scrolling->columnOf(m_focusedView), scrollViewportExtent());
   }
 
+  void Workspace::activateFocusedColumn() {
+    ScrollingLayout* scrolling = scrollingLayout();
+    if (scrolling == nullptr || m_group == nullptr || m_group->output() == nullptr) {
+      return;
+    }
+    scrolling->activateColumn(scrolling->columnOf(m_focusedView), scrollViewportExtent());
+  }
+
   void Workspace::snapVisible(const View* view) {
     ScrollingLayout* scrolling = scrollingLayout();
     if (scrolling == nullptr || m_group == nullptr || m_group->output() == nullptr) {

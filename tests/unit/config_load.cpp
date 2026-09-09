@@ -653,6 +653,36 @@ layout.scrolling.direction = "vertical"
   CHECK(containsDiagnostic(store, "unknown key workspace[0].layout.scrolling.direction"));
 }
 
+UMBRIEL_TEST(centerFocusedReadsItsModeVocabulary) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[layout.scrolling]
+center_focused = "on_overflow"
+
+[[workspace]]
+index = 1
+layout.scrolling.center_focused = "always"
+)");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.scrolling.centerFocused == umbriel::CenterFocusedColumn::OnOverflow);
+  CHECK_EQ(store.config().workspaceRules.size(), size_t{1});
+  CHECK(store.config().workspaceRules[0].layout.scrolling.centerFocused == umbriel::CenterFocusedColumn::Always);
+
+  file.write("[layout.scrolling]\ncenter_focused = \"sometimes\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.scrolling.centerFocused == umbriel::CenterFocusedColumn::Never);
+  CHECK(containsDiagnostic(store, R"(unknown layout.scrolling.center_focused "sometimes")"));
+  CHECK(!containsDiagnostic(store, "unknown key layout.scrolling.center_focused"));
+
+  // The old boolean form is a hard error, not a silent fallback.
+  file.write("[layout.scrolling]\ncenter_focused = false\n");
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "layout.scrolling.center_focused must be a string"));
+}
+
 UMBRIEL_TEST(modKeyIsUserConfigurable) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();

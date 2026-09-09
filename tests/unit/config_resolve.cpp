@@ -368,11 +368,11 @@ UMBRIEL_TEST(workspaceRulesCannotOverrideTheResolvedStripDirection) {
 
   WorkspaceConfig rule;
   rule.name = "dev";
-  rule.layout.scrolling.centerFocused = true;
+  rule.layout.scrolling.centerFocused = umbriel::CenterFocusedColumn::Always;
   config.workspaceRules.push_back(std::move(rule));
 
   const auto resolved = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "dev", 0);
-  CHECK(resolved.scrolling.centerFocused);
+  CHECK(resolved.scrolling.centerFocused == umbriel::CenterFocusedColumn::Always);
   CHECK(resolved.scrolling.direction == umbriel::ScrollingDirection::Vertical);
 }
 

@@ -127,7 +127,7 @@ namespace umbriel {
     case FocusReason::Startup:
     case FocusReason::XdgActivation:
     case FocusReason::ForeignActivation:
-      workspace->ensureFocusedVisible();
+      workspace->activateFocusedColumn();
       workspace->markArrange(true);
       break;
     case FocusReason::Grab:

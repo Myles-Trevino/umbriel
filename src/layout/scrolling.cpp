@@ -244,6 +244,7 @@ namespace umbriel {
       m_scroll = 0.0;
       m_centeredRest = false;
     }
+    m_lastFocusedColumn = -1;
     m_lastAvailableCross = 0;
     return true;
   }
@@ -595,7 +596,7 @@ namespace umbriel {
   }
 
   void ScrollingLayout::reconcileFocusedColumn(int columnIndex, int viewportPrimary) {
-    if (m_config->scrolling.centerFocused) {
+    if (alwaysCentersFocus()) {
       centerColumn(columnIndex, viewportPrimary);
       return;
     }
@@ -603,7 +604,45 @@ namespace umbriel {
     ensureVisible(columnIndex, viewportPrimary);
   }
 
-  double ScrollingLayout::targetScrollForEnsureVisible(int columnIndex, int viewportPrimary, bool force) const {
+  bool ScrollingLayout::alwaysCentersFocus() const {
+    return m_config->scrolling.centerFocused == CenterFocusedColumn::Always;
+  }
+
+  bool ScrollingLayout::shouldCenterFocusedColumn(int columnIndex, int viewportPrimary) const {
+    switch (m_config->scrolling.centerFocused) {
+    case CenterFocusedColumn::Always:
+      return true;
+    case CenterFocusedColumn::OnOverflow:
+      return shouldCenterOnOverflow(columnIndex, viewportPrimary);
+    case CenterFocusedColumn::Never:
+      break;
+    }
+    return false;
+  }
+
+  // Centers the column focus is moving to when it and the column on the side focus came from cannot share the
+  // viewport. The reference is the immediate neighbor, not the previously focused column, so a jump across the strip
+  // is judged by the same pair spacing as a step.
+  bool ScrollingLayout::shouldCenterOnOverflow(int columnIndex, int viewportPrimary) const {
+    const int columnCount = static_cast<int>(m_columns.size());
+    if (columnIndex < 0 || columnIndex >= columnCount) {
+      return false;
+    }
+    if (m_lastFocusedColumn < 0 || m_lastFocusedColumn >= columnCount || m_lastFocusedColumn == columnIndex) {
+      return false;
+    }
+    const int neighbor =
+        m_lastFocusedColumn > columnIndex ? std::min(columnIndex + 1, columnCount - 1) : std::max(columnIndex - 1, 0);
+    // Leading edge of the first column to trailing edge of the second, so the pair's own widths both count.
+    const int first = std::min(columnIndex, neighbor);
+    const int last = std::max(columnIndex, neighbor);
+    const int span =
+        columnX(last, viewportPrimary) - columnX(first, viewportPrimary) + columnWidth(last, viewportPrimary);
+    return span > viewportPrimary;
+  }
+
+  double
+  ScrollingLayout::targetScrollForEnsureVisible(int columnIndex, int viewportPrimary, bool center, bool force) const {
     if (columnIndex < 0 || columnIndex >= static_cast<int>(m_columns.size()) || viewportPrimary <= 0) {
       return m_scroll;
     }
@@ -615,7 +654,7 @@ namespace umbriel {
       const double cover = static_cast<double>(x) + static_cast<double>(width - viewportPrimary) / 2.0;
       return std::clamp(cover, 0.0, max);
     }
-    if (m_config->scrolling.centerFocused) {
+    if (center) {
       return static_cast<double>(x) - (viewportPrimary - width) / 2.0;
     }
     if (force) {
@@ -640,7 +679,8 @@ namespace umbriel {
     if (viewportPrimary <= 0) {
       return 0.0;
     }
-    return std::abs(targetScrollForEnsureVisible(columnIndex, viewportPrimary) - m_scroll)
+    const bool centered = shouldCenterFocusedColumn(columnIndex, viewportPrimary);
+    return std::abs(targetScrollForEnsureVisible(columnIndex, viewportPrimary, centered) - m_scroll)
         / static_cast<double>(viewportPrimary);
   }
 
@@ -664,15 +704,27 @@ namespace umbriel {
     return std::clamp(hidden, 0.0, span);
   }
 
-  void ScrollingLayout::ensureVisible(int columnIndex, int viewportPrimary) {
-    const double target = targetScrollForEnsureVisible(columnIndex, viewportPrimary, false);
-    m_centeredRest = m_config->scrolling.centerFocused || (m_centeredRest && target == m_scroll);
+  void ScrollingLayout::revealColumn(int columnIndex, int viewportPrimary, bool center) {
+    const double target = targetScrollForEnsureVisible(columnIndex, viewportPrimary, center, false);
+    m_centeredRest = center || (m_centeredRest && target == m_scroll);
     m_scroll = target;
   }
 
+  void ScrollingLayout::ensureVisible(int columnIndex, int viewportPrimary) {
+    revealColumn(columnIndex, viewportPrimary, alwaysCentersFocus());
+  }
+
+  void ScrollingLayout::activateColumn(int columnIndex, int viewportPrimary) {
+    revealColumn(columnIndex, viewportPrimary, shouldCenterFocusedColumn(columnIndex, viewportPrimary));
+    if (columnIndex >= 0) {
+      m_lastFocusedColumn = columnIndex;
+    }
+  }
+
   void ScrollingLayout::snapVisible(int columnIndex, int viewportPrimary) {
-    m_centeredRest = m_config->scrolling.centerFocused;
-    m_scroll = targetScrollForEnsureVisible(columnIndex, viewportPrimary, true);
+    const bool centered = alwaysCentersFocus();
+    m_centeredRest = centered;
+    m_scroll = targetScrollForEnsureVisible(columnIndex, viewportPrimary, centered, true);
   }
 
   void ScrollingLayout::arrange(const wlr_box& usable) {
