@@ -534,6 +534,11 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 	}
 }
 
+static float srgb_to_linear(float electrical) {
+	return electrical <= 0.04045f ? electrical / 12.92f :
+		powf((electrical + 0.055f) / 1.055f, 2.4f);
+}
+
 bool fx_render_pass_end_animation_shadow(struct fx_gles_render_pass *pass,
 		float softness, float offset_x, float offset_y, const float color[4],
 		const pixman_region32_t *clip) {
@@ -619,7 +624,8 @@ bool fx_render_pass_end_animation_shadow(struct fx_gles_render_pass *pass,
 		offset_x / full.width, offset_y / full.height);
 	float premult[4] = { color[0], color[1], color[2], color[3] };
 	for (unsigned i = 0; i < 3; i++) {
-		premult[i] = (pass->has_color_transform ? powf(premult[i], 2.2f) : premult[i]) * premult[3];
+		premult[i] = (pass->has_color_transform ?
+			srgb_to_linear(premult[i]) : premult[i]) * premult[3];
 	}
 	glUniform4fv(glGetUniformLocation(vertical->program, "shadow_color"), 1, premult);
 	glActiveTexture(GL_TEXTURE1);
@@ -650,7 +656,8 @@ static void render_pass_mark_updated(struct fx_gles_render_pass *pass,
 }
 
 static float color_to_linear_premult(float electrical, float alpha) {
-	return alpha == 0.0f ? 0.0f : powf(electrical / alpha, 2.2f) * alpha;
+	return alpha == 0.0f ? 0.0f :
+		srgb_to_linear(electrical / alpha) * alpha;
 }
 
 static struct wlr_render_color pass_color(struct fx_gles_render_pass *pass,
@@ -1067,10 +1074,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 		color_primaries_equal(options->primaries, &primaries_srgb);
 	const enum wlr_color_transfer_function source_tf = options->transfer_function != 0
 		? options->transfer_function
-		: WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+		: WLR_COLOR_TRANSFER_FUNCTION_SRGB;
 	const enum wlr_color_transfer_function target_tf = pass->has_color_transform
 		? WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR
-		: WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+		: WLR_COLOR_TRANSFER_FUNCTION_SRGB;
 	const bool color_passthrough = source_tf == target_tf &&
 		primaries_passthrough && lum_multiplier == 1.0f;
 
@@ -1147,7 +1154,7 @@ static struct fx_framebuffer *animation_backdrop(struct fx_gles_render_pass *pas
 			.texture = texture,
 			.dst_box = { .width = target->buffer->width, .height = target->buffer->height },
 			.transfer_function = pass->has_color_transform ? WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR
-				: WLR_COLOR_TRANSFER_FUNCTION_GAMMA22,
+				: WLR_COLOR_TRANSFER_FUNCTION_SRGB,
 			.blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
 		};
 		struct fx_render_texture_options fx_options = fx_render_texture_options_default(&options);

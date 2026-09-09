@@ -3524,10 +3524,9 @@ static bool color_management_is_scanout_allowed(const struct wlr_output_image_de
 		return img_desc->transfer_function == buffer->transfer_function &&
 				img_desc->primaries == buffer->primaries;
 	}
-	// If the output doesn't have colorimetry image description set, we can only
-	// scan out buffers with default colorimetry (gamma2.2 transfer and sRGB
-	// primaries) used in wlroots.
-	return buffer->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_GAMMA22 &&
+	// If the output doesn't have an image description, only the implicit
+	// sRGB color space can be scanned out without conversion.
+	return buffer->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_SRGB &&
 			buffer->primaries == WLR_COLOR_NAMED_PRIMARIES_SRGB;
 }
 
@@ -3858,7 +3857,7 @@ static bool scene_output_combine_color_transforms(
 		inv_eotf = wlr_color_transform_ref(supplied);
 	} else {
 		inv_eotf = wlr_color_transform_init_linear_to_inverse_eotf(
-			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
+			WLR_COLOR_TRANSFER_FUNCTION_SRGB);
 		if (inv_eotf == NULL) {
 			goto cleanup_transforms;
 		}

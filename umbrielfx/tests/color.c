@@ -305,10 +305,6 @@ static float linear_to_srgb(float value) {
 		1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
 }
 
-static float linear_to_gamma22(float value) {
-	return powf(fmaxf(value, 0.0f), 1.0f / 2.2f);
-}
-
 static float linear_to_pq(float value) {
 	const float c1 = 0.8359375f;
 	const float c2 = 18.8515625f;
@@ -384,25 +380,25 @@ static bool codes_close(const uint8_t actual[static 4],
 	return true;
 }
 
-static bool test_legacy_gamma22_target(struct fixture *fixture) {
-	const uint8_t input[4] = { 26, 64, 128, 255 };
+static bool test_implicit_srgb_target(struct fixture *fixture) {
+	const uint8_t input[4] = { 17, 17, 45, 255 };
 	uint8_t implicit_output[4] = {0};
 	uint8_t explicit_output[4] = {0};
 	struct wlr_color_primaries srgb;
 	wlr_color_primaries_from_named(&srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
 	struct wlr_color_transform *transform =
 		wlr_color_transform_init_linear_to_inverse_eotf(
-			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
-	bool ok = check(transform != NULL, "create Gamma 2.2 output transform") &&
+			WLR_COLOR_TRANSFER_FUNCTION_SRGB);
+	bool ok = check(transform != NULL, "create sRGB output transform") &&
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
-			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22, &srgb,
+			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb,
 			NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4,
 			implicit_output) &&
 		codes_close(implicit_output, input, 0) &&
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
-			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22, &srgb,
+			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb,
 			NULL, transform, NULL, false, DRM_FORMAT_ABGR8888, 4,
 			explicit_output) &&
 		codes_close(explicit_output, implicit_output, 1);
@@ -410,22 +406,23 @@ static bool test_legacy_gamma22_target(struct fixture *fixture) {
 	return ok;
 }
 
-static bool test_srgb_to_gamma22(struct fixture *fixture) {
-	const uint8_t input[4] = { 26, 64, 128, 255 };
-	uint8_t expected[4] = {0};
-	for (size_t i = 0; i < 3; i++) {
-		expected[i] = to_u8(linear_to_gamma22(
-			srgb_to_linear((float)input[i] / 255.0f)));
-	}
-	expected[3] = 255;
-
-	uint8_t output[4] = {0};
+static bool test_gamma22_to_srgb(struct fixture *fixture) {
+	const uint8_t dark_input[4] = { 24, 24, 49, 255 };
+	const uint8_t dark_expected[4] = { 17, 17, 45, 255 };
+	uint8_t dark_output[4] = {0};
+	const uint8_t yellow_input[4] = { 255, 245, 154, 255 };
+	const uint8_t yellow_expected[4] = { 255, 245, 155, 255 };
+	uint8_t yellow_output[4] = {0};
 	struct wlr_color_primaries srgb;
 	wlr_color_primaries_from_named(&srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
 	return render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
-		DRM_FORMAT_ABGR8888, 4, input, WLR_COLOR_TRANSFER_FUNCTION_SRGB,
-		&srgb, NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4, output) &&
-		codes_close(output, expected, 1);
+		DRM_FORMAT_ABGR8888, 4, dark_input, WLR_COLOR_TRANSFER_FUNCTION_GAMMA22,
+		&srgb, NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4, dark_output) &&
+		codes_close(dark_output, dark_expected, 1) &&
+		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
+			DRM_FORMAT_ABGR8888, 4, yellow_input, WLR_COLOR_TRANSFER_FUNCTION_GAMMA22,
+			&srgb, NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4, yellow_output) &&
+		codes_close(yellow_output, yellow_expected, 1);
 }
 
 static bool test_pq_roundtrip(struct fixture *fixture) {
@@ -1229,10 +1226,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	bool ok;
-	if (strcmp(argv[1], "legacy-gamma22-target") == 0) {
-		ok = test_legacy_gamma22_target(&fixture);
-	} else if (strcmp(argv[1], "srgb-to-gamma22") == 0) {
-		ok = test_srgb_to_gamma22(&fixture);
+	if (strcmp(argv[1], "implicit-srgb-target") == 0) {
+		ok = test_implicit_srgb_target(&fixture);
+	} else if (strcmp(argv[1], "gamma22-to-srgb") == 0) {
+		ok = test_gamma22_to_srgb(&fixture);
 	} else if (strcmp(argv[1], "pq-roundtrip") == 0) {
 		ok = test_pq_roundtrip(&fixture);
 	} else if (strcmp(argv[1], "bt2020-to-srgb") == 0) {

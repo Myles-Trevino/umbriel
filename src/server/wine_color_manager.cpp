@@ -1028,7 +1028,7 @@ namespace umbriel {
         float luminanceMultiplier;
       } context{
           .surface = surface,
-          .transferFunction = WLR_COLOR_TRANSFER_FUNCTION_GAMMA22,
+          .transferFunction = WLR_COLOR_TRANSFER_FUNCTION_SRGB,
           .primaries = WLR_COLOR_NAMED_PRIMARIES_SRGB,
           .luminanceMultiplier = 1.0F,
       };

@@ -193,8 +193,8 @@ if build_tests
     build_by_default: false,
   )
   foreach case_name : [
-    'legacy-gamma22-target',
-    'srgb-to-gamma22',
+    'implicit-srgb-target',
+    'gamma22-to-srgb',
     'pq-roundtrip',
     'bt2020-to-srgb',
     'fp16-blending',
