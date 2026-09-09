@@ -41,6 +41,7 @@ and positions when the output becomes available again.
 | `direct_scanout` | bool | `true` | Allow eligible fullscreen buffers to bypass composition. |
 | `hdr` | string | `"off"` | HDR activation policy. |
 | `sdr_white` | float | `203` | SDR reference white in cd/m² while HDR is active. |
+| `bit_depth` | int | `8` | Render bit depth for SDR output: `8` or `10`. |
 | `workspaces` | int, string array, or `"dynamic"` | `"dynamic"` | Workspace inventory for this output. |
 | `min_workspaces` | int | `1` | Minimum count for a dynamic output. |
 | `workspace_axis` | string | `"vertical"` | Workspace arrangement axis. |
@@ -174,6 +175,45 @@ session environment values.
 
 Screenshots from normal screencopy clients receive an SDR view while HDR is
 active.
+
+### Bit depth
+
+Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
+
+```toml
+[output.DP-1]
+bit_depth = 10
+```
+
+Selects a 10-bit format XR30 (`DRM_FORMAT_XRGB2101010`) or
+XB30 (`DRM_FORMAT_XBGR2101010`) as the render format when the backend accepts
+it. If neither is accepted, the output falls back to 8-bit. While a 10-bit
+format is active, blur and effects intermediate buffers are upgraded to FP16
+precision, provided the renderer supports FP16 render targets. Otherwise,
+they remain 8-bit. HDR uses 10-bit independently of this setting.
+
+`bit_depth = 10` controls the compositor render format only. It does not
+guarantee that the physical display link runs at 10 bits per channel. The
+number of bits delivered to the panel depends on the display's EDID, cable,
+and driver. Run `umbriel color` to confirm the active render format that the
+compositor committed.
+
+**VRR fallback.** When VRR is also requested, the format sequence first
+attempts the 10-bit format with VRR enabled. If the backend rejects that
+combination, it retries the same 10-bit format with VRR disabled. Only when
+both fail does Umbriel fall back to 8-bit.
+
+**Direct scanout.** Direct scanout remains enabled by the `direct_scanout`
+setting, but it may be  less likely to engage while 10-bit rendering is
+active. Direct scanout requires the client buffer format to exactly match
+what KMS accepts for the plane. Set `direct_scanout = false` explicitly if
+you want to suppress the condition check.
+
+**Screencopy and capture.** Screencopy clients such as `grim` and Noctalia
+receive raw buffers in the output's active 10-bit render format (XR30 or XB30)
+when 10-bit SDR is active. Unlike HDR capture, the pixels are not converted to
+an 8-bit SDR format first. Tools that do not handle 10-bit formats may produce
+undesired output. Use a bit depth of 8 if you encounter issues.
 
 ## Disabling an output
 

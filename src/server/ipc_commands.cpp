@@ -268,16 +268,32 @@ namespace umbriel {
       );
       for (const auto& output : ok.at("outputs")) {
         const std::string fallback = output.value("fallback_reason", "");
+        const bool hdrActive = output.value("hdr_active", false);
         std::println(
             "output {}: HDR mode {}, requested {}, active {}, format {}, {}, {}, SDR white {} cd/m2",
             output.value("name", ""), output.value("hdr_mode", "off"),
-            output.value("hdr_requested", false) ? "yes" : "no", output.value("hdr_active", false) ? "yes" : "no",
+            output.value("hdr_requested", false) ? "yes" : "no", hdrActive ? "yes" : "no",
             output.value("render_format", "invalid"), output.value("transfer_function", "none"),
             output.value("primaries", "none"), output.value("sdr_white", 0.0)
         );
+
         if (!fallback.empty()) {
           std::println("  fallback: {}", fallback);
         }
+
+        const int configuredDepth = output.value("configured_bit_depth", 8);
+        const int activeDepth = hdrActive || output.value("sdr10_active", false) ? 10 : 8;
+        std::println("  bit depth: {} (configured {})", activeDepth, configuredDepth);
+
+        if (configuredDepth != 8) {
+          const std::string bitFallback = output.value("bit_depth_fallback_reason", "");
+          if (!bitFallback.empty()) {
+            std::println("  10-bit SDR unavailable: {}", bitFallback);
+          } else if (output.value("sdr10_active", false)) {
+            std::println("  10-bit SDR: active");
+          }
+        }
+
         std::println(
             "  supported transfer functions: {}; primaries: {}", joinNames(output.at("supported_transfer_functions")),
             joinNames(output.at("supported_primaries"))
@@ -456,6 +472,9 @@ namespace umbriel {
           {"transfer_function", description != nullptr ? transferFunctionName(description->transfer_function) : "none"},
           {"primaries", description != nullptr ? primariesName(description->primaries) : "none"},
           {"sdr_white", output->configuredSdrWhite()},
+          {"configured_bit_depth", output->configuredBitDepth()},
+          {"sdr10_active", output->tenBitSdrActive()},
+          {"bit_depth_fallback_reason", output->tenBitSdrFallbackReason()},
           {"supported_transfer_functions", supportedTransferFunctions(wlrOutput->supported_transfer_functions)},
           {"supported_primaries", supportedPrimaries(wlrOutput->supported_primaries)},
       });
