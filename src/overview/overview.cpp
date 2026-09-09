@@ -2774,7 +2774,7 @@ namespace umbriel {
 
   void Overview::hideDropHint() {
     if (m_dropHint != nullptr) {
-      m_dropHint->hide();
+      m_dropHint->hideImmediate();
     }
   }
 
