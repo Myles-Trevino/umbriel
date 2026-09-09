@@ -128,9 +128,10 @@ checks print their whole output. A failing check keeps its runtime directory
 
 ## Running
 
-Installed display-manager sessions start through `start-umbriel`. On systemd,
-it runs the compositor as a user service so applications inherit
-`environment.d`; other init systems fall back to the compositor binary.
+Installed display-manager sessions start through `start-umbriel`. For supported
+account shells, it loads the noninteractive login environment, then runs the
+compositor as a user service on systemd or directly on other init systems.
+Systemd sessions also inherit `environment.d`.
 
 Start an installed native session from a TTY with:
 

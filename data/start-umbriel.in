@@ -1,5 +1,6 @@
 #!/bin/sh
 
+drs=
 if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] &&
    command -v dbus-run-session >/dev/null 2>&1; then
     drs=dbus-run-session
@@ -9,9 +10,52 @@ if [ -n "${MANAGERPID:-}" ] && [ "${SYSTEMD_EXEC_PID:-}" = "$$" ]; then
   exec ${drs} @UMBRIEL_EXECUTABLE@ "$@"
 fi
 
-if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${WAYLAND_SOCKET:-}" ] ||
-  [ -n "${DISPLAY:-}" ]; then
-  exec ${drs} @UMBRIEL_EXECUTABLE@ "$@"
+login_reentry=false
+if [ "${1:-}" = "__umbriel_login_shell" ]; then
+  login_reentry=true
+  shift
+  unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY UMBRIEL_SOCKET \
+    XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
+fi
+
+if [ "$login_reentry" = false ]; then
+  if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${WAYLAND_SOCKET:-}" ] ||
+    [ -n "${DISPLAY:-}" ]; then
+    exec ${drs} @UMBRIEL_EXECUTABLE@ "$@"
+  fi
+
+  login_shell_kind=
+  if [ -n "${SHELL:-}" ] && [ -x "$SHELL" ] && [ -r /etc/shells ]; then
+    case "${SHELL##*/}" in
+      fish) login_shell_kind=fish ;;
+      ash | bash | dash | ksh | ksh93 | mksh | oksh | sh | yash | zsh)
+        login_shell_kind=bourne
+        ;;
+    esac
+    if [ -n "$login_shell_kind" ]; then
+      shell_listed=false
+      while IFS= read -r candidate; do
+        if [ "$candidate" = "$SHELL" ]; then
+          shell_listed=true
+          break
+        fi
+      done < /etc/shells
+      if [ "$shell_listed" = false ]; then
+        login_shell_kind=
+      fi
+    fi
+  fi
+
+  # A display manager starts the session launcher directly. Enter the user's
+  # shell once so its noninteractive login profile can extend the environment.
+  case "$login_shell_kind" in
+    fish)
+      exec "$SHELL" -l -c 'exec $argv' "$0" __umbriel_login_shell "$@"
+      ;;
+    bourne)
+      exec "$SHELL" -l -c 'exec "$@"' "$SHELL" "$0" __umbriel_login_shell "$@"
+      ;;
+  esac
 fi
 
 if ! command -v systemctl >/dev/null 2>&1 ||
@@ -25,8 +69,8 @@ if systemctl --user --quiet is-active umbriel.service; then
 fi
 
 systemctl --user reset-failed
-systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP \
-  XDG_SESSION_DESKTOP XDG_SESSION_TYPE UMBRIEL_SOCKET
+systemctl --user unset-environment WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY \
+  XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE UMBRIEL_SOCKET
 awk 'BEGIN {
   for (name in ENVIRON) {
     if (name != "AWKPATH" && name != "AWKLIBPATH" &&
@@ -42,7 +86,7 @@ systemctl --user --wait start umbriel.service
 umbriel_status=$?
 
 systemctl --user start --job-mode=replace-irreversibly umbriel-shutdown.target
-systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP \
-  XDG_SESSION_DESKTOP XDG_SESSION_TYPE UMBRIEL_SOCKET
+systemctl --user unset-environment WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY \
+  XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE UMBRIEL_SOCKET
 
 exit "$umbriel_status"

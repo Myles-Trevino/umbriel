@@ -619,7 +619,7 @@ umbriel_session_config.set(
   'UMBRIEL_EXECUTABLE',
   get_option('prefix') / get_option('bindir') / 'umbriel',
 )
-configure_file(
+start_umbriel = configure_file(
   input: 'data/start-umbriel.in',
   output: 'start-umbriel',
   configuration: umbriel_session_config,
@@ -627,6 +627,20 @@ configure_file(
   install_dir: get_option('bindir'),
   install_mode: 'rwxr-xr-x',
 )
+if build_tests
+  test_session_config = configuration_data()
+  test_session_config.set('UMBRIEL_EXECUTABLE', '/bin/sh')
+  test_start_umbriel = configure_file(
+    input: 'data/start-umbriel.in',
+    output: 'test-start-umbriel',
+    configuration: test_session_config,
+  )
+  test(
+    'session-launcher',
+    find_program('bash'),
+    args: [files('tests/session_launcher.sh'), start_umbriel, test_start_umbriel],
+  )
+endif
 configure_file(
   input: 'data/umbriel.service.in',
   output: 'umbriel.service',

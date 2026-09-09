@@ -51,8 +51,9 @@ honor_restored_maximize = false                 # Honor restored maximized state
 # ignored_pci_addresses = ["0000:01:00.0"]
 
 # Session environment
-# Values apply only at session startup. Native sessions also publish them to
-# newly started systemd user services. Add or uncomment values as needed.
+# Native launcher sessions first load the user's supported login profile.
+# Values here override inherited values and are published to new systemd user
+# services. They apply only at session startup. Add or uncomment as needed.
 # Documentation: https://docs.noctalia.dev/umbriel/configuration/#environment
 
 [environment]

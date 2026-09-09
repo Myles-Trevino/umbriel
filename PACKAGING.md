@@ -183,8 +183,19 @@ Install `umbriel.desktop` under `share/wayland-sessions` so display managers
 can discover the session. It invokes `start-umbriel`, which uses the systemd
 user manager when available and directly executes Umbriel otherwise.
 
-The managed path imports the display manager environment and starts
-`umbriel.service`. The service naturally inherits variables generated from
+For native launches with a supported account shell listed in `/etc/shells`,
+`start-umbriel` first enters that shell as a noninteractive login shell. This
+loads exported values from shell-specific login files such as zsh's
+`~/.zprofile`, while interactive files such as `~/.zshrc` remain outside the
+session startup path. The direct fallback inherits that environment after
+discarding graphical variables owned by the new session.
+
+An external service manager can invoke `start-umbriel` as its service process.
+That fast path does not enter the login shell and instead preserves the
+manager-provided environment.
+
+The managed path imports the resulting login environment and starts
+`umbriel.service`. The service also inherits variables generated from
 `environment.d`. Once ready, Umbriel publishes its graphical session variables
 and validated `[environment]` assignments to the systemd user manager, then
 starts `umbriel-session.target`. Arbitrary configured values are not copied to
