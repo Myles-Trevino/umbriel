@@ -99,6 +99,8 @@ namespace umbriel {
         View* view, std::optional<double> initialWidth = std::nullopt,
         std::optional<int> initialPixelWidth = std::nullopt
     );
+    // True when attaching `joining` leaves it the only tiled window. Used before map to seed the alone width.
+    [[nodiscard]] bool wouldBeAloneAfterAttach(const View* joining = nullptr) const;
     // Predict the first configure by applying the same insertion and full-width
     // transition that the mapped path will use on the authoritative layout.
     [[nodiscard]] Layout::InitialSize initialMaximizedSize(View* view, const wlr_box& usable) const;

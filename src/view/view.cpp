@@ -58,6 +58,30 @@ namespace umbriel {
       return rule.defaultSize ? std::optional<int>((*rule.defaultSize)[0]) : std::nullopt;
     }
 
+    // Opening resolves rules before the view is in the layout, where `isAloneInLayout` is false,
+    // so the alone state is forced explicitly here.
+    ResolvedWindowRule resolveRulesForAloneState(
+        wlr_xdg_toplevel* toplevel, const std::optional<std::string>& xdgTag, ContentType contentType,
+        WindowRuleState state, bool alone, uint64_t uptimeMs
+    ) {
+      state.alone = alone;
+      return resolveWindowRules(
+          config(), ruleText(toplevel->app_id), ruleText(toplevel->title), xdgTag, contentType, state, uptimeMs
+      );
+    }
+
+    // Seeds the first attach width alone-matched when this would be the only tiled window, else the not-alone width.
+    std::optional<double> aloneAwareAttachWidth(
+        wlr_xdg_toplevel* toplevel, const std::optional<std::string>& xdgTag, ContentType contentType,
+        const WindowRuleState& state, Workspace* target, const View* joining, const ResolvedWindowRule& fallback,
+        uint64_t uptimeMs
+    ) {
+      if (target != nullptr && target->wouldBeAloneAfterAttach(joining)) {
+        return resolveRulesForAloneState(toplevel, xdgTag, contentType, state, true, uptimeMs).defaultWidth;
+      }
+      return fallback.defaultWidth;
+    }
+
     constexpr int contentTypePriority(ContentType type) {
       switch (type) {
       case ContentType::Game:
@@ -365,7 +389,10 @@ namespace umbriel {
     if (m_workspace != target) {
       return false;
     }
-    target->layoutAttach(this, rule.defaultWidth, defaultSizeWidth(rule));
+    const std::optional<double> attachWidth = aloneAwareAttachWidth(
+        m_toplevel, m_xdgTag, m_contentType, ruleState(), target, this, rule, m_server->uptimeMs()
+    );
+    target->layoutAttach(this, attachWidth, defaultSizeWidth(rule));
     return true;
   }
 
@@ -1074,11 +1101,14 @@ namespace umbriel {
     return diff;
   }
 
-  // Applies one effect at a time, in the same order as at map time. Returns whether the effect was applied: if the
-  // window is already there, or the layout cannot do it, nothing is claimed and leaving alone will not undo anything.
+  // Applies one alone effect at a time, earliest first. Declining when the window is already in that state (or the
+  // layout cannot do it) claims nothing, so leaving alone does not undo what the user or another rule chose. The
+  // opening configure is the exception: it seeded the state from the alone rule, so the map-time effect claims it.
   bool View::applyAloneRuleEffects(const ResolvedWindowRule& delta) {
     if (delta.defaultFullscreen && *delta.defaultFullscreen) {
-      if (m_toplevel->scheduled.fullscreen) {
+      // The opening configure may have seeded fullscreen from the alone rule: claim it at map time unless the client
+      // itself requested the state (its request can also arrive after the opening configure).
+      if (m_toplevel->scheduled.fullscreen && !(m_aloneOpeningStateMustClaim && !m_toplevel->requested.fullscreen)) {
         return false;
       }
       setFullscreen(true);
@@ -1094,7 +1124,8 @@ namespace umbriel {
       return true;
     }
     if (m_toplevel->parent == nullptr && delta.defaultMaximize && *delta.defaultMaximize) {
-      if (m_toplevel->scheduled.maximized) {
+      // Same as fullscreen: claim the alone-rule seed only when the client did not request the state itself.
+      if (m_toplevel->scheduled.maximized && !(m_aloneOpeningStateMustClaim && !m_toplevel->requested.maximized)) {
         return false;
       }
       setMaximized(true);
@@ -1133,7 +1164,8 @@ namespace umbriel {
   void View::revertAloneRuleEffects() {
     switch (m_aloneAction) {
     case AloneAction::Fullscreen:
-      if (m_toplevel->scheduled.fullscreen) {
+      // Leave a fullscreen the client itself asked for: the alone rule must not undo a client-chosen state.
+      if (m_toplevel->scheduled.fullscreen && !m_toplevel->requested.fullscreen) {
         setFullscreen(false);
       }
       break;
@@ -1143,7 +1175,7 @@ namespace umbriel {
       }
       break;
     case AloneAction::Maximize:
-      if (m_toplevel->scheduled.maximized && !m_maximizedToEdges) {
+      if (m_toplevel->scheduled.maximized && !m_maximizedToEdges && !m_toplevel->requested.maximized) {
         setMaximized(false);
       }
       break;
@@ -2112,7 +2144,8 @@ namespace umbriel {
 
     // Resolve window rules and apply one-shot effects. Copied, not referenced: the calls below can reach
     // setBorderFocused and re-resolve into the same cache slot, which would change this value underneath the code still
-    // using it.
+    // using it. Resolved before layoutAttach while alone is still false, so alone-only sizes never become the
+    // one-shot baseline recorded for late title settlement.
     const ResolvedWindowRule rule = resolvedRules();
     m_initialRules = rule;
     m_initialRulesXdgTag = m_xdgTag;
@@ -2129,7 +2162,12 @@ namespace umbriel {
     showDecorations(!m_toplevel->scheduled.fullscreen);
 
     if (m_workspace != nullptr) {
-      m_workspace->layoutAttach(this, rule.defaultWidth, defaultSizeWidth(rule));
+      const std::optional<double> attachWidth = m_tiled
+          ? aloneAwareAttachWidth(
+                m_toplevel, m_xdgTag, m_contentType, ruleState(), m_workspace, this, rule, m_server->uptimeMs()
+            )
+          : rule.defaultWidth;
+      m_workspace->layoutAttach(this, attachWidth, defaultSizeWidth(rule));
     } else if (!attachToAvailableWorkspace(rule)) {
       setOnActiveWorkspace(true);
     }
@@ -2186,6 +2224,11 @@ namespace umbriel {
     if (rule.defaultFullscreen && *rule.defaultFullscreen) {
       setFullscreen(true);
     }
+
+    // Claim map-time alone effects now that the view is in the layout. The opening seed is single-use: it is cleared
+    // here so it never claims a state the user or client chose later.
+    notifyAloneStateChanged();
+    m_aloneOpeningStateMustClaim = false;
 
     if (transientParent() != nullptr) {
       raiseToTop();
@@ -2340,6 +2383,7 @@ namespace umbriel {
     m_aloneAction = AloneAction::None;
     m_lastAloneDelta = {};
     m_aloneSavedWidthFrac.reset();
+    m_aloneOpeningStateMustClaim = false;
     m_hasMaximizeRestoreBox = false;
     m_floating.clearSizeRequest();
     if (m_displacedHome) {
@@ -2418,14 +2462,8 @@ namespace umbriel {
     }
     if (m_toplevel->base->initial_commit || reconfigureOpeningState) {
       // Resolve window rules early to influence initial tiled/float decision and size.
-      const ResolvedWindowRule rule = resolvedRules();
+      ResolvedWindowRule rule = resolvedRules();
       const bool wantTiled = rule.defaultFloating ? !*rule.defaultFloating : looksTiled(m_toplevel);
-      const bool wantFullscreen =
-          m_toplevel->requested.fullscreen || (rule.defaultFullscreen && *rule.defaultFullscreen);
-      const bool wantMaximizeToEdges = rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges;
-      const bool wantMaximized = (m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize)
-          || wantMaximizeToEdges
-          || (config().general.honorRestoredMaximize && m_toplevel->requested.maximized);
 
       // Resolve the workspace this view will attach to, so the output and layout that will actually arrange it are the
       // ones that size the first configure.
@@ -2437,6 +2475,40 @@ namespace umbriel {
       if (target == nullptr) {
         target = windowRuleWorkspace(targetGroup, rule);
       }
+
+      // If this would be the only tiled window, seed the first configure with the alone size/state so it opens without a
+      // flash, and remember the claim so the map-time effect applies the layout side.
+      ResolvedWindowRule aloneRule;
+      const bool willBeAlone = wantTiled && (target == nullptr || target->wouldBeAloneAfterAttach(this));
+      if (willBeAlone) {
+        aloneRule = resolveRulesForAloneState(
+            m_toplevel, m_xdgTag, m_contentType, ruleState(), true, m_server->uptimeMs()
+        );
+        rule.defaultWidth = aloneRule.defaultWidth;
+      }
+
+      const bool nonAloneFullscreen = rule.defaultFullscreen && *rule.defaultFullscreen;
+      const bool nonAloneMaximize = m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize;
+      const bool aloneFullscreen = willBeAlone && aloneRule.defaultFullscreen && *aloneRule.defaultFullscreen;
+      const bool aloneMaximize =
+          willBeAlone && m_toplevel->parent == nullptr && aloneRule.defaultMaximize && *aloneRule.defaultMaximize;
+      const bool wantFullscreen =
+          m_toplevel->requested.fullscreen || nonAloneFullscreen || aloneFullscreen;
+      const bool wantMaximizeToEdges = (rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges)
+          || (willBeAlone && aloneRule.defaultMaximizeToEdges && *aloneRule.defaultMaximizeToEdges);
+      const bool wantMaximized = nonAloneMaximize
+          || aloneMaximize
+          || wantMaximizeToEdges
+          || (config().general.honorRestoredMaximize && m_toplevel->requested.maximized);
+
+      // Only a state the alone rule alone seeded into the first configure is claimed; client or non-alone rule
+      // ownership stays with them.
+      if (willBeAlone && !m_mapped) {
+        m_aloneOpeningStateMustClaim =
+            (aloneFullscreen && !m_toplevel->requested.fullscreen && !nonAloneFullscreen)
+            || (aloneMaximize && !m_toplevel->requested.maximized && !nonAloneMaximize);
+      }
+
       Output* targetOutput = targetGroup != nullptr ? targetGroup->output() : preferred;
 
       wlr_xdg_toplevel_set_tiled(

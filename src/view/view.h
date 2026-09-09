@@ -462,6 +462,8 @@ namespace umbriel {
     AloneAction m_aloneAction = AloneAction::None;
     ResolvedWindowRule m_lastAloneDelta;
     std::optional<double> m_aloneSavedWidthFrac;
+    // Set by the opening configure when an alone-only rule seeded fullscreen or maximize; consumed and cleared at map.
+    bool m_aloneOpeningStateMustClaim = false;
     // One-shot effects already applied at map. Late identity resolution only
     // reapplies a field when its resolved value changes.
     ResolvedWindowRule m_initialRules;
