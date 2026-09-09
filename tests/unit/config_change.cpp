@@ -668,6 +668,22 @@ UMBRIEL_TEST(tearingPolicyDoesNotReapplyOutputStateOrInvalidateOverview) {
   changedContentMatcher.windowRules[0].matchContentType = ContentType::Video;
   CHECK(ConfigEffects::between(forcedByRule, changedContentMatcher).tearingPolicy);
 
+  Config changedFloatingMatcher = forcedByRule;
+  changedFloatingMatcher.windowRules[0].matchFloating = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedFloatingMatcher).tearingPolicy);
+
+  Config changedPinnedMatcher = forcedByRule;
+  changedPinnedMatcher.windowRules[0].matchPinned = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedPinnedMatcher).tearingPolicy);
+
+  Config changedScratchpadMatcher = forcedByRule;
+  changedScratchpadMatcher.windowRules[0].matchScratchpad = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedScratchpadMatcher).tearingPolicy);
+
+  Config changedAloneMatcher = forcedByRule;
+  changedAloneMatcher.windowRules[0].matchAlone = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedAloneMatcher).tearingPolicy);
+
   Config changedTagMatcher = forcedByRule;
   changedTagMatcher.windowRules[0].xdgTagPattern = "^game-launcher$";
   changedTagMatcher.windowRules[0].xdgTagRegex = std::regex(changedTagMatcher.windowRules[0].xdgTagPattern);

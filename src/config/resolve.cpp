@@ -114,9 +114,6 @@ namespace umbriel {
       if (overrides.dwindle.preserveSplit) {
         resolved.dwindle.preserveSplit = *overrides.dwindle.preserveSplit;
       }
-      if (overrides.scrolling.expandSingleColumn) {
-        resolved.scrolling.expandSingleColumn = *overrides.scrolling.expandSingleColumn;
-      }
       if (overrides.master.defaultWidthFraction) {
         resolved.master.defaultWidthFraction = *overrides.master.defaultWidthFraction;
       }
@@ -204,7 +201,7 @@ namespace umbriel {
 
   ResolvedWindowRule resolveWindowRules(
       const Config& config, std::optional<std::string_view> appId, std::optional<std::string_view> title,
-      std::optional<std::string_view> xdgTag, ContentType contentType, bool focused, uint64_t uptimeMs
+      std::optional<std::string_view> xdgTag, ContentType contentType, const WindowRuleState& state, uint64_t uptimeMs
   ) {
     ResolvedWindowRule resolved;
 
@@ -217,7 +214,19 @@ namespace umbriel {
       if (rule.matchContentType && *rule.matchContentType != contentType) {
         continue;
       }
-      if (rule.matchFocused && *rule.matchFocused != focused) {
+      if (rule.matchFocused && *rule.matchFocused != state.focused) {
+        continue;
+      }
+      if (rule.matchFloating && *rule.matchFloating != state.floating) {
+        continue;
+      }
+      if (rule.matchPinned && *rule.matchPinned != state.pinned) {
+        continue;
+      }
+      if (rule.matchScratchpad && *rule.matchScratchpad != state.scratchpad) {
+        continue;
+      }
+      if (rule.matchAlone && *rule.matchAlone != state.alone) {
         continue;
       }
       if (rule.matchAtStartup && *rule.matchAtStartup != (uptimeMs < kStartupWindowRuleDurationMs)) {
@@ -359,7 +368,6 @@ namespace umbriel {
     resolved.scrolling.defaultWidthFraction = config.layout.scrolling.defaultWidthFraction;
     resolved.scrolling.centerUnderfullStrip = config.layout.scrolling.centerUnderfullStrip;
     resolved.scrolling.centerFocused = config.layout.scrolling.centerFocused;
-    resolved.scrolling.expandSingleColumn = config.layout.scrolling.expandSingleColumn;
     resolved.dwindle.preserveSplit = config.layout.dwindle.preserveSplit;
     resolved.master.defaultWidthFraction = config.layout.master.defaultWidthFraction;
     resolved.master.newOnTop = config.layout.master.newOnTop;

@@ -96,6 +96,10 @@ namespace umbriel {
             || lhs.xdgTagPattern != rhs.xdgTagPattern
             || lhs.matchContentType != rhs.matchContentType
             || lhs.matchFocused != rhs.matchFocused
+            || lhs.matchFloating != rhs.matchFloating
+            || lhs.matchPinned != rhs.matchPinned
+            || lhs.matchScratchpad != rhs.matchScratchpad
+            || lhs.matchAlone != rhs.matchAlone
             || lhs.matchAtStartup != rhs.matchAtStartup
             || lhs.allowTearing != rhs.allowTearing) {
           return false;
