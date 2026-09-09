@@ -58,6 +58,11 @@ namespace umbriel {
       return rule.defaultSize ? std::optional<int>((*rule.defaultSize)[0]) : std::nullopt;
     }
 
+    bool scratchpadOwnsOpeningGeometry() {
+      const auto& scratchpad = config().animation.scratchpad;
+      return scratchpad.fullscreen || scratchpad.maximize || (scratchpad.scale > 0.0 && scratchpad.scale <= 1.0);
+    }
+
     constexpr int contentTypePriority(ContentType type) {
       switch (type) {
       case ContentType::Game:
@@ -2162,7 +2167,14 @@ namespace umbriel {
     if (!assignedScratchpad && rule.defaultPinned && *rule.defaultPinned) {
       setPinned(true, false);
     }
-    if (!assignedScratchpad && !m_tiled) {
+    if (assignedScratchpad && !scratchpadOwnsOpeningGeometry()) {
+      // Scratchpad admission has detached the view from its workspace, so its
+      // assigned scratchpad output now supplies the correct usable area.
+      placeInUsableArea(rule.defaultPosition);
+      if (ScratchpadManager* scratchpad = m_server->scratchpadManager()) {
+        scratchpad->syncViewPresentation(this);
+      }
+    } else if (!assignedScratchpad && !m_tiled) {
       // The initial commit already applied default_size. Re-requesting it here
       // races the client's first content-driven resize.
       placeInUsableArea(rule.defaultPosition);
@@ -3397,7 +3409,6 @@ namespace umbriel {
       }
     }
     const bool inScratchpad = wasInScratchpad || assignedScratchpad;
-
     if (!inScratchpad && changedInitialRule(rule.defaultPinned, initiallyApplied.defaultPinned)) {
       setPinned(*rule.defaultPinned, false);
     }
