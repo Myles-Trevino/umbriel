@@ -63,6 +63,41 @@ UMBRIEL_TEST(okLabConversionRoundTripsSrgbColor) {
   checkColorNear(roundTrip, source);
 }
 
+UMBRIEL_TEST(springSettleStartsFromTheReleaseVelocityAndStops) {
+  const umbriel::SpringConfig spring{.damping = 1.0, .stiffness = 1000.0, .mass = 1.0};
+  // Settling back onto the row it came from still has to move: the release velocity carries it past the target
+  // before the spring pulls it back.
+  umbriel::AnimatedValue value;
+  value.snap(0.3);
+  value.settleSpring(0.3, spring, 4.0);
+  CHECK(value.tick(1000));
+  CHECK_EQ(value.current(), 0.3);
+  CHECK(value.animating());
+  CHECK(value.tick(1016));
+  CHECK(value.current() > 0.3);
+  CHECK(value.tick(2000));
+  CHECK_EQ(value.current(), 0.3);
+  CHECK(!value.animating());
+
+  // A settle with no velocity left still lands on the new row rather than snapping to it.
+  value.settleSpring(1.0, spring, 0.0);
+  CHECK(value.tick(2000));
+  CHECK_EQ(value.current(), 0.3);
+  CHECK(value.tick(2016));
+  CHECK(value.current() > 0.3);
+  CHECK(value.current() < 1.0);
+  CHECK(value.tick(3000));
+  CHECK_EQ(value.current(), 1.0);
+  CHECK(!value.animating());
+
+  // Renumbering the rows underneath a running settle moves the whole motion, not just the target.
+  value.settleSpring(2.0, spring, 0.0);
+  CHECK(value.tick(3000));
+  value.translate(-1.0);
+  CHECK_EQ(value.target(), 1.0);
+  CHECK_EQ(value.current(), 0.0);
+}
+
 UMBRIEL_TEST(animatedColorRefreshesCachedEndpointsWhenRetargeted) {
   const std::array<float, 4> red{1.0F, 0.0F, 0.0F, 0.2F};
   const std::array<float, 4> green{0.0F, 1.0F, 0.0F, 0.6F};

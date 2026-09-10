@@ -1097,6 +1097,14 @@ namespace umbriel {
         if (!overview->interactive()) {
           return;
         }
+        if (event->source == WL_POINTER_AXIS_SOURCE_FINGER) {
+          m_wheelAccum[0] = m_wheelAccum[1] = 0;
+          // libinput already applies natural scrolling to axis events.
+          overview->handleTouchpadAxis(
+              event->pointer, isVertical, event->delta, event->time_msec, m_cursor->x, m_cursor->y
+          );
+          return;
+        }
         const int axis = isVertical ? 0 : 1;
         m_wheelAccum[axis] +=
             event->delta_discrete != 0 ? static_cast<double>(event->delta_discrete) / 120.0 : event->delta / 15.0;
@@ -1109,6 +1117,11 @@ namespace umbriel {
       }
     }
 
+    // The axis is not going to the filmstrip: a modifier chord, a panel underneath, or no overview at all. Whatever
+    // gesture was in flight has lost its input stream.
+    if (Overview* overview = m_server->overview()) {
+      overview->cancelNavigation();
+    }
     // Arm only when a bind matches this exact direction and modifier set.
     bool armed = false;
     for (const Keybind& bind : config().keybinds) {
@@ -1155,7 +1168,12 @@ namespace umbriel {
     }
   }
 
-  void Cursor::handleFrame() { wlr_seat_pointer_notify_frame(m_server->seat()->wlr()); }
+  void Cursor::handleFrame() {
+    if (Overview* overview = m_server->overview()) {
+      overview->handleTouchpadFrame();
+    }
+    wlr_seat_pointer_notify_frame(m_server->seat()->wlr());
+  }
 
   void Cursor::onTouchDown(wl_listener* listener, void* data) {
     Cursor* self;

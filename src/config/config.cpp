@@ -1070,12 +1070,16 @@ namespace umbriel {
           configStore().addWatchPath(std::move(path));
         }
       };
-      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
-        if (const toml::node* node = section.take("curve")) {
+      const auto readCurveKey = [&](Section& section, std::string_view key, std::string_view context,
+                                    AnimationCurve& target) {
+        if (const toml::node* node = section.take(key)) {
           if (auto curve = readCurveNode(node, context, animation.beziers, animation.springs)) {
             target = *curve;
           }
         }
+      };
+      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
+        readCurveKey(section, "curve", context, target);
       };
       const auto readStyle = [](Section& section, std::string& target,
                                 std::initializer_list<std::string_view> allowed) {
@@ -1124,6 +1128,9 @@ namespace umbriel {
         section.boolean("enabled", animation.overview.enabled)
             .integer("duration_ms", 1, 10000, animation.overview.durationMs);
         readCurve(section, "animation.overview", animation.overview.curve);
+        readCurveKey(
+            section, "workspace_curve", "animation.overview.workspace_curve", animation.overview.workspaceCurve
+        );
       });
       s.sub("scratchpad", [&](Section& section) {
         readShader(section, animation.scratchpad);
@@ -1192,6 +1199,8 @@ namespace umbriel {
     void readOverview(Section& root, Config& loaded) {
       root.sub("overview", [&](Section& s) {
         s.real("zoom", 0.1, 0.75, loaded.overview.zoom)
+            .real("scroll_factor_horizontal", 0.1, 10.0, loaded.overview.scrollFactorHorizontal)
+            .real("scroll_factor_vertical", 0.1, 10.0, loaded.overview.scrollFactorVertical)
             .boolean("background_blur", loaded.overview.backgroundBlur)
             .boolean("workspace_wallpaper", loaded.overview.workspaceWallpaper)
             .boolean("shortcuts", loaded.overview.shortcuts);
