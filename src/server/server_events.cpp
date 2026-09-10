@@ -2435,8 +2435,21 @@ namespace umbriel {
   }
 
   void Server::removeKeyboard(Keyboard* keyboard) {
+    wlr_seat* seat = m_seat->wlr();
+    const bool seatKeyboardRemoved = wlr_seat_get_keyboard(seat) == keyboard->wlr();
     const bool sourceRemoved = m_keyboardLayoutSource == keyboard;
     std::erase_if(m_keyboards, [keyboard](const std::unique_ptr<Keyboard>& entry) { return entry.get() == keyboard; });
+    if (seatKeyboardRemoved) {
+      wlr_keyboard* replacement = nullptr;
+      for (const auto& entry : m_keyboards) {
+        if (entry->wlr()->keymap != nullptr) {
+          replacement = entry->wlr();
+          break;
+        }
+      }
+      // Detach wlroots' later destroy listener so it cannot clear the replacement.
+      wlr_seat_set_keyboard(seat, replacement);
+    }
     if (sourceRemoved) {
       m_keyboardLayoutSource = nullptr;
       for (const auto& entry : m_keyboards) {
