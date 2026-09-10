@@ -253,6 +253,19 @@ xdg_toplevel_tag_client_c = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+xdg_foreign_client_h = custom_target(
+  'xdg-foreign-unstable-v2-client-protocol.h',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'unstable/xdg-foreign/xdg-foreign-unstable-v2.xml',
+  output: 'xdg-foreign-unstable-v2-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+xdg_foreign_client_c = custom_target(
+  'xdg-foreign-unstable-v2-client-protocol.c',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'unstable/xdg-foreign/xdg-foreign-unstable-v2.xml',
+  output: 'xdg-foreign-unstable-v2-client-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 content_type_client_h = custom_target(
   'content-type-v1-client-protocol.h',
   input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/content-type/content-type-v1.xml',
