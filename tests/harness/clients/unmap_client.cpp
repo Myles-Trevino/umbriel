@@ -12,6 +12,8 @@
 // child, matching current Proton behavior. XDG_TAG sets a toplevel tag before the initial commit.
 // CONTENT_TYPE_AFTER_MAP, XDG_TAG_AFTER_MAP, and TITLE_AFTER_MAP update their metadata on stdin. NO_TITLE never sets a
 // title at all. With TRANSIENT_SUITE, TRANSIENT_PARENT_SIZE=<width>x<height> gives the parent its own size.
+// TRANSIENT_SUITE=mapped-together maps the parent and this toplevel in one flush, parenting from the first configure
+// so the compositor maps both in the same dispatch.
 
 #include "color-management-v1-client-protocol.h"
 #include "content-type-v1-client-protocol.h"
@@ -99,6 +101,7 @@ namespace {
     bool requestMaximizedAfterConfigure = false;
     bool maximizeRequested = false;
     bool logConfigures = false;
+    xdg_toplevel* parentOnFirstConfigure = nullptr;
     bool requestFullscreen = false;
     bool fullscreenRequested = false;
     bool requestHdr = false;
@@ -352,6 +355,11 @@ namespace {
       wl_surface_commit(state.surface);
       state.maximizeRequested = true;
       return;
+    }
+    if (state.parentOnFirstConfigure != nullptr) {
+      // The parent's map commit is queued ahead of this one in the same flush, so the compositor has it mapped by the
+      // time it reads this request.
+      xdg_toplevel_set_parent(state.toplevel, state.parentOnFirstConfigure);
     }
     state.mapped = true;
     wl_surface_attach(state.surface, state.buffer.resource, 0, 0);
@@ -737,6 +745,8 @@ int main(int argc, char** argv) {
       transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent-cleared") == 0;
   const bool unmappedTransientParent =
       clearUnmappedTransientParent || (transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent") == 0);
+  const bool mappedTogether = transientSuite && std::strcmp(transientSuiteMode, "mapped-together") == 0;
+  const bool parentInitialCommitOnly = unmappedTransientParent || mappedTogether;
   int parentWidth = state.width;
   int parentHeight = state.height;
   if (const char* size = std::getenv("TRANSIENT_PARENT_SIZE"); size != nullptr
@@ -747,7 +757,7 @@ int main(int argc, char** argv) {
   AuxiliaryToplevel transientParent;
   AuxiliaryToplevel transientUnrelated;
   if (transientSuite) {
-    const bool supportReady = unmappedTransientParent
+    const bool supportReady = parentInitialCommitOnly
         ? createAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
         : mapAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
             && mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated", state.width, state.height);
@@ -755,9 +765,10 @@ int main(int argc, char** argv) {
       std::println(stderr, "unmap-client: failed to create transient-suite support windows");
       return EXIT_FAILURE;
     }
-    if (unmappedTransientParent) {
-      // Queue the parent's initial commit without dispatching its configure. The
-      // child therefore sends set_parent while this toplevel is still unmapped.
+    if (parentInitialCommitOnly) {
+      // Queue the parent's initial commit without dispatching its configure. The child therefore sends set_parent
+      // while this toplevel is still unmapped, or, mapped together, its configure arrives in the same read as the
+      // child's and its map commit goes out in the same flush.
       wl_surface_commit(transientParent.surface);
     }
   }
@@ -871,7 +882,9 @@ int main(int argc, char** argv) {
     // as a post-map maximize request.
     xdg_toplevel_set_maximized(state.toplevel);
   }
-  if (transientSuite) {
+  if (mappedTogether) {
+    state.parentOnFirstConfigure = transientParent.toplevel;
+  } else if (transientSuite) {
     xdg_toplevel_set_parent(state.toplevel, transientParent.toplevel);
     if (clearUnmappedTransientParent) {
       xdg_toplevel_set_parent(state.toplevel, nullptr);

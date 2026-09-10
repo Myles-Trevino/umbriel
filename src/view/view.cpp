@@ -1428,9 +1428,33 @@ namespace umbriel {
     return true;
   }
 
+  wlr_box View::fullscreenArea() const {
+    Output* output = nullptr;
+    if (m_workspace != nullptr && m_workspace->group() != nullptr) {
+      output = m_workspace->group()->output();
+    }
+    if (output == nullptr) {
+      output = currentOutput();
+    }
+    wlr_output* wlrOutput = output != nullptr ? output->wlr() : m_server->preferredOutput();
+    wlr_box fullArea{};
+    wlr_output_layout_get_box(m_server->outputLayout(), wlrOutput, &fullArea);
+    return fullArea;
+  }
+
   wlr_box View::targetBox() const {
-    if (m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0) {
-      return m_workspace->layout().targetBox(this);
+    // A window that mapped in this same dispatch has its arrange still pending, so its slot is missing or stale.
+    const bool inLayout = m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0;
+    if (inLayout) {
+      m_workspace->flushArrange();
+    }
+    if (m_toplevel->scheduled.fullscreen) {
+      // Fullscreen takes the output's size; the strip still places a tiled one at its column.
+      const wlr_box area = fullscreenArea();
+      return {layoutTargetX(), layoutTargetY(), area.width, area.height};
+    }
+    if (inLayout) {
+      return m_workspace->presentedTiledBox(this);
     }
     const wlr_box& geometry = m_toplevel->base->geometry;
     return {layoutTargetX(), layoutTargetY(), geometry.width, geometry.height};
@@ -1484,8 +1508,10 @@ namespace umbriel {
       origin = clampFloatingOrigin(origin, {.x = 0, .y = 0, .width = width, .height = height}, usable);
       m_floating.rememberPositionFraction(origin, usable);
     } else if (const View* parent = transientParent()) {
-      // Where the parent is headed, not where its node is mid-animation right after it mapped.
-      origin = centeredOverShown(parent->targetBox(), usable, width, height);
+      // Where the parent is headed, not where its node is mid-animation right after it mapped. A fullscreen parent
+      // shows over any panel, so the whole output counts as visible for it.
+      const wlr_box shownIn = parent->m_toplevel->scheduled.fullscreen ? parent->fullscreenArea() : usable;
+      origin = centeredOverShown(parent->targetBox(), shownIn, width, height);
     }
     setPosition(origin.x, origin.y);
   }
@@ -2047,16 +2073,7 @@ namespace umbriel {
   }
 
   void View::applyFullscreenLayout(bool animate) {
-    Output* output = nullptr;
-    if (m_workspace != nullptr && m_workspace->group() != nullptr) {
-      output = m_workspace->group()->output();
-    }
-    if (output == nullptr) {
-      output = currentOutput();
-    }
-    wlr_output* wlrOutput = output != nullptr ? output->wlr() : m_server->preferredOutput();
-    wlr_box fullArea{};
-    wlr_output_layout_get_box(m_server->outputLayout(), wlrOutput, &fullArea);
+    const wlr_box fullArea = fullscreenArea();
     if (fullArea.width <= 0 || fullArea.height <= 0) {
       return;
     }
