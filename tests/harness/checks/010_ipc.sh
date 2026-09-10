@@ -137,6 +137,7 @@ if ! jq -e '
     and (has("output") and (.output | type == "string"))
     and (has("active") and (.active | type == "boolean"))
     and (has("focused") and (.focused | type == "boolean"))
+    and (has("occupied") and (.occupied | type == "boolean"))
     and (has("layout") and (.layout | type == "string"))
   )
   and ([.[] | select(.active)] | length == 1)
@@ -147,12 +148,17 @@ if ! jq -e '
   echo "workspaces --json has an unexpected initial shape: $workspaces"
   exit 1
 fi
+# One client is mapped, so the first workspace is occupied and the trailing
+# dynamic sentinel is not.
 if ! jq -e '
   .[0].index == 1
   and .[0].name == "1"
   and .[0].named == false
   and .[0].output == "HEADLESS-1"
   and (.[0].id | test("^HEADLESS-1:[0-9]+$"))
+  and .[0].occupied == true
+  and ([.[] | select(.occupied)] | length == 1)
+  and ([.[] | select(.occupied | not)] | length >= 1)
 ' <<< "$workspaces" > /dev/null; then
   echo "first workspace has unexpected identity fields: $workspaces"
   exit 1
@@ -221,7 +227,7 @@ if line is None:
 initial = json.loads(line)
 if initial.get("event") != "workspaces" or not isinstance(initial.get("data"), list) or not initial["data"]:
     raise SystemExit(f"initial workspaces event has the wrong shape: {line!r}")
-for key in ("id", "name", "named", "index", "output", "active", "focused", "layout"):
+for key in ("id", "name", "named", "index", "output", "active", "focused", "occupied", "layout"):
     if key not in initial["data"][0]:
         raise SystemExit(f"workspaces event entry lacks '{key}': {initial['data'][0]}")
 if focused_layout(initial) != "scrolling":
@@ -429,6 +435,82 @@ if "$UMBRIEL" msg definitely-not-an-action > /dev/null 2>&1; then
   echo "msg accepted an unknown action"
   exit 1
 fi
+
+# Occupancy transitions are pushed by the workspace's own view list. A static
+# inventory keeps dynamic reconciliation, which pushes events of its own for
+# every add, prune, and renumber, out of the observation.
+printf '\n[output.HEADLESS-1]\nworkspaces = 2\n' >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+python3 - "$UMBRIEL_SOCKET" "$UMBRIEL" <<'PY'
+import json
+import socket
+import subprocess
+import sys
+import time
+
+socket_path, umbriel = sys.argv[1:]
+
+
+def read_one(client, buf):
+    client.settimeout(5)
+    while b"\n" not in buf:
+        chunk = client.recv(4096)
+        if not chunk:
+            return None, buf
+        buf += chunk
+    line, buf = buf.split(b"\n", 1)
+    return line, buf
+
+
+def action(*args):
+    subprocess.run([umbriel, "msg", *args], check=True, capture_output=True, text=True, timeout=5)
+
+
+def occupancy(payload):
+    return {ws["index"]: ws["occupied"] for ws in payload["data"] if ws["output"] == "HEADLESS-1"}
+
+
+def await_occupancy(client, buf, want, reason):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            line, buf = read_one(client, buf)
+        except TimeoutError:
+            break
+        if line is None:
+            break
+        parsed = json.loads(line)
+        if parsed.get("event") == "workspaces" and occupancy(parsed) == want:
+            return buf
+    raise SystemExit(f"{reason} pushed no workspaces event reporting {want}")
+
+
+sub = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sub.connect(socket_path)
+sub.sendall(b'{"cmd":"subscribe","events":["workspaces"]}\n')
+buf = b""
+line, buf = read_one(sub, buf)
+if line is None:
+    raise SystemExit("subscribing to workspaces delivered no initial state")
+if occupancy(json.loads(line)) != {1: True, 2: False}:
+    raise SystemExit(f"static inventory does not report the mapped window's workspace as occupied: {line!r}")
+
+action("workspace-switch:2")
+client = subprocess.Popen(
+    ["foot", "--title=ipc-occupancy", "sh", "-c", "sleep 120"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+try:
+    buf = await_occupancy(sub, buf, {1: True, 2: True}, "mapping a window on the empty workspace")
+finally:
+    client.terminate()
+    client.wait(timeout=10)
+buf = await_occupancy(sub, buf, {1: True, 2: False}, "closing the workspace's only window")
+sub.close()
+action("workspace-switch:1")
+PY
+wait_for_windows 1
 
 python3 - "$UMBRIEL_SOCKET" "$UMBRIEL" <<'PY'
 import json
