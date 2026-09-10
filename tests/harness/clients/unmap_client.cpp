@@ -13,12 +13,14 @@
 // CONTENT_TYPE_AFTER_MAP, XDG_TAG_AFTER_MAP, and TITLE_AFTER_MAP update their metadata on stdin. NO_TITLE never sets a
 // title at all. With TRANSIENT_SUITE, TRANSIENT_PARENT_SIZE=<width>x<height> gives the parent its own size.
 // TRANSIENT_SUITE=mapped-together maps the parent and this toplevel in one flush, parenting from the first configure
-// so the compositor maps both in the same dispatch.
+// so the compositor maps both in the same dispatch. TRANSIENT_FOREIGN_HANDLE=<handle> parents this toplevel to
+// another client's exported toplevel, the way a portal dialog is parented.
 
 #include "color-management-v1-client-protocol.h"
 #include "content-type-v1-client-protocol.h"
 #include "tearing-control-v1-client-protocol.h"
 #include "xdg-activation-v1-client-protocol.h"
+#include "xdg-foreign-unstable-v2-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-toplevel-tag-v1-client-protocol.h"
 
@@ -72,6 +74,7 @@ namespace {
     xdg_wm_base* wmBase = nullptr;
     xdg_activation_v1* activation = nullptr;
     xdg_toplevel_tag_manager_v1* xdgTagManager = nullptr;
+    zxdg_importer_v2* importer = nullptr;
     wp_content_type_manager_v1* contentTypeManager = nullptr;
     wp_content_type_v1* contentType = nullptr;
     wl_surface* contentTypeSurface = nullptr;
@@ -485,6 +488,8 @@ namespace {
       state.xdgTagManager = static_cast<xdg_toplevel_tag_manager_v1*>(
           wl_registry_bind(registry, name, &xdg_toplevel_tag_manager_v1_interface, std::min(version, 1U))
       );
+    } else if (std::strcmp(interface, zxdg_importer_v2_interface.name) == 0) {
+      state.importer = static_cast<zxdg_importer_v2*>(wl_registry_bind(registry, name, &zxdg_importer_v2_interface, 1));
     } else if (std::strcmp(interface, wp_content_type_manager_v1_interface.name) == 0) {
       state.contentTypeManager = static_cast<wp_content_type_manager_v1*>(
           wl_registry_bind(registry, name, &wp_content_type_manager_v1_interface, std::min(version, 1U))
@@ -747,6 +752,11 @@ int main(int argc, char** argv) {
       clearUnmappedTransientParent || (transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent") == 0);
   const bool mappedTogether = transientSuite && std::strcmp(transientSuiteMode, "mapped-together") == 0;
   const bool parentInitialCommitOnly = unmappedTransientParent || mappedTogether;
+  const char* foreignHandle = std::getenv("TRANSIENT_FOREIGN_HANDLE");
+  if (foreignHandle != nullptr && state.importer == nullptr) {
+    std::println(stderr, "unmap-client: compositor is missing zxdg_importer_v2");
+    return EXIT_FAILURE;
+  }
   int parentWidth = state.width;
   int parentHeight = state.height;
   if (const char* size = std::getenv("TRANSIENT_PARENT_SIZE"); size != nullptr
@@ -890,6 +900,11 @@ int main(int argc, char** argv) {
       xdg_toplevel_set_parent(state.toplevel, nullptr);
     }
   }
+  zxdg_imported_v2* imported = nullptr;
+  if (foreignHandle != nullptr) {
+    imported = zxdg_importer_v2_import_toplevel(state.importer, foreignHandle);
+    zxdg_imported_v2_set_parent_of(imported, state.surface);
+  }
   wl_surface_commit(state.surface);
 
   if (!remapOnStdin && !updateOnStdin) {
@@ -995,6 +1010,12 @@ int main(int argc, char** argv) {
   }
   if (state.xdgTagManager != nullptr) {
     xdg_toplevel_tag_manager_v1_destroy(state.xdgTagManager);
+  }
+  if (imported != nullptr) {
+    zxdg_imported_v2_destroy(imported);
+  }
+  if (state.importer != nullptr) {
+    zxdg_importer_v2_destroy(state.importer);
   }
   if (state.activation != nullptr) {
     xdg_activation_v1_destroy(state.activation);

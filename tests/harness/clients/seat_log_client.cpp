@@ -1,6 +1,9 @@
 // Maps a plain xdg toplevel and logs every seat input event it receives, so
-// checks can assert which keys and buttons reach a focused surface.
+// checks can assert which keys and buttons reach a focused surface. With
+// EXPORT_TOPLEVEL set it also exports the toplevel through xdg-foreign and
+// prints the handle, so another client can parent a dialog to it.
 
+#include "xdg-foreign-unstable-v2-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 #include <algorithm>
@@ -31,6 +34,7 @@ namespace {
     wl_shm* shm = nullptr;
     wl_seat* seat = nullptr;
     xdg_wm_base* wmBase = nullptr;
+    zxdg_exporter_v2* exporter = nullptr;
     wl_pointer* pointer = nullptr;
     wl_keyboard* keyboard = nullptr;
     wl_surface* surface = nullptr;
@@ -208,6 +212,9 @@ namespace {
   void wmBasePing(void*, xdg_wm_base* base, uint32_t serial) { xdg_wm_base_pong(base, serial); }
   constexpr xdg_wm_base_listener kWmBaseListener = {.ping = wmBasePing};
 
+  void exportedHandle(void*, zxdg_exported_v2*, const char* handle) { std::println("exported handle={}", handle); }
+  constexpr zxdg_exported_v2_listener kExportedListener = {.handle = exportedHandle};
+
   void xdgConfigure(void* data, xdg_surface* surface, uint32_t serial) {
     auto& state = *static_cast<State*>(data);
     xdg_surface_ack_configure(surface, serial);
@@ -255,6 +262,8 @@ namespace {
     } else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
       state.wmBase = static_cast<xdg_wm_base*>(wl_registry_bind(registry, name, &xdg_wm_base_interface, 1));
       xdg_wm_base_add_listener(state.wmBase, &kWmBaseListener, &state);
+    } else if (std::strcmp(interface, zxdg_exporter_v2_interface.name) == 0) {
+      state.exporter = static_cast<zxdg_exporter_v2*>(wl_registry_bind(registry, name, &zxdg_exporter_v2_interface, 1));
     }
   }
   void registryRemove(void*, wl_registry*, uint32_t) {}
@@ -303,6 +312,15 @@ int main(int argc, char** argv) {
   xdg_toplevel_add_listener(state.toplevel, &kToplevelListener, &state);
   xdg_toplevel_set_title(state.toplevel, title);
   wl_surface_commit(state.surface);
+  if (std::getenv("EXPORT_TOPLEVEL") != nullptr) {
+    if (state.exporter == nullptr) {
+      std::println(stderr, "seat-log-client: compositor is missing zxdg_exporter_v2");
+      return EXIT_FAILURE;
+    }
+    zxdg_exported_v2_add_listener(
+        zxdg_exporter_v2_export_toplevel(state.exporter, state.surface), &kExportedListener, nullptr
+    );
+  }
 
   while (wl_display_dispatch(state.display) >= 0) {
   }
