@@ -266,6 +266,10 @@ namespace umbriel {
     if (m_display == nullptr) {
       throw std::runtime_error("failed to create wl_display");
     }
+    m_protocolLogger = wl_display_add_protocol_logger(m_display, onProtocolMessage, this);
+    if (m_protocolLogger == nullptr) {
+      throw std::runtime_error("failed to register Wayland protocol logger");
+    }
     wl_display_set_default_max_buffer_size(m_display, kWaylandClientBufferSize);
     m_clientCreated.notify = onClientCreated;
     wl_display_add_client_created_listener(m_display, &m_clientCreated);
@@ -542,6 +546,10 @@ namespace umbriel {
 
   Server::~Server() {
     m_stopping = true;
+    if (m_protocolLogger != nullptr) {
+      wl_protocol_logger_destroy(m_protocolLogger);
+      m_protocolLogger = nullptr;
+    }
     wl_list_remove(&m_clientCreated.link);
     wl_list_remove(&m_newOutput.link);
     wl_list_remove(&m_newInput.link);

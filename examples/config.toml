@@ -569,8 +569,6 @@ default_pinned = true
 # default_height = 0.5
 # default_position = { x = 0, y = 8, anchor = "top" }
 
-# Open an application maximized while keeping its parented dialogs natural-sized.
-
 # [[window_rule]]
 # match.app_id = "^example-app$"
 # default_maximize = true

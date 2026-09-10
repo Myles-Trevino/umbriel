@@ -42,11 +42,11 @@ namespace umbriel {
       wlr_scene_buffer_set_opacity(buffer, opacity);
     }
 
-    bool looksTiled(const wlr_xdg_toplevel* toplevel) {
+    bool looksTiled(const wlr_xdg_toplevel* toplevel, bool parented) {
       const auto& state = toplevel->current;
       const bool fixedWidth = state.max_width > 0 && state.min_width == state.max_width;
       const bool fixedHeight = state.max_height > 0 && state.min_height == state.max_height;
-      return toplevel->parent == nullptr && !fixedWidth && !fixedHeight;
+      return !parented && !fixedWidth && !fixedHeight;
     }
 
     template <typename T>
@@ -1113,7 +1113,7 @@ namespace umbriel {
       m_aloneAction = AloneAction::MaximizeToEdges;
       return true;
     }
-    if (m_toplevel->parent == nullptr && delta.defaultMaximize && *delta.defaultMaximize) {
+    if (!openingParented() && delta.defaultMaximize && *delta.defaultMaximize) {
       if (m_toplevel->scheduled.maximized) {
         return false;
       }
@@ -2125,7 +2125,7 @@ namespace umbriel {
       m_acceptClientMaximizeRequests = true;
     }
     m_server->scheduleIpcWindowsEvent();
-    m_tiled = looksTiled(m_toplevel);
+    m_tiled = looksTiled(m_toplevel, openingParented());
     const wlr_box& mapGeo = m_toplevel->base->geometry;
     m_presentation.setSize(mapGeo.width, mapGeo.height);
     resetSurfaceClip();
@@ -2224,7 +2224,7 @@ namespace umbriel {
     // Opening state is compositor-owned. Clients may restore a saved maximized
     // flag during this transition; only an explicit window rule overrides the
     // layout's initial size.
-    const bool ruleMaximized = m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize;
+    const bool ruleMaximized = !openingParented() && rule.defaultMaximize && *rule.defaultMaximize;
     const bool restoredMaximized = config().general.honorRestoredMaximize && m_toplevel->requested.maximized;
     if (!assignedScratchpad && (ruleMaximized || restoredMaximized)) {
       setMaximized(true);
@@ -2383,6 +2383,7 @@ namespace umbriel {
       wlr_scene_node_reparent(&m_sceneTree->node, m_workspace ? m_workspace->viewLayer(m_tiled) : m_server->xdgTree());
     }
     m_mapped = false;
+    m_openingParentRequested = false;
     m_acceptClientMaximizeRequests = false;
     if (m_acceptClientMaximizeIdle != nullptr) {
       wl_event_source_remove(m_acceptClientMaximizeIdle);
@@ -2508,7 +2509,7 @@ namespace umbriel {
       // Resolve window rules early to influence initial tiled/float decision and size.
       WindowRuleState openingState = ruleState();
       openingState.focused = false;
-      openingState.floating = !looksTiled(m_toplevel);
+      openingState.floating = !looksTiled(m_toplevel, openingParented());
       openingState.alone = false;
       const ResolvedWindowRule rule = resolveWindowRules(
           config(), ruleText(m_toplevel->app_id), ruleText(m_toplevel->title), m_xdgTag, m_contentType, openingState,
@@ -2519,8 +2520,8 @@ namespace umbriel {
           && scratchpadManager != nullptr
           && scratchpadManager->hasScratchpad(*rule.defaultScratchpad);
       const auto& scratchpadConfig = config().animation.scratchpad;
-      const bool wantTiled =
-          !openingInScratchpad && (rule.defaultFloating ? !*rule.defaultFloating : looksTiled(m_toplevel));
+      const bool wantTiled = !openingInScratchpad
+          && (rule.defaultFloating ? !*rule.defaultFloating : looksTiled(m_toplevel, openingParented()));
       const bool wantFullscreen = openingInScratchpad
           ? scratchpadConfig.fullscreen
           : m_toplevel->requested.fullscreen || (rule.defaultFullscreen && *rule.defaultFullscreen);
@@ -2529,7 +2530,7 @@ namespace umbriel {
           : rule.defaultMaximizeToEdges && *rule.defaultMaximizeToEdges;
       const bool wantMaximized = openingInScratchpad
           ? wantMaximizeToEdges
-          : (m_toplevel->parent == nullptr && rule.defaultMaximize && *rule.defaultMaximize)
+          : (!openingParented() && rule.defaultMaximize && *rule.defaultMaximize)
               || wantMaximizeToEdges
               || (config().general.honorRestoredMaximize && m_toplevel->requested.maximized);
 
@@ -2983,6 +2984,14 @@ namespace umbriel {
       raiseToTop();
     }
   }
+
+  void View::recordOpeningParentRequest(bool parentRequested) {
+    // Once mapped, wlroots' normal parent state is authoritative. Retire the
+    // opening hint on any later request, especially an explicit null parent.
+    m_openingParentRequested = !m_mapped && parentRequested;
+  }
+
+  bool View::openingParented() const { return m_toplevel->parent != nullptr || m_openingParentRequested; }
 
   void View::toggleFullscreen() {
     if (!m_toplevel->base->initialized) {
@@ -3531,7 +3540,7 @@ namespace umbriel {
     }
 
     if (!inScratchpad
-        && m_toplevel->parent == nullptr
+        && !openingParented()
         && changedInitialRule(rule.defaultMaximize, initiallyApplied.defaultMaximize)
         && *rule.defaultMaximize
         && !m_toplevel->scheduled.maximized) {

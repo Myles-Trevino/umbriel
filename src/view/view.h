@@ -308,6 +308,8 @@ namespace umbriel {
     void handleRequestMaximize();
     void setMaximized(bool maximized, bool animate = true);
     void handleRequestFullscreen();
+    void recordOpeningParentRequest(bool parentRequested);
+    [[nodiscard]] bool openingParented() const;
     void handleSetParent();
     void setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout = FullscreenExitLayout::Immediate);
     void handleSetTitle();
@@ -493,6 +495,9 @@ namespace umbriel {
     std::optional<DisplacedHome> m_displacedHome;
 
     bool m_mapped = false;
+    // The raw pre-map set_parent request. wlroots discards an unmapped target,
+    // but its presence still determines the window's opening layout policy.
+    bool m_openingParentRequested = false;
     // Saved client state commonly requests maximization while the surface is
     // opening. Layout policy owns that transition; later requests are valid.
     bool m_acceptClientMaximizeRequests = false;

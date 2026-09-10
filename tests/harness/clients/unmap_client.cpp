@@ -301,7 +301,7 @@ namespace {
       .wm_capabilities = nullptr,
   };
 
-  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
+  bool createAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
     window.state = &state;
     window.buffer = createBuffer(state);
     if (window.buffer.resource == nullptr) {
@@ -313,13 +313,24 @@ namespace {
     window.toplevel = xdg_surface_get_toplevel(window.xdgSurface);
     xdg_toplevel_add_listener(window.toplevel, &kAuxiliaryToplevelListener, &window);
     xdg_toplevel_set_title(window.toplevel, title);
-    wl_surface_commit(window.surface);
+    return true;
+  }
+
+  bool waitForAuxiliaryToplevel(State& state, AuxiliaryToplevel& window) {
     while (!window.mapped) {
       if (wl_display_dispatch(state.display) < 0) {
         return false;
       }
     }
     return true;
+  }
+
+  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
+    if (!createAuxiliaryToplevel(state, window, title)) {
+      return false;
+    }
+    wl_surface_commit(window.surface);
+    return waitForAuxiliaryToplevel(state, window);
   }
 
   void xdgSurfaceConfigure(void* data, xdg_surface* xdgSurface, uint32_t serial) {
@@ -718,14 +729,28 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  const bool transientSuite = std::getenv("TRANSIENT_SUITE") != nullptr;
+  const char* transientSuiteMode = std::getenv("TRANSIENT_SUITE");
+  const bool transientSuite = transientSuiteMode != nullptr;
+  const bool clearUnmappedTransientParent =
+      transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent-cleared") == 0;
+  const bool unmappedTransientParent =
+      clearUnmappedTransientParent || (transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent") == 0);
   AuxiliaryToplevel transientParent;
   AuxiliaryToplevel transientUnrelated;
-  if (transientSuite
-      && (!mapAuxiliaryToplevel(state, transientParent, "transient-parent")
-          || !mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated"))) {
-    std::println(stderr, "unmap-client: failed to map transient-suite support windows");
-    return EXIT_FAILURE;
+  if (transientSuite) {
+    const bool supportReady = unmappedTransientParent
+        ? createAuxiliaryToplevel(state, transientParent, "transient-parent")
+        : mapAuxiliaryToplevel(state, transientParent, "transient-parent")
+            && mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated");
+    if (!supportReady) {
+      std::println(stderr, "unmap-client: failed to create transient-suite support windows");
+      return EXIT_FAILURE;
+    }
+    if (unmappedTransientParent) {
+      // Queue the parent's initial commit without dispatching its configure. The
+      // child therefore sends set_parent while this toplevel is still unmapped.
+      wl_surface_commit(transientParent.surface);
+    }
   }
 
   state.surface = wl_compositor_create_surface(state.compositor);
@@ -839,6 +864,9 @@ int main(int argc, char** argv) {
   }
   if (transientSuite) {
     xdg_toplevel_set_parent(state.toplevel, transientParent.toplevel);
+    if (clearUnmappedTransientParent) {
+      xdg_toplevel_set_parent(state.toplevel, nullptr);
+    }
   }
   wl_surface_commit(state.surface);
 
