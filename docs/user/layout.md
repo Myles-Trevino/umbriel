@@ -311,7 +311,9 @@ fullscreen.
 
 Parented XDG dialogs are stacked with their ancestor chain. Raising any member
 raises the family while keeping each dialog above its parent, including when an
-ancestor is floating, pinned, or fullscreen.
+ancestor is floating, pinned, or fullscreen. A dialog without a
+`default_position` rule opens centered over its parent, kept inside the usable
+area.
 
 ### Maximize and fullscreen
 

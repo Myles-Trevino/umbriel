@@ -11,7 +11,7 @@
 // CONTENT_TYPE sets a surface hint before its initial commit. CONTENT_TYPE_ON_SUBSURFACE places it on a rendering
 // child, matching current Proton behavior. XDG_TAG sets a toplevel tag before the initial commit.
 // CONTENT_TYPE_AFTER_MAP, XDG_TAG_AFTER_MAP, and TITLE_AFTER_MAP update their metadata on stdin. NO_TITLE never sets a
-// title at all.
+// title at all. With TRANSIENT_SUITE, TRANSIENT_PARENT_SIZE=<width>x<height> gives the parent its own size.
 
 #include "color-management-v1-client-protocol.h"
 #include "content-type-v1-client-protocol.h"
@@ -125,11 +125,12 @@ namespace {
   };
 
   struct AuxiliaryToplevel {
-    State* state = nullptr;
     wl_surface* surface = nullptr;
     xdg_surface* xdgSurface = nullptr;
     xdg_toplevel* toplevel = nullptr;
     Buffer buffer;
+    int width = 0;
+    int height = 0;
     bool mapped = false;
   };
 
@@ -239,10 +240,10 @@ namespace {
       .name = seatName,
   };
 
-  Buffer createBuffer(State& state) {
+  Buffer createBuffer(State& state, int width, int height) {
     Buffer buffer;
-    const int stride = state.width * 4;
-    buffer.size = static_cast<size_t>(stride * state.height);
+    const int stride = width * 4;
+    buffer.size = static_cast<size_t>(stride * height);
     const int fd = memfd_create("umbriel-unmap-client", MFD_CLOEXEC);
     if (fd < 0 || ftruncate(fd, static_cast<off_t>(buffer.size)) < 0) {
       if (fd >= 0) {
@@ -259,7 +260,7 @@ namespace {
     std::fill_n(static_cast<uint32_t*>(buffer.pixels), buffer.size / sizeof(uint32_t), 0xFF5577AA);
 
     wl_shm_pool* pool = wl_shm_create_pool(state.shm, fd, static_cast<int>(buffer.size));
-    buffer.resource = wl_shm_pool_create_buffer(pool, 0, state.width, state.height, stride, WL_SHM_FORMAT_ARGB8888);
+    buffer.resource = wl_shm_pool_create_buffer(pool, 0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
     return buffer;
@@ -274,7 +275,7 @@ namespace {
     }
     window.mapped = true;
     wl_surface_attach(window.surface, window.buffer.resource, 0, 0);
-    wl_surface_damage_buffer(window.surface, 0, 0, window.state->width, window.state->height);
+    wl_surface_damage_buffer(window.surface, 0, 0, window.width, window.height);
     wl_surface_commit(window.surface);
   }
 
@@ -301,9 +302,10 @@ namespace {
       .wm_capabilities = nullptr,
   };
 
-  bool createAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
-    window.state = &state;
-    window.buffer = createBuffer(state);
+  bool createAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title, int width, int height) {
+    window.width = width;
+    window.height = height;
+    window.buffer = createBuffer(state, width, height);
     if (window.buffer.resource == nullptr) {
       return false;
     }
@@ -325,8 +327,8 @@ namespace {
     return true;
   }
 
-  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
-    if (!createAuxiliaryToplevel(state, window, title)) {
+  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title, int width, int height) {
+    if (!createAuxiliaryToplevel(state, window, title, width, height)) {
       return false;
     }
     wl_surface_commit(window.surface);
@@ -723,7 +725,7 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  state.buffer = createBuffer(state);
+  state.buffer = createBuffer(state, state.width, state.height);
   if (state.buffer.resource == nullptr) {
     std::println(stderr, "unmap-client: failed to allocate shared-memory buffer");
     return EXIT_FAILURE;
@@ -735,13 +737,20 @@ int main(int argc, char** argv) {
       transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent-cleared") == 0;
   const bool unmappedTransientParent =
       clearUnmappedTransientParent || (transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent") == 0);
+  int parentWidth = state.width;
+  int parentHeight = state.height;
+  if (const char* size = std::getenv("TRANSIENT_PARENT_SIZE"); size != nullptr
+      && (std::sscanf(size, "%dx%d", &parentWidth, &parentHeight) != 2 || parentWidth < 1 || parentHeight < 1)) {
+    std::println(stderr, "unmap-client: TRANSIENT_PARENT_SIZE must be <width>x<height>");
+    return EXIT_FAILURE;
+  }
   AuxiliaryToplevel transientParent;
   AuxiliaryToplevel transientUnrelated;
   if (transientSuite) {
     const bool supportReady = unmappedTransientParent
-        ? createAuxiliaryToplevel(state, transientParent, "transient-parent")
-        : mapAuxiliaryToplevel(state, transientParent, "transient-parent")
-            && mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated");
+        ? createAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
+        : mapAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
+            && mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated", state.width, state.height);
     if (!supportReady) {
       std::println(stderr, "unmap-client: failed to create transient-suite support windows");
       return EXIT_FAILURE;
@@ -768,7 +777,7 @@ int main(int argc, char** argv) {
       std::println(stderr, "unmap-client: compositor is missing wl_subcompositor");
       return EXIT_FAILURE;
     }
-    state.colorChildBuffer = createBuffer(state);
+    state.colorChildBuffer = createBuffer(state, state.width, state.height);
     if (state.colorChildBuffer.resource == nullptr) {
       std::println(stderr, "unmap-client: failed to allocate color child buffer");
       return EXIT_FAILURE;

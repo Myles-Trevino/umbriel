@@ -1475,6 +1475,13 @@ namespace umbriel {
       }
       origin = clampFloatingOrigin(origin, {.x = 0, .y = 0, .width = width, .height = height}, usable);
       m_floating.rememberPositionFraction(origin, usable);
+    } else if (const View* parent = transientParent()) {
+      // Dialogs open over their parent, kept fully inside the usable area when they fit.
+      const wlr_scene_node& node = parent->m_sceneTree->node;
+      const wlr_box& presented = parent->m_presentedBox;
+      origin = centeredOrigin({node.x, node.y, presented.width, presented.height}, width, height);
+      origin.x = std::clamp(origin.x, usable.x, std::max(usable.x, usable.x + usable.width - width));
+      origin.y = std::clamp(origin.y, usable.y, std::max(usable.y, usable.y + usable.height - height));
     }
     setPosition(origin.x, origin.y);
   }
