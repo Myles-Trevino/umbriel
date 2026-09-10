@@ -157,6 +157,9 @@ namespace umbriel {
     // listings that order by position must read these instead.
     [[nodiscard]] int layoutTargetX() const { return static_cast<int>(std::lround(m_posX.target())); }
     [[nodiscard]] int layoutTargetY() const { return static_cast<int>(std::lround(m_posY.target())); }
+    // The box this window is headed for: its layout slot when tiled, else its own position at its committed size.
+    // Valid ahead of the animation that carries the node there.
+    [[nodiscard]] wlr_box targetBox() const;
     // Move the scene nodes without touching the position animation: an
     // interactive drag tracks the pointer 1:1 and owns the position itself.
     void setDragPosition(int x, int y);

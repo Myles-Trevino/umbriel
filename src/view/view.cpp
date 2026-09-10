@@ -1428,6 +1428,14 @@ namespace umbriel {
     return true;
   }
 
+  wlr_box View::targetBox() const {
+    if (m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0) {
+      return m_workspace->layout().targetBox(this);
+    }
+    const wlr_box& geometry = m_toplevel->base->geometry;
+    return {layoutTargetX(), layoutTargetY(), geometry.width, geometry.height};
+  }
+
   void View::placeInUsableArea(const std::optional<WindowPosition>& position) {
     const wlr_box usable = floatingUsableArea();
     if (usable.width <= 0 || usable.height <= 0) {
@@ -1476,12 +1484,8 @@ namespace umbriel {
       origin = clampFloatingOrigin(origin, {.x = 0, .y = 0, .width = width, .height = height}, usable);
       m_floating.rememberPositionFraction(origin, usable);
     } else if (const View* parent = transientParent()) {
-      // Dialogs open over their parent, kept fully inside the usable area when they fit.
-      const wlr_scene_node& node = parent->m_sceneTree->node;
-      const wlr_box& presented = parent->m_presentedBox;
-      origin = centeredOrigin({node.x, node.y, presented.width, presented.height}, width, height);
-      origin.x = std::clamp(origin.x, usable.x, std::max(usable.x, usable.x + usable.width - width));
-      origin.y = std::clamp(origin.y, usable.y, std::max(usable.y, usable.y + usable.height - height));
+      // Where the parent is headed, not where its node is mid-animation right after it mapped.
+      origin = centeredOverShown(parent->targetBox(), usable, width, height);
     }
     setPosition(origin.x, origin.y);
   }
