@@ -454,7 +454,13 @@ namespace umbriel {
     m_newXdgPopup.notify = onNewXdgPopup;
     wl_signal_add(&m_xdgShell->events.new_popup, &m_newXdgPopup);
 
-    wlr_xdg_foreign_v2_create(m_display, wlr_xdg_foreign_registry_create(m_display));
+    wlr_xdg_foreign_registry* foreignRegistry = wlr_xdg_foreign_registry_create(m_display);
+    if (foreignRegistry == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign registry");
+    }
+    if (wlr_xdg_foreign_v2_create(m_display, foreignRegistry) == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign global");
+    }
 
     m_xdgToplevelTagManager = wlr_xdg_toplevel_tag_manager_v1_create(m_display, 1);
     if (m_xdgToplevelTagManager == nullptr) {
