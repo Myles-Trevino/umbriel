@@ -1456,8 +1456,11 @@ namespace umbriel {
     if (inLayout) {
       return m_workspace->presentedTiledBox(this);
     }
+    // A float's scheduled size is the one a maximize or resize is taking it to, and the client's own once it settled.
     const wlr_box& geometry = m_toplevel->base->geometry;
-    return {layoutTargetX(), layoutTargetY(), geometry.width, geometry.height};
+    const int width = m_toplevel->scheduled.width > 0 ? m_toplevel->scheduled.width : geometry.width;
+    const int height = m_toplevel->scheduled.height > 0 ? m_toplevel->scheduled.height : geometry.height;
+    return {layoutTargetX(), layoutTargetY(), width, height};
   }
 
   void View::placeInUsableArea(const std::optional<WindowPosition>& position) {

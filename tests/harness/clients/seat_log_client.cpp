@@ -1,17 +1,23 @@
 // Maps a plain xdg toplevel and logs every seat input event it receives, so
 // checks can assert which keys and buttons reach a focused surface. With
 // EXPORT_TOPLEVEL set it also exports the toplevel through xdg-foreign and
-// prints the handle, so another client can parent a dialog to it.
+// prints the handle, so another client can parent a dialog to it. With
+// HOLD_RESIZE set it leaves any configure that resizes the mapped window
+// unanswered until a byte arrives on stdin, so the window keeps its size while
+// the resize stays pending.
 
 #include "xdg-foreign-unstable-v2-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <optional>
+#include <poll.h>
 #include <print>
 #include <string>
 #include <string_view>
@@ -49,6 +55,9 @@ namespace {
     int height = 480;
     // A configure asked for a size the current buffer does not have.
     bool resizePending = true;
+    bool holdResize = false;
+    bool mapped = false;
+    std::optional<uint32_t> heldSerial;
     PressAction pressAction = PressAction::None;
     bool actionRequested = false;
   };
@@ -215,16 +224,25 @@ namespace {
   void exportedHandle(void*, zxdg_exported_v2*, const char* handle) { std::println("exported handle={}", handle); }
   constexpr zxdg_exported_v2_listener kExportedListener = {.handle = exportedHandle};
 
-  void xdgConfigure(void* data, xdg_surface* surface, uint32_t serial) {
-    auto& state = *static_cast<State*>(data);
-    xdg_surface_ack_configure(surface, serial);
+  void answerConfigure(State& state, uint32_t serial) {
+    xdg_surface_ack_configure(state.xdgSurface, serial);
     if (state.resizePending && !createBuffer(state)) {
       return;
     }
     state.resizePending = false;
+    state.mapped = true;
     wl_surface_attach(state.surface, state.buffer, 0, 0);
     wl_surface_damage_buffer(state.surface, 0, 0, state.width, state.height);
     wl_surface_commit(state.surface);
+  }
+
+  void xdgConfigure(void* data, xdg_surface*, uint32_t serial) {
+    auto& state = *static_cast<State*>(data);
+    if (state.holdResize && state.mapped && state.resizePending) {
+      state.heldSerial = serial;
+      return;
+    }
+    answerConfigure(state, serial);
   }
   constexpr xdg_surface_listener kXdgListener = {.configure = xdgConfigure};
 
@@ -287,6 +305,7 @@ int main(int argc, char** argv) {
   }
 
   State state;
+  state.holdResize = std::getenv("HOLD_RESIZE") != nullptr;
   if (mode == "move-on-press") {
     state.pressAction = PressAction::Move;
   } else if (mode == "resize-on-press") {
@@ -322,7 +341,33 @@ int main(int argc, char** argv) {
     );
   }
 
-  while (wl_display_dispatch(state.display) >= 0) {
+  const int displayFd = wl_display_get_fd(state.display);
+  while (true) {
+    wl_display_flush(state.display);
+    pollfd sources[2] = {
+        {.fd = displayFd, .events = POLLIN, .revents = 0},
+        {.fd = state.holdResize ? STDIN_FILENO : -1, .events = POLLIN, .revents = 0},
+    };
+    if (poll(sources, 2, -1) < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    if ((sources[0].revents & POLLIN) != 0 && wl_display_dispatch(state.display) < 0) {
+      break;
+    }
+    if ((sources[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      break;
+    }
+    if ((sources[1].revents & (POLLIN | POLLHUP)) != 0) {
+      char command = 0;
+      [[maybe_unused]] const ssize_t bytes = read(STDIN_FILENO, &command, 1);
+      state.holdResize = false;
+      if (state.heldSerial) {
+        answerConfigure(state, *state.heldSerial);
+      }
+    }
   }
   return EXIT_SUCCESS;
 }
