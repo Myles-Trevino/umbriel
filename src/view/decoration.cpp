@@ -101,7 +101,7 @@ namespace umbriel {
     wlr_scene_node_set_position(
         &copy->node, m_borderTree->node.x + m_border->node.x, m_borderTree->node.y + m_border->node.y
     );
-    wlr_scene_node_copy_animations(&copy->node, &m_borderTree->node);
+    wlr_scene_node_copy_animations_for_snapshot(&copy->node, &m_borderTree->node);
     out.push_back(
         BorderSnapshot{
             .node = copy,

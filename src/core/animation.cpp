@@ -1,18 +1,58 @@
 #include "core/animation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <mutex>
 #include <numbers>
 #include <shared_mutex>
+#include <sys/random.h>
+#include <unistd.h>
 #include <unordered_map>
 
 namespace umbriel {
 
   namespace {
     constexpr double kPi = std::numbers::pi;
+
+    struct AnimationTransition {
+      uint64_t id;
+      std::array<float, 4> seed;
+    };
+
+    [[nodiscard]] uint64_t mixRandom(uint64_t value) {
+      value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+      value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+      return value ^ (value >> 31);
+    }
+
+    [[nodiscard]] uint64_t animationRandomSalt() {
+      uint64_t salt = 0;
+      if (getrandom(&salt, sizeof(salt), GRND_NONBLOCK) != static_cast<ssize_t>(sizeof(salt))) {
+        salt = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
+            ^ static_cast<uint64_t>(getpid())
+            ^ reinterpret_cast<uintptr_t>(&salt);
+      }
+      return mixRandom(salt);
+    }
+
+    [[nodiscard]] AnimationTransition beginAnimationTransition() {
+      static std::atomic<uint64_t> nextId{1};
+      static const uint64_t salt = animationRandomSalt();
+      uint64_t id = nextId.fetch_add(1, std::memory_order_relaxed);
+      if (id == 0) {
+        id = nextId.fetch_add(1, std::memory_order_relaxed);
+      }
+      AnimationTransition transition{.id = id, .seed = {}};
+      for (std::size_t channel = 0; channel < transition.seed.size(); ++channel) {
+        const uint64_t value = mixRandom(salt ^ mixRandom(id + UINT64_C(0x9e3779b97f4a7c15) * (channel + 1)));
+        transition.seed[channel] = static_cast<float>(value >> 40) * (1.0F / 16777216.0F);
+      }
+      return transition;
+    }
 
     [[nodiscard]] std::string normalizeName(std::string_view name) {
       std::string out;
@@ -640,6 +680,9 @@ namespace umbriel {
   }
 
   void AnimatedValue::retarget(double to, int durationMs, const AnimationCurve& curve) {
+    const AnimationTransition transition = beginAnimationTransition();
+    m_transitionId = transition.id;
+    m_shaderSeed = transition.seed;
     m_from = m_current;
     m_target = to;
     m_durationMsec = static_cast<uint64_t>(std::max(1, durationMs));
@@ -670,6 +713,9 @@ namespace umbriel {
   }
 
   void AnimatedValue::settleSpring(double to, const SpringConfig& spring, double initialVelocity) {
+    const AnimationTransition transition = beginAnimationTransition();
+    m_transitionId = transition.id;
+    m_shaderSeed = transition.seed;
     m_from = m_current;
     m_target = to;
     m_curve = AnimationCurve{.easing = Easing::Spring, .spring = spring};
@@ -754,6 +800,9 @@ namespace umbriel {
   }
 
   void AnimatedColor::retarget(const std::array<float, 4>& to, int durationMs, const AnimationCurve& curve) {
+    const AnimationTransition transition = beginAnimationTransition();
+    m_transitionId = transition.id;
+    m_shaderSeed = transition.seed;
     m_from = m_current;
     m_target = to;
     m_fromOkLab = srgbToOkLab(m_from);

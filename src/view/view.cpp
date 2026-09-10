@@ -1732,7 +1732,7 @@ namespace umbriel {
       return;
     }
 
-    wlr_scene_node_copy_animations(&snap->node, &m_sceneTree->node);
+    wlr_scene_node_copy_animations_for_snapshot(&snap->node, &m_sceneTree->node);
     const auto shadow = m_decoration.snapshotShadow(output->viewRoot(), &snap->node);
     m_server->animateCloseSnapshot(output, snap, std::move(snapBorders), std::nullopt, shadow);
     wlr_output_schedule_frame(output->wlr());

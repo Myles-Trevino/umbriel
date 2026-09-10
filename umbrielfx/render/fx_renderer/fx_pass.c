@@ -9,12 +9,14 @@
 #include <unistd.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/drm_syncobj.h>
+#include <wlr/types/wlr_output.h>
 #include <wlr/util/transform.h>
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 
 #include "render/color.h"
 #include "render/egl.h"
+#include "render/fx_renderer/animation_history.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "render/fx_renderer/shaders.h"
 #include "render/pass.h"
@@ -100,6 +102,190 @@ static struct fx_framebuffer *ensure_offscreen_buffer(struct fx_gles_render_pass
 	return *slot;
 }
 
+struct fx_animation_output_history {
+	struct wl_list link;
+	struct wlr_output *output;
+	struct fx_renderer *renderer;
+	struct wl_listener output_destroy;
+	struct wl_listener renderer_destroy;
+	struct fx_framebuffer *buffers[2];
+	unsigned previous;
+	bool valid;
+	bool allocation_failed;
+	uint32_t format;
+	enum wl_output_transform transform;
+};
+
+struct fx_animation_history_update {
+	struct wl_list link;
+	struct fx_animation_output_history *history;
+	unsigned previous;
+};
+
+static void animation_history_drop_buffer(struct fx_framebuffer **buffer) {
+	if (*buffer == NULL) {
+		return;
+	}
+	wlr_buffer_drop((*buffer)->buffer);
+	*buffer = NULL;
+}
+
+static void animation_output_history_drop_buffers(
+		struct fx_animation_output_history *output_history) {
+	animation_history_drop_buffer(&output_history->buffers[0]);
+	animation_history_drop_buffer(&output_history->buffers[1]);
+	output_history->valid = false;
+	output_history->allocation_failed = false;
+}
+
+static void animation_output_history_destroy(
+		struct fx_animation_output_history *output_history) {
+	if (output_history->renderer != NULL) {
+		animation_output_history_drop_buffers(output_history);
+		wl_list_remove(&output_history->renderer_destroy.link);
+	}
+	if (output_history->output != NULL) {
+		wl_list_remove(&output_history->output_destroy.link);
+	}
+	wl_list_remove(&output_history->link);
+	free(output_history);
+}
+
+static void animation_history_handle_output_destroy(struct wl_listener *listener,
+		void *data) {
+	struct fx_animation_output_history *output_history =
+		wl_container_of(listener, output_history, output_destroy);
+	output_history->output = NULL;
+	wl_list_remove(&output_history->output_destroy.link);
+	animation_output_history_destroy(output_history);
+}
+
+static void animation_history_handle_renderer_destroy(struct wl_listener *listener,
+		void *data) {
+	struct fx_animation_output_history *output_history =
+		wl_container_of(listener, output_history, renderer_destroy);
+	output_history->renderer = NULL;
+	output_history->buffers[0] = NULL;
+	output_history->buffers[1] = NULL;
+	output_history->valid = false;
+	output_history->allocation_failed = false;
+	wl_list_remove(&output_history->renderer_destroy.link);
+}
+
+void fx_animation_history_init(struct fx_animation_history *history) {
+	wl_list_init(&history->outputs);
+}
+
+void fx_animation_history_finish(struct fx_animation_history *history) {
+	struct fx_animation_output_history *output_history, *tmp;
+	wl_list_for_each_safe(output_history, tmp, &history->outputs, link) {
+		animation_output_history_destroy(output_history);
+	}
+	wl_list_init(&history->outputs);
+}
+
+void fx_animation_history_reset(struct fx_animation_history *history) {
+	fx_animation_history_finish(history);
+}
+
+void fx_animation_history_move(struct fx_animation_history *destination,
+		struct fx_animation_history *source) {
+	fx_animation_history_finish(destination);
+	while (!wl_list_empty(&source->outputs)) {
+		struct fx_animation_output_history *output_history =
+			wl_container_of(source->outputs.next, output_history, link);
+		wl_list_remove(&output_history->link);
+		wl_list_insert(destination->outputs.prev, &output_history->link);
+	}
+}
+
+static struct fx_animation_output_history *animation_history_get_output(
+		struct fx_animation_history *history, struct wlr_output *output,
+		struct fx_renderer *renderer, bool create) {
+	struct fx_animation_output_history *output_history;
+	wl_list_for_each(output_history, &history->outputs, link) {
+		if (output_history->output == output) {
+			if (output_history->renderer == renderer) {
+				return output_history;
+			}
+			if (output_history->renderer != NULL) {
+				animation_output_history_drop_buffers(output_history);
+				wl_list_remove(&output_history->renderer_destroy.link);
+			}
+			output_history->renderer = renderer;
+			output_history->allocation_failed = false;
+			output_history->renderer_destroy.notify =
+				animation_history_handle_renderer_destroy;
+			wl_signal_add(&renderer->wlr_renderer.events.destroy,
+				&output_history->renderer_destroy);
+			return output_history;
+		}
+	}
+	if (!create) {
+		return NULL;
+	}
+	output_history = calloc(1, sizeof(*output_history));
+	if (output_history == NULL) {
+		return NULL;
+	}
+	output_history->output = output;
+	output_history->renderer = renderer;
+	output_history->output_destroy.notify = animation_history_handle_output_destroy;
+	output_history->renderer_destroy.notify = animation_history_handle_renderer_destroy;
+	wl_signal_add(&output->events.destroy, &output_history->output_destroy);
+	wl_signal_add(&renderer->wlr_renderer.events.destroy,
+		&output_history->renderer_destroy);
+	wl_list_insert(&history->outputs, &output_history->link);
+	return output_history;
+}
+
+static bool animation_history_matches(
+		const struct fx_animation_output_history *output_history,
+		uint32_t format, enum wl_output_transform transform) {
+	return output_history->format == format &&
+		output_history->transform == transform;
+}
+
+static void animation_history_set_format(
+		struct fx_animation_output_history *output_history,
+		uint32_t format, enum wl_output_transform transform) {
+	animation_output_history_drop_buffers(output_history);
+	output_history->format = format;
+	output_history->transform = transform;
+}
+
+static bool animation_history_queue_update(struct fx_gles_render_pass *pass,
+		struct fx_animation_output_history *output_history, unsigned previous) {
+	struct fx_animation_history_update *update;
+	wl_list_for_each(update, &pass->animation_history_updates, link) {
+		if (update->history == output_history) {
+			update->previous = previous;
+			return true;
+		}
+	}
+	update = calloc(1, sizeof(*update));
+	if (update == NULL) {
+		return false;
+	}
+	update->history = output_history;
+	update->previous = previous;
+	wl_list_insert(pass->animation_history_updates.prev, &update->link);
+	return true;
+}
+
+static void animation_history_commit_updates(struct fx_gles_render_pass *pass,
+		bool success) {
+	struct fx_animation_history_update *update, *tmp;
+	wl_list_for_each_safe(update, tmp, &pass->animation_history_updates, link) {
+		if (success) {
+			update->history->previous = update->previous;
+			update->history->valid = true;
+		}
+		wl_list_remove(&update->link);
+		free(update);
+	}
+}
+
 struct fx_framebuffer *fx_render_pass_blur_saved_pixels_buffer(
 		struct fx_gles_render_pass *pass) {
 	if (pass->fx_offscreen_buffers == NULL) {
@@ -119,7 +305,7 @@ static void render(const struct wlr_box *box, const pixman_region32_t *clip,
 	GLint attrib);
 static void render_pass_mark_updated(struct fx_gles_render_pass *pass,
 	const struct wlr_box *box, const pixman_region32_t *clip);
-static void set_proj_matrix(GLint loc, float proj[9],
+static void set_proj_matrix(GLint loc, const float proj[9],
 	const struct wlr_box *box);
 static void set_tex_matrix(GLint loc, enum wl_output_transform trans,
 	const struct wlr_fbox *box);
@@ -248,6 +434,7 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
 	ok = true;
 
 out:
+	animation_history_commit_updates(pass, ok);
 	if (pass->output_buffers != NULL) {
 		if (ok) {
 			pass->output_buffers->blend_valid = true;
@@ -402,7 +589,7 @@ static void render(const struct wlr_box *box, const pixman_region32_t *clip, GLi
 	pixman_region32_fini(&region);
 }
 
-static void set_proj_matrix(GLint loc, float proj[9], const struct wlr_box *box) {
+static void set_proj_matrix(GLint loc, const float proj[9], const struct wlr_box *box) {
 	float gl_matrix[9];
 	wlr_matrix_identity(gl_matrix);
 	wlr_matrix_translate(gl_matrix, box->x, box->y);
@@ -470,7 +657,9 @@ static void draw_animation_texture(struct fx_gles_render_pass *pass,
 		struct wlr_texture *wlr_texture,
 		struct fx_animation_shader *shader, const struct fx_animation_parameters *parameters,
 		const struct wlr_box *box, const struct wlr_box *source_box, const struct wlr_box *logical_box,
-		enum wl_output_transform transform, const pixman_region32_t *clip) {
+		enum wl_output_transform transform, const pixman_region32_t *clip,
+		struct wlr_texture *previous_texture, const struct wlr_box *previous_source_box,
+		const float projection[9], bool blend, bool mark_updated) {
 	struct fx_texture *texture = fx_get_texture(wlr_texture);
 	glUseProgram(shader->program);
 	glActiveTexture(GL_TEXTURE0);
@@ -484,6 +673,7 @@ static void draw_animation_texture(struct fx_gles_render_pass *pass,
 	glUniform1f(shader->linear_progress, parameters->linear_progress);
 	glUniform1f(shader->direction, parameters->direction);
 	glUniform2f(shader->size, logical_box->width, logical_box->height);
+	glUniform4fv(shader->random_seed, 1, parameters->random_seed);
 	const struct wlr_fbox unit = { .width = 1, .height = 1 };
 	float uv_matrix[9], inverse[9], sample_matrix[9];
 	make_tex_matrix(uv_matrix, transform, &unit);
@@ -496,13 +686,46 @@ static void draw_animation_texture(struct fx_gles_render_pass *pass,
 	wlr_matrix_multiply(sample_matrix, sample_matrix, inverse);
 	glUniformMatrix3fv(shader->tex_proj, 1, GL_FALSE, uv_matrix);
 	glUniformMatrix3fv(shader->sample_matrix, 1, GL_FALSE, sample_matrix);
-	set_proj_matrix(shader->proj, pass->projection_matrix, box);
-	glEnable(GL_BLEND);
+	if (shader->previous_tex >= 0) {
+		if (previous_texture == NULL || previous_source_box == NULL) {
+			previous_texture = wlr_texture;
+			previous_source_box = source_box;
+		}
+		struct fx_texture *previous = fx_get_texture(previous_texture);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, previous->tex);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+		glUniform1i(shader->previous_tex, 1);
+		wlr_matrix_identity(sample_matrix);
+		wlr_matrix_translate(sample_matrix,
+			(float)previous_source_box->x / previous_texture->width,
+			(float)previous_source_box->y / previous_texture->height);
+		wlr_matrix_scale(sample_matrix,
+			(float)previous_source_box->width / previous_texture->width,
+			(float)previous_source_box->height / previous_texture->height);
+		wlr_matrix_multiply(sample_matrix, sample_matrix, inverse);
+		glUniformMatrix3fv(shader->previous_sample_matrix, 1, GL_FALSE, sample_matrix);
+		glActiveTexture(GL_TEXTURE0);
+	}
+	set_proj_matrix(shader->proj, projection, box);
+	if (blend) {
+		glEnable(GL_BLEND);
+	} else {
+		glDisable(GL_BLEND);
+	}
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable(GL_STENCIL_TEST);
-	render_pass_mark_updated(pass, box, clip);
+	if (mark_updated) {
+		render_pass_mark_updated(pass, box, clip);
+	}
 	render(box, clip, shader->position);
 	glBindTexture(GL_TEXTURE_2D, 0);
+	if (shader->previous_tex >= 0) {
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+	}
 }
 
 static struct wlr_texture *pop_animation_capture(struct fx_gles_render_pass *pass) {
@@ -514,13 +737,144 @@ static struct wlr_texture *pop_animation_capture(struct fx_gles_render_pass *pas
 	return pass->animation_textures[pass->animation_depth];
 }
 
-void fx_render_pass_end_animation(struct fx_gles_render_pass *pass,
+void fx_render_pass_end_animation_with_history(struct fx_gles_render_pass *pass,
 		struct fx_animation_shader *shader, const struct fx_animation_parameters *parameters,
 		const struct wlr_box *box, const struct wlr_box *logical_box,
-		enum wl_output_transform transform, const pixman_region32_t *clip) {
+		enum wl_output_transform transform, const pixman_region32_t *clip,
+		struct fx_animation_history *history, struct wlr_output *output,
+		bool update_history) {
 	struct wlr_texture *texture = pop_animation_capture(pass);
-	draw_animation_texture(pass, texture, shader, parameters, box, box, logical_box, transform, clip);
+	struct fx_renderer *renderer = pass->buffer->renderer;
+	struct fx_animation_output_history *output_history = NULL;
+	struct wlr_texture *previous_texture = NULL;
+	struct wlr_box previous_box = {0};
+	const uint32_t format = pass->has_color_transform
+		? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+	if (shader->previous_tex >= 0 && history != NULL && output != NULL) {
+		output_history = animation_history_get_output(history, output, renderer,
+			update_history);
+		if (output_history != NULL && update_history &&
+				!animation_history_matches(output_history, format, transform)) {
+			animation_history_set_format(output_history, format, transform);
+		}
+		if (output_history != NULL && output_history->valid &&
+				animation_history_matches(output_history, format, transform)) {
+			struct fx_framebuffer *previous =
+				output_history->buffers[output_history->previous];
+			previous_texture = fx_texture_from_buffer(&renderer->wlr_renderer,
+				previous->buffer);
+			if (previous_texture != NULL &&
+					fx_get_texture(previous_texture)->target == GL_TEXTURE_2D) {
+				previous_box = (struct wlr_box){
+					.width = previous_texture->width,
+					.height = previous_texture->height,
+				};
+			} else {
+				if (previous_texture != NULL) {
+					wlr_texture_destroy(previous_texture);
+				}
+				previous_texture = NULL;
+			}
+		}
+	}
+	if (output_history != NULL && update_history &&
+			!output_history->allocation_failed &&
+			box->width > 0 && box->height > 0 &&
+			pass->fx_offscreen_buffers != NULL &&
+			pass->fx_offscreen_buffers->allocator != NULL) {
+		const unsigned write = output_history->valid
+			? output_history->previous ^ 1 : 0;
+		bool failed = false;
+		fx_framebuffer_get_or_create_custom(renderer,
+			pass->fx_offscreen_buffers->allocator, box->width, box->height,
+			format, &output_history->buffers[write], &failed);
+		output_history->allocation_failed = failed;
+		fx_framebuffer_bind(pass->buffer);
+		struct fx_framebuffer *result = output_history->buffers[write];
+		struct wlr_texture *result_texture = !failed && result != NULL
+			? fx_texture_from_buffer(&renderer->wlr_renderer, result->buffer) : NULL;
+		if (result_texture != NULL &&
+				fx_get_texture(result_texture)->target == GL_TEXTURE_2D) {
+			if (!animation_history_queue_update(pass, output_history, write)) {
+				wlr_texture_destroy(result_texture);
+				goto fallback;
+			}
+			fx_framebuffer_bind(result);
+			glViewport(0, 0, box->width, box->height);
+			glDisable(GL_SCISSOR_TEST);
+			glClearColor(0, 0, 0, 0);
+			glClear(GL_COLOR_BUFFER_BIT);
+			float history_projection[9];
+			matrix_projection(history_projection, box->width, box->height,
+				WL_OUTPUT_TRANSFORM_FLIPPED_180);
+			const struct wlr_box history_box = {
+				.width = box->width,
+				.height = box->height,
+			};
+			pixman_region32_t history_clip;
+			const pixman_region32_t *history_clip_ptr = NULL;
+			if (clip != NULL) {
+				pixman_region32_init(&history_clip);
+				pixman_region32_copy(&history_clip, clip);
+				pixman_region32_translate(&history_clip, -box->x, -box->y);
+				pixman_region32_intersect_rect(&history_clip, &history_clip,
+					0, 0, box->width, box->height);
+				history_clip_ptr = &history_clip;
+			}
+			draw_animation_texture(pass, texture, shader, parameters,
+				&history_box, box, logical_box, transform, history_clip_ptr,
+				previous_texture, previous_texture != NULL ? &previous_box : NULL,
+				history_projection, false, false);
+			if (history_clip_ptr != NULL) {
+				pixman_region32_fini(&history_clip);
+			}
+			fx_framebuffer_bind(pass->buffer);
+			glViewport(0, 0, pass->buffer->buffer->width,
+				pass->buffer->buffer->height);
+			struct fx_render_texture_options result_options = {
+				.base = {
+					.texture = result_texture,
+					.dst_box = *box,
+					.clip = clip,
+					.filter_mode = WLR_SCALE_FILTER_NEAREST,
+					.blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
+					.transfer_function = pass->has_color_transform
+						? WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR : 0,
+				},
+			};
+			fx_render_pass_add_texture(pass, &result_options);
+			wlr_texture_destroy(result_texture);
+			if (previous_texture != NULL) {
+				wlr_texture_destroy(previous_texture);
+			}
+			wlr_texture_destroy(texture);
+			return;
+		}
+		if (result_texture != NULL) {
+			wlr_texture_destroy(result_texture);
+		}
+		if (!failed) {
+			output_history->allocation_failed = true;
+		}
+	}
+fallback:
+	draw_animation_texture(pass, texture, shader, parameters, box, box,
+		logical_box, transform, clip, previous_texture,
+		previous_texture != NULL ? &previous_box : NULL,
+		pass->projection_matrix, true, true);
+	if (previous_texture != NULL) {
+		wlr_texture_destroy(previous_texture);
+	}
 	wlr_texture_destroy(texture);
+}
+
+void fx_render_pass_end_animation(struct fx_gles_render_pass *pass,
+		struct fx_animation_shader *shader,
+		const struct fx_animation_parameters *parameters,
+		const struct wlr_box *box, const struct wlr_box *logical_box,
+		enum wl_output_transform transform, const pixman_region32_t *clip) {
+	fx_render_pass_end_animation_with_history(pass, shader, parameters,
+		box, logical_box, transform, clip, NULL, NULL, false);
 }
 
 static void setup_blending(enum wlr_render_blend_mode mode) {
@@ -612,7 +966,8 @@ bool fx_render_pass_end_animation_shadow(struct fx_gles_render_pass *pass,
 	glUniform2f(glGetUniformLocation(horizontal->program, "shadow_step"),
 		softness / (8.0f * full.width), 0);
 	draw_animation_texture(pass, caster, horizontal, &params, &reduced, &full, &full,
-		WL_OUTPUT_TRANSFORM_NORMAL, NULL);
+		WL_OUTPUT_TRANSFORM_NORMAL, NULL, NULL, NULL,
+		pass->projection_matrix, true, true);
 	struct wlr_texture *blurred = pop_animation_capture(pass);
 	pop_animation_capture(pass);
 	glUseProgram(vertical->program);
@@ -632,7 +987,8 @@ bool fx_render_pass_end_animation_shadow(struct fx_gles_render_pass *pass,
 	glBindTexture(GL_TEXTURE_2D, fx_get_texture(caster)->tex);
 	glUniform1i(glGetUniformLocation(vertical->program, "shadow_mask"), 1);
 	draw_animation_texture(pass, blurred, vertical, &params, &full, &reduced, &reduced,
-		WL_OUTPUT_TRANSFORM_NORMAL, clip);
+		WL_OUTPUT_TRANSFORM_NORMAL, clip, NULL, NULL,
+		pass->projection_matrix, true, true);
 	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glActiveTexture(GL_TEXTURE0);
@@ -2225,6 +2581,7 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 	pixman_region32_init(&pass->blur_padding_region);
 	pixman_region32_init(&pass->updated_region);
 	pass->has_blur = false;
+	wl_list_init(&pass->animation_history_updates);
 
 	matrix_projection(pass->projection_matrix, wlr_buffer->width, wlr_buffer->height,
 		WL_OUTPUT_TRANSFORM_FLIPPED_180);

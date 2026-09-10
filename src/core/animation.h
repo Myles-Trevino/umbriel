@@ -164,6 +164,8 @@ namespace umbriel {
     [[nodiscard]] double velocity() const { return m_velocity; }
     [[nodiscard]] double progress() const;
     [[nodiscard]] uint64_t durationMs() const { return m_durationMsec; }
+    [[nodiscard]] uint64_t transitionId() const { return m_transitionId; }
+    [[nodiscard]] const std::array<float, 4>& shaderSeed() const { return m_shaderSeed; }
 
   private:
     double m_from = 0.0;
@@ -174,6 +176,8 @@ namespace umbriel {
     double m_progress = 1.0;  // linear fraction as of the last tick(); 1.0 when never animating
     uint64_t m_startMsec = 0; // 0 = clock starts on the first tick
     uint64_t m_durationMsec = 1;
+    uint64_t m_transitionId = 0;
+    std::array<float, 4> m_shaderSeed{};
     AnimationCurve m_curve{.easing = Easing::EaseOutCubic};
     bool m_animating = false;
     // Set by settleSpring(): tick() runs the physics solver instead of the duration curve.
@@ -215,6 +219,8 @@ namespace umbriel {
     [[nodiscard]] const AnimationCurve& curve() const { return m_curve; }
     [[nodiscard]] double progress() const;
     [[nodiscard]] uint64_t durationMs() const { return m_durationMsec; }
+    [[nodiscard]] uint64_t transitionId() const { return m_transitionId; }
+    [[nodiscard]] const std::array<float, 4>& shaderSeed() const { return m_shaderSeed; }
 
     [[nodiscard]] float r() const { return m_current[0]; }
     [[nodiscard]] float g() const { return m_current[1]; }
@@ -230,6 +236,8 @@ namespace umbriel {
     double m_progress = 1.0; // linear fraction as of the last tick(); 1.0 when never animating
     uint64_t m_startMsec = 0;
     uint64_t m_durationMsec = 1;
+    uint64_t m_transitionId = 0;
+    std::array<float, 4> m_shaderSeed{};
     AnimationCurve m_curve{.easing = Easing::EaseOutCubic};
     bool m_animating = false;
   };

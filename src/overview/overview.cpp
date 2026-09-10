@@ -984,7 +984,7 @@ namespace umbriel {
       wlr_scene_node_destroy(&snapshot->node);
       return;
     }
-    wlr_scene_node_copy_animations(&snapshot->node, &card.tree->node);
+    wlr_scene_node_copy_animations_for_snapshot(&snapshot->node, &card.tree->node);
     m_server->animateCloseSnapshot(card.owner->output, snapshot, std::move(borders));
     wlr_output_schedule_frame(card.owner->output->wlr());
   }

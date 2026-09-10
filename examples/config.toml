@@ -678,6 +678,8 @@ blur_optimized = false
 # Every event accepts shader = "path/to/effect.glsl". Inline GLSL is not supported.
 # File paths are relative to this config, including configs loaded via include.
 # Bundled reveal.glsl and squash.glsl can be referenced by their installed absolute paths.
+# Shaders can use umbriel_sample_previous(uv) for target-local feedback.
+# umbriel_random_seed is a stable vec4 that changes for each transition.
 # Copy examples/shaders beside your config only if you want editable local versions.
 # ────────────────────────────────────────────────────────────────────────────
 

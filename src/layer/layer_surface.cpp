@@ -194,7 +194,7 @@ namespace umbriel {
       return;
     }
 
-    wlr_scene_node_copy_animations(&snap->node, &m_scene->tree->node);
+    wlr_scene_node_copy_animations_for_snapshot(&snap->node, &m_scene->tree->node);
     m_server->animateCloseSnapshot(
         out, snap, {},
         Server::CloseSnapshotOverrides{
