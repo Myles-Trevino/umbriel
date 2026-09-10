@@ -77,6 +77,21 @@ namespace umbriel {
       return 0;
     }
 
+    View* tiledViewAtLayoutPoint(Workspace& workspace, double lx, double ly) {
+      for (const Column& column : workspace.layout().columns()) {
+        for (View* candidate : column.views) {
+          if (candidate == nullptr || !candidate->mapped() || !candidate->tiled()) {
+            continue;
+          }
+          const wlr_box target = workspace.presentedTiledBox(candidate);
+          if (target.width > 0 && target.height > 0 && wlr_box_contains_point(&target, lx, ly)) {
+            return candidate;
+          }
+        }
+      }
+      return nullptr;
+    }
+
     bool sceneNodeShowsSurface(wlr_scene_node* node, wlr_surface* surface) {
       switch (node->type) {
       case WLR_SCENE_NODE_BUFFER: {
@@ -2297,6 +2312,30 @@ namespace umbriel {
   }
 
   void View::handleUnmap() {
+    Workspace* closingWorkspace = m_workspace;
+    Cursor* cursor = m_server->cursor();
+    wlr_seat* seat = m_server->seat()->wlr();
+    const Overview* overview = m_server->overview();
+    const bool focusRevealedTile = closingWorkspace != nullptr
+        && closingWorkspace->focusedView() == this
+        && closingWorkspace->active()
+        && closingWorkspace->scrollingLayout() == nullptr
+        && m_tiled
+        && m_toplevel->parent == nullptr
+        && config().input.focus.followsMouse
+        && !m_server->sessionLocked()
+        && m_server->exclusiveKeyboardLayer() == nullptr
+        && (overview == nullptr || !overview->active())
+        && cursor != nullptr
+        && cursor->isPassthrough()
+        && seat->drag == nullptr
+        && seat->pointer_state.button_count == 0
+        && View::fromSurface(seat->keyboard_state.focused_surface) == this
+        && View::fromSurface(seat->pointer_state.focused_surface) == this
+        && wlr_box_contains_point(&m_presentedBox, cursor->wlr()->x, cursor->wlr()->y);
+    const double closePointerX = cursor != nullptr ? cursor->wlr()->x : 0.0;
+    const double closePointerY = cursor != nullptr ? cursor->wlr()->y : 0.0;
+
     setUrgent(false);
     m_floatingMaximized = false;
     m_maximizedToEdges = false;
@@ -2316,8 +2355,8 @@ namespace umbriel {
     if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
       overview->onViewUnmapped(this);
     }
-    // Choose the layout neighbor while this view still belongs to the layout. Waiting for destroy loses that position,
-    // and focus-follows-mouse used to replace it with whichever survivor happened to sit under the stationary pointer.
+    // Choose the layout neighbor while this view still belongs to the layout. Waiting for destroy loses that position.
+    // It remains the fallback when the pointer did not belong to the closing tile or no survivor takes its place.
     if (m_workspace != nullptr && m_workspace->focusedView() == this) {
       View* replacement = m_workspace->focusReplacementForRemoval(this);
       if (replacement != nullptr) {
@@ -2359,6 +2398,15 @@ namespace umbriel {
     m_positioned = false;
     if (m_workspace != nullptr) {
       m_workspace->layoutDetach(this, m_workspace->scrollingLayout() != nullptr);
+      if (focusRevealedTile) {
+        // The scene may still be animating from its old geometry. Arrange now, then read the authoritative layout
+        // targets once so compositor motion cannot produce a chain of hover focus changes.
+        m_workspace->flushArrange();
+        View* replacement = tiledViewAtLayoutPoint(*m_workspace, closePointerX, closePointerY);
+        if (replacement != nullptr && m_workspace->focusedView() != replacement) {
+          m_server->focusView(replacement, FocusReason::PointerHover);
+        }
+      }
     }
     leaveForeignOutput();
     setForeignActivated(false);
