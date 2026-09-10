@@ -26,6 +26,7 @@ readonly -a NORMAL_GLOBALS=(
   wl_output
   xdg_wm_base
   xdg_toplevel_tag_manager_v1
+  zxdg_exporter_v2
   zxdg_decoration_manager_v1
   org_kde_kwin_server_decoration_manager
   zwp_relative_pointer_manager_v1
@@ -42,6 +43,7 @@ readonly -a NORMAL_GLOBALS=(
 readonly -a RESTRICTED_GLOBALS=(
   wp_security_context_manager_v1
   zxdg_output_manager_v1
+  zxdg_importer_v2
   ext_idle_notifier_v1
   ext_data_control_manager_v1
   zwlr_data_control_manager_v1
