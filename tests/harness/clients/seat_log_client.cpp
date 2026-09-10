@@ -11,11 +11,20 @@
 #include <format>
 #include <print>
 #include <string>
+#include <string_view>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
 namespace {
+  constexpr uint32_t kLeftButton = 0x110;
+
+  enum class PressAction {
+    None,
+    Move,
+    ResizeRight,
+  };
+
   struct State {
     wl_display* display = nullptr;
     wl_compositor* compositor = nullptr;
@@ -36,6 +45,8 @@ namespace {
     int height = 480;
     // A configure asked for a size the current buffer does not have.
     bool resizePending = true;
+    PressAction pressAction = PressAction::None;
+    bool actionRequested = false;
   };
 
   const char* keyStateName(uint32_t value) { return value == WL_KEYBOARD_KEY_STATE_PRESSED ? "pressed" : "released"; }
@@ -84,8 +95,22 @@ namespace {
   // checks parse.
   void pointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t, wl_fixed_t) {}
 
-  void pointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint32_t buttonState) {
+  void pointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t buttonState) {
+    auto& state = *static_cast<State*>(data);
     std::println("pointer-button code={} state={}", button, buttonStateName(buttonState));
+    if (state.pressAction != PressAction::None
+        && !state.actionRequested
+        && button == kLeftButton
+        && buttonState == WL_POINTER_BUTTON_STATE_PRESSED) {
+      state.actionRequested = true;
+      if (state.pressAction == PressAction::Move) {
+        xdg_toplevel_move(state.toplevel, state.seat, serial);
+        std::println("move-requested");
+      } else {
+        xdg_toplevel_resize(state.toplevel, state.seat, serial, XDG_TOPLEVEL_RESIZE_EDGE_RIGHT);
+        std::println("resize-requested edge=right");
+      }
+    }
   }
 
   void pointerAxis(void*, wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {}
@@ -241,9 +266,23 @@ int main(int argc, char** argv) {
   // Checks tail this log while the client keeps running, so a full stdio buffer
   // would hide events until exit.
   setvbuf(stdout, nullptr, _IOLBF, 0);
+  if (argc > 3) {
+    std::println(stderr, "usage: {} [title] [move-on-press|resize-on-press]", argv[0]);
+    return EXIT_FAILURE;
+  }
   const char* title = argc > 1 ? argv[1] : "seat-log-client";
+  const std::string_view mode = argc > 2 ? argv[2] : "";
+  if (!mode.empty() && mode != "move-on-press" && mode != "resize-on-press") {
+    std::println(stderr, "seat-log-client: unknown mode '{}'", mode);
+    return EXIT_FAILURE;
+  }
 
   State state;
+  if (mode == "move-on-press") {
+    state.pressAction = PressAction::Move;
+  } else if (mode == "resize-on-press") {
+    state.pressAction = PressAction::ResizeRight;
+  }
   state.display = wl_display_connect(nullptr);
   if (state.display == nullptr) {
     std::println(stderr, "seat-log-client: cannot connect to a Wayland display");

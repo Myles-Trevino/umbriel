@@ -1280,9 +1280,9 @@ namespace umbriel {
     self->handleDestroy();
   }
 
-  void View::onRequestMove(wl_listener* listener, void* /*data*/) {
+  void View::onRequestMove(wl_listener* listener, void* data) {
     View* self = wl_container_of(listener, self, m_requestMove);
-    self->handleRequestMove();
+    self->handleRequestMove(data);
   }
 
   void View::onRequestResize(wl_listener* listener, void* data) {
@@ -2750,11 +2750,14 @@ namespace umbriel {
     m_server->removeView(this);
   }
 
-  void View::handleRequestMove() { m_server->cursor()->beginMove(this); }
+  void View::handleRequestMove(void* data) {
+    auto* event = static_cast<wlr_xdg_toplevel_move_event*>(data);
+    m_server->cursor()->beginClientMove(this, event->seat, event->serial);
+  }
 
   void View::handleRequestResize(void* data) {
     auto* event = static_cast<wlr_xdg_toplevel_resize_event*>(data);
-    m_server->cursor()->beginResize(this, event->edges);
+    m_server->cursor()->beginClientResize(this, event->seat, event->serial, event->edges);
   }
 
   void View::setMaximized(bool maximized, bool animate) {

@@ -9,8 +9,9 @@ readonly BASELINE="$(< "$UMBRIEL_CONFIG")"
 
 write_config() {
   local numeric_layout=$1 numeric_state=$2 right_output=$3 global_state=${4:-present}
-  printf '%s\n' "$BASELINE" > "$UMBRIEL_CONFIG"
-  cat >> "$UMBRIEL_CONFIG" <<'EOF'
+  local next_config="${UMBRIEL_CONFIG}.next"
+  printf '%s\n' "$BASELINE" > "$next_config"
+  cat >> "$next_config" <<'EOF'
 
 [animation]
 enabled = false
@@ -25,7 +26,7 @@ workspaces = "dynamic"
 workspaces = "dynamic"
 EOF
   if [[ $numeric_state == present ]]; then
-    cat >> "$UMBRIEL_CONFIG" <<EOF
+    cat >> "$next_config" <<EOF
 
 [[workspace]]
 name = "2"
@@ -34,19 +35,19 @@ layout.mode = "$numeric_layout"
 EOF
   fi
   if [[ $global_state == present ]]; then
-    cat >> "$UMBRIEL_CONFIG" <<'EOF'
+    cat >> "$next_config" <<'EOF'
 
 [[workspace]]
 name = "GLOBAL"
 EOF
   fi
-  cat >> "$UMBRIEL_CONFIG" <<EOF
+  cat >> "$next_config" <<EOF
 
 [[workspace]]
 name = "RIGHT"
 output = "$right_output"
 EOF
-  cat >> "$UMBRIEL_CONFIG" <<'EOF'
+  cat >> "$next_config" <<'EOF'
 
 [[workspace]]
 index = 2
@@ -69,6 +70,7 @@ match.app_id = "^dynamic-right$"
 default_workspace = "RIGHT"
 default_focused = false
 EOF
+  mv "$next_config" "$UMBRIEL_CONFIG"
   "$UMBRIEL" msg config-reload > /dev/null
 }
 

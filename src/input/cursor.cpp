@@ -495,13 +495,9 @@ namespace umbriel {
     return workspace != nullptr && grab != nullptr && grab->workspace == workspace;
   }
 
-  void Cursor::beginMove(View* view, uint32_t button) {
-    if (view == nullptr) {
-      return;
-    }
-    if (button == 0) {
-      const wlr_seat_pointer_state& pointer = m_server->seat()->wlr()->pointer_state;
-      button = pointer.button_count > 0 ? pointer.grab_button : 0;
+  bool Cursor::beginMove(View* view, uint32_t button) {
+    if (view == nullptr || !view->mapped() || button == 0) {
+      return false;
     }
     if (!isPassthrough()) {
       resetMode();
@@ -542,16 +538,17 @@ namespace umbriel {
       };
     }
     m_grab = grab;
-    m_moveButton = button;
+    m_grabButton = button;
     if (!grab.pending) {
       view->enterDragPresentation();
     }
     updateInteractiveCursor(view);
+    return true;
   }
 
-  void Cursor::beginResize(View* view, uint32_t edges) {
-    if (view == nullptr) {
-      return;
+  bool Cursor::beginResize(View* view, uint32_t edges, uint32_t button) {
+    if (view == nullptr || !view->mapped() || button == 0) {
+      return false;
     }
     if (!isPassthrough()) {
       resetMode();
@@ -567,7 +564,7 @@ namespace umbriel {
       Workspace* workspace = view->workspace();
       if (workspace == nullptr || workspace->group() == nullptr || workspace->group()->output() == nullptr) {
         refreshInteractiveCursor();
-        return;
+        return false;
       }
       Layout& layout = workspace->layout();
       uint32_t resolvedEdges = 0;
@@ -587,7 +584,7 @@ namespace umbriel {
           workspace->markArrange(true);
         }
         refreshInteractiveCursor();
-        return;
+        return false;
       }
       setActiveConstraint(nullptr);
       if (view->maximizedToEdges()) {
@@ -597,7 +594,7 @@ namespace umbriel {
       std::unique_ptr<ResizeGrab> session = layout.beginResize(view, resolvedEdges, usable);
       if (session == nullptr) {
         refreshInteractiveCursor();
-        return;
+        return false;
       }
       if (session->unmaximizeOnBegin()) {
         wlr_xdg_toplevel_set_maximized(view->toplevel(), false);
@@ -610,12 +607,13 @@ namespace umbriel {
           .edges = resolvedEdges,
           .session = std::move(session),
       };
+      m_grabButton = button;
       updateInteractiveCursor(view);
-      return;
+      return true;
     }
     if (edges == 0) {
       refreshInteractiveCursor();
-      return;
+      return false;
     }
     setActiveConstraint(nullptr);
     if (view->maximizedToEdges()) {
@@ -637,8 +635,47 @@ namespace umbriel {
         .geometryHeight = geometry.height,
         .edges = edges,
     };
+    m_grabButton = button;
     view->beginFloatingResize(edges);
     updateInteractiveCursor(view);
+    return true;
+  }
+
+  std::optional<uint32_t>
+  Cursor::clientPointerGrabButton(const View* view, wlr_seat_client* seatClient, uint32_t serial) const {
+    if (view == nullptr || seatClient == nullptr || !isPassthrough()) {
+      return std::nullopt;
+    }
+    wlr_seat* seat = m_server->seat()->wlr();
+    wlr_surface* focused = seat->pointer_state.focused_surface;
+    if (seatClient->seat != seat
+        || seat->drag != nullptr
+        || wlr_seat_pointer_has_grab(seat)
+        || focused == nullptr
+        || wlr_surface_get_root_surface(focused) != view->toplevel()->base->surface
+        || !wlr_seat_validate_pointer_grab_serial(seat, focused, serial)) {
+      return std::nullopt;
+    }
+    return seat->pointer_state.grab_button;
+  }
+
+  void Cursor::beginClientMove(View* view, wlr_seat_client* seatClient, uint32_t serial) {
+    const std::optional<uint32_t> button = clientPointerGrabButton(view, seatClient, serial);
+    if (!button.has_value() || *button == 0 || !beginMove(view, *button)) {
+      return;
+    }
+    // xdg-shell transfers this device away from the client for an accepted
+    // interactive operation. The notify variant also retires wlroots' implicit
+    // button grab; m_grabButton keeps the raw release needed to finish ours.
+    wlr_seat_pointer_notify_clear_focus(m_server->seat()->wlr());
+  }
+
+  void Cursor::beginClientResize(View* view, wlr_seat_client* seatClient, uint32_t serial, uint32_t edges) {
+    const std::optional<uint32_t> button = clientPointerGrabButton(view, seatClient, serial);
+    if (!button.has_value() || *button == 0 || !beginResize(view, edges, *button)) {
+      return;
+    }
+    wlr_seat_pointer_notify_clear_focus(m_server->seat()->wlr());
   }
 
   void Cursor::warpTo(double lx, double ly) { warpTo(lx, ly, true); }
@@ -708,7 +745,7 @@ namespace umbriel {
       view->finishFloatingResize();
     }
     m_grab = PassthroughGrab{};
-    m_moveButton = 0;
+    m_grabButton = 0;
     if (restoreDragPresentation && view != nullptr) {
       view->restoreHomePresentation();
     }
@@ -878,7 +915,7 @@ namespace umbriel {
               .lastX = m_cursor->x,
               .lastY = m_cursor->y,
           };
-          m_moveButton = button;
+          m_grabButton = button;
           setCompositorCursor("grabbing");
           clearPointerFocus();
           return;
@@ -903,8 +940,8 @@ namespace umbriel {
       return;
     }
 
-    // An interactive move ends only when its initiating button is released.
-    if (m_moveButton != 0 && button != m_moveButton) {
+    // An interactive pointer operation ends only when its initiating button is released.
+    if (m_grabButton != 0 && button != m_grabButton) {
       if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
         m_swallowedButtons.push_back(button);
         toggleDragTarget(button);
@@ -977,6 +1014,10 @@ namespace umbriel {
         resetMode();
         return;
       }
+      if (std::holds_alternative<FloatingResizeGrab>(m_grab)) {
+        resetMode();
+        return;
+      }
       wlr_seat_pointer_notify_button(m_server->seat()->wlr(), timeMsec, button, state);
 
       // After the final release, refresh pointer focus so it matches the surface actually under the cursor. The
@@ -1031,7 +1072,7 @@ namespace umbriel {
     }
     if (button == BTN_RIGHT && modHeld && view != nullptr) {
       m_server->focusView(view, FocusReason::Grab);
-      beginResize(view, view->tiled() ? 0 : floatResizeEdges(view));
+      beginResize(view, view->tiled() ? 0 : floatResizeEdges(view), button);
       return;
     }
 
@@ -1944,7 +1985,7 @@ namespace umbriel {
   void Cursor::toggleDragTarget(uint32_t button) {
     // The drag owns its initiating button, so the other main button is the one
     // free to retarget it.
-    const uint32_t toggleButton = m_moveButton == BTN_LEFT ? BTN_RIGHT : BTN_LEFT;
+    const uint32_t toggleButton = m_grabButton == BTN_LEFT ? BTN_RIGHT : BTN_LEFT;
     if (button != toggleButton) {
       return;
     }

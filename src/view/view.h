@@ -303,7 +303,7 @@ namespace umbriel {
     void setXdgTag(std::string_view tag);
     void syncContentType(wlr_surface* committedSurface = nullptr);
     void handleDestroy();
-    void handleRequestMove();
+    void handleRequestMove(void* data);
     void handleRequestResize(void* data);
     void handleRequestMaximize();
     void setMaximized(bool maximized, bool animate = true);
