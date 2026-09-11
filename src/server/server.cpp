@@ -51,7 +51,7 @@ namespace umbriel {
     // Security-context clients only receive reviewed, ordinary application
     // protocols. New globals stay unavailable until they are classified here.
     // [[security_context_rule]] widens the set for matching clients.
-    constexpr std::array<std::string_view, 28> kAllowedSecurityContextGlobals{
+    constexpr std::array<std::string_view, 29> kAllowedSecurityContextGlobals{
         "wl_shm",
         "wl_drm",
         "zwp_linux_dmabuf_v1",
@@ -69,6 +69,7 @@ namespace umbriel {
         "wp_color_manager_v1",
         "xdg_wm_base",
         "xdg_toplevel_tag_manager_v1",
+        "zxdg_exporter_v2",
         "zxdg_decoration_manager_v1",
         "org_kde_kwin_server_decoration_manager",
         "zwp_relative_pointer_manager_v1",
@@ -266,6 +267,10 @@ namespace umbriel {
     if (m_display == nullptr) {
       throw std::runtime_error("failed to create wl_display");
     }
+    m_protocolLogger = wl_display_add_protocol_logger(m_display, onProtocolMessage, this);
+    if (m_protocolLogger == nullptr) {
+      throw std::runtime_error("failed to register Wayland protocol logger");
+    }
     wl_display_set_default_max_buffer_size(m_display, kWaylandClientBufferSize);
     m_clientCreated.notify = onClientCreated;
     wl_display_add_client_created_listener(m_display, &m_clientCreated);
@@ -449,6 +454,14 @@ namespace umbriel {
     m_newXdgPopup.notify = onNewXdgPopup;
     wl_signal_add(&m_xdgShell->events.new_popup, &m_newXdgPopup);
 
+    wlr_xdg_foreign_registry* foreignRegistry = wlr_xdg_foreign_registry_create(m_display);
+    if (foreignRegistry == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign registry");
+    }
+    if (wlr_xdg_foreign_v2_create(m_display, foreignRegistry) == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign global");
+    }
+
     m_xdgToplevelTagManager = wlr_xdg_toplevel_tag_manager_v1_create(m_display, 1);
     if (m_xdgToplevelTagManager == nullptr) {
       throw std::runtime_error("failed to create XDG toplevel tag manager");
@@ -542,6 +555,10 @@ namespace umbriel {
 
   Server::~Server() {
     m_stopping = true;
+    if (m_protocolLogger != nullptr) {
+      wl_protocol_logger_destroy(m_protocolLogger);
+      m_protocolLogger = nullptr;
+    }
     wl_list_remove(&m_clientCreated.link);
     wl_list_remove(&m_newOutput.link);
     wl_list_remove(&m_newInput.link);

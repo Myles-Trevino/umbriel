@@ -2,6 +2,7 @@
 
 #include "config/config.h"
 
+#include <algorithm>
 #include <array>
 #include <memory>
 
@@ -27,9 +28,12 @@ namespace umbriel {
       if (node == nullptr) {
         return;
       }
-      const fx_animation_parameters parameters{
-          .progress = progress, .linear_progress = static_cast<float>(value.progress()), .direction = direction
-      };
+      fx_animation_parameters parameters{};
+      parameters.progress = progress;
+      parameters.linear_progress = static_cast<float>(value.progress());
+      parameters.direction = direction;
+      parameters.transition_id = value.transitionId();
+      std::ranges::copy(value.shaderSeed(), parameters.random_seed);
       wlr_scene_node_set_animation(
           node, static_cast<unsigned>(event), value.animating() ? animationShader(renderer, event) : nullptr,
           &parameters

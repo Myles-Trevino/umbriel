@@ -157,6 +157,10 @@ namespace umbriel {
     // listings that order by position must read these instead.
     [[nodiscard]] int layoutTargetX() const { return static_cast<int>(std::lround(m_posX.target())); }
     [[nodiscard]] int layoutTargetY() const { return static_cast<int>(std::lround(m_posY.target())); }
+    // The box this window is headed for: the output when fullscreen, its presented slot when tiled, which is the usable
+    // area when maximized to edges, else its own position at the size it is resizing to. Valid ahead of the animation
+    // that carries the node there and of the client's resize, and settles a pending arrange to get there.
+    [[nodiscard]] wlr_box targetBox() const;
     // Move the scene nodes without touching the position animation: an
     // interactive drag tracks the pointer 1:1 and owns the position itself.
     void setDragPosition(int x, int y);
@@ -303,11 +307,13 @@ namespace umbriel {
     void setXdgTag(std::string_view tag);
     void syncContentType(wlr_surface* committedSurface = nullptr);
     void handleDestroy();
-    void handleRequestMove();
+    void handleRequestMove(void* data);
     void handleRequestResize(void* data);
     void handleRequestMaximize();
     void setMaximized(bool maximized, bool animate = true);
     void handleRequestFullscreen();
+    void recordOpeningParentRequest(bool parentRequested);
+    [[nodiscard]] bool openingParented() const;
     void handleSetParent();
     void setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout = FullscreenExitLayout::Immediate);
     void handleSetTitle();
@@ -403,6 +409,8 @@ namespace umbriel {
     // clamp does not apply or the origin already satisfies it.
     [[nodiscard]] std::optional<FloatingPoint> floatingClampTarget(FloatingPoint origin, int width, int height);
     void placeInUsableArea(const std::optional<WindowPosition>& position = std::nullopt);
+    // The output box a fullscreen window covers: its workspace's output, else the one under it.
+    [[nodiscard]] wlr_box fullscreenArea() const;
     void setPinned(bool pinned, bool focus);
     [[nodiscard]] View* transientParent() const;
     void syncTransientSceneParent();
@@ -421,11 +429,16 @@ namespace umbriel {
     void refreshStartupRuleEffects();
     // Applies or undoes the alone size effect after the workspace's tiled set changes.
     bool notifyAloneStateChanged();
-    [[nodiscard]] ResolvedWindowRule resolveAloneRules() const;
+    // Resolves the rules with `alone` forced, so the alone effect can compare both outcomes, and so the opening paths
+    // can read the alone rules before the view is in the layout.
+    [[nodiscard]] ResolvedWindowRule resolveRulesWithAlone(bool alone) const;
     [[nodiscard]] ResolvedWindowRule
     aloneRuleDiff(const ResolvedWindowRule& alone, const ResolvedWindowRule& other) const;
     bool applyAloneRuleEffects(const ResolvedWindowRule& delta);
     void revertAloneRuleEffects();
+    // Hands the state the opening configure seeded from the alone rules to the alone effect, or drops it when the
+    // window did not open alone after all.
+    void settleOpeningAloneState();
     // Re-applies dynamic effects after a float, pin, scratchpad, or alone transition, because those states select
     // rules. A transition that also moved focus has already refreshed them, so this is a no-op there.
     void refreshStateRuleEffects();
@@ -462,11 +475,17 @@ namespace umbriel {
     AloneAction m_aloneAction = AloneAction::None;
     ResolvedWindowRule m_lastAloneDelta;
     std::optional<double> m_aloneSavedWidthFrac;
-    // Set by the opening configure when an alone-only rule seeded fullscreen or maximize; consumed and cleared at map.
-    bool m_aloneOpeningStateMustClaim = false;
+    // What the opening configure seeded from an alone-only rule, so map can hand that state to the alone effect.
+    enum class AloneSeed : uint8_t {
+      None,
+      Fullscreen,
+      Maximize,
+    };
+    AloneSeed m_aloneOpeningSeed = AloneSeed::None;
     // One-shot effects already applied at map. Late identity resolution only
     // reapplies a field when its resolved value changes.
     ResolvedWindowRule m_initialRules;
+    WindowRuleState m_initialRuleState;
     std::optional<std::string> m_initialRulesXdgTag;
     ContentType m_initialRulesContentType = ContentType::None;
     std::optional<std::string> m_namedScrollingColumnName;
@@ -494,6 +513,9 @@ namespace umbriel {
     std::optional<DisplacedHome> m_displacedHome;
 
     bool m_mapped = false;
+    // The raw pre-map set_parent request. wlroots discards an unmapped target,
+    // but its presence still determines the window's opening layout policy.
+    bool m_openingParentRequested = false;
     // Saved client state commonly requests maximization while the surface is
     // opening. Layout policy owns that transition; later requests are valid.
     bool m_acceptClientMaximizeRequests = false;

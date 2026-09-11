@@ -41,6 +41,9 @@ left and right key for the logical modifier are accepted, and modifier-only
 binds never repeat. Combinations containing only multiple modifiers, such as
 `Ctrl+Alt`, are invalid.
 
+Physical and virtual keyboards support modifier-only binds. Input-method key
+echoes do not arm or cancel a pending tap.
+
 ## Special keys
 
 **Scroll wheel:** `WheelUp`, `WheelDown`, `WheelLeft`, `WheelRight` (require
@@ -65,7 +68,9 @@ the newly exposed columns without requiring additional pointer motion.
 Bind `layout-scroll-drag` to a modified mouse button to pan a scrolling
 workspace directly. The strip follows the pointer along its configured axis,
 including overscroll and the same release settling used by the three-finger
-gesture:
+gesture. In the overview it pans the row under the pointer instead of the
+active one, and a bare middle-button drag across the output's workspace axis
+does the same:
 
 ```toml
 "Mod+MouseMiddle" = "layout-scroll-drag"

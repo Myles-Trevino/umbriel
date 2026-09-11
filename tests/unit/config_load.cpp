@@ -527,6 +527,7 @@ mode = "master"
 position = "right"
 default_width_fraction = 0.05
 new_on_top = false
+new_becomes_master = true
 surprise = true
 
 [output.DP-1]
@@ -539,6 +540,7 @@ name = "dev"
 position = "left"
 default_width_fraction = 0.7
 new_on_top = true
+new_becomes_master = false
 )");
 
   ConfigStore& store = umbriel::configStore();
@@ -550,13 +552,31 @@ new_on_top = true
   CHECK(store.config().layout.master.position == umbriel::MasterPosition::Right);
   CHECK_EQ(store.config().layout.master.defaultWidthFraction, 0.1);
   CHECK(!store.config().layout.master.newOnTop);
+  CHECK(store.config().layout.master.newBecomesMaster);
   CHECK_EQ(store.config().workspaceRules.size(), size_t{1});
   CHECK(store.config().workspaceRules[0].layout.master.position == umbriel::MasterPosition::Left);
   CHECK(store.config().workspaceRules[0].layout.master.defaultWidthFraction.has_value());
   CHECK_EQ(*store.config().workspaceRules[0].layout.master.defaultWidthFraction, 0.7);
   CHECK(store.config().workspaceRules[0].layout.master.newOnTop == true);
+  CHECK(store.config().workspaceRules[0].layout.master.newBecomesMaster.has_value());
+  CHECK(store.config().workspaceRules[0].layout.master.newBecomesMaster == false);
   CHECK(containsDiagnostic(store, "layout.master.default_width_fraction = 0.05 out of range, clamped to 0.1"));
   CHECK(containsDiagnostic(store, "unknown key layout.master.surprise"));
+}
+
+UMBRIEL_TEST(masterPositionAcceptsCenterAndRejectsOtherValues) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[layout.master]\nposition = \"center\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.master.position == umbriel::MasterPosition::Center);
+
+  file.write("[layout.master]\nposition = \"middle\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.master.position == umbriel::MasterPosition::Left);
+  CHECK(containsDiagnostic(store, R"(unknown layout.master.position "middle")"));
 }
 
 UMBRIEL_TEST(scrollingDefaultWidthIsOptional) {
@@ -925,6 +945,42 @@ UMBRIEL_TEST(overviewBackgroundBlurLoads) {
   file.write("[overview]\nbackground_blur = false\n");
   CHECK(store.reload().success);
   CHECK(!store.config().overview.backgroundBlur);
+}
+
+UMBRIEL_TEST(overviewScrollFactorLoadsIndependently) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  file.write("[overview]\nscroll_factor_horizontal = 0.7\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().overview.scrollFactorHorizontal, 0.7);
+  CHECK_EQ(store.config().overview.scrollFactorVertical, 1.0);
+  file.write("[overview]\nscroll_factor_horizontal = 1.2\nscroll_factor_vertical = 0.8\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().overview.scrollFactorHorizontal, 1.2);
+  CHECK_EQ(store.config().overview.scrollFactorVertical, 0.8);
+  file.write("[overview]\nzoom = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().overview.scrollFactorHorizontal, 1.0);
+  CHECK_EQ(store.config().overview.scrollFactorVertical, 1.0);
+}
+
+UMBRIEL_TEST(overviewWorkspaceCurveLoadsAndFallsBackToItsSpring) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  file.write("[animation.overview]\nworkspace_curve = \"easeout\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().animation.overview.workspaceCurve.easing == umbriel::Easing::EaseOutCubic);
+  file.write("[animation.overview]\nworkspace_curve = \"spring:0.6,120\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().animation.overview.workspaceCurve.easing == umbriel::Easing::Spring);
+  CHECK_EQ(store.config().animation.overview.workspaceCurve.spring.damping, 0.6);
+  CHECK_EQ(store.config().animation.overview.workspaceCurve.spring.stiffness, 120.0);
+  file.write("[animation.overview]\nduration_ms = 300\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().animation.overview.workspaceCurve.easing == umbriel::Easing::Spring);
+  CHECK_EQ(store.config().animation.overview.workspaceCurve.spring.stiffness, 1000.0);
 }
 
 UMBRIEL_TEST(overviewWorkspaceWallpaperLoads) {
@@ -1318,6 +1374,55 @@ UMBRIEL_TEST(windowRuleWorkspaceTargetPreservesIntegerAndStringSelectors) {
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   CHECK(!store.config().windowRules[0].defaultWorkspace.has_value());
   CHECK(containsDiagnostic(store, "ignoring window_rule.default_workspace"));
+}
+
+UMBRIEL_TEST(windowRuleDefaultScratchpadTargetsConfiguredInventory) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"terminal\"\n[[scratchpad]]\nname = \"terminal\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].defaultScratchpad == "terminal");
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_scratchpad"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"default\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].defaultScratchpad == "default");
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"terminal\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(store.config().windowRules[0].opacity == 0.5);
+  CHECK(containsDiagnostic(store, "unknown scratchpad 'terminal'"));
+
+  file.write("[[scratchpad]]\nname = \"terminal\"\n[[window_rule]]\ndefault_scratchpad = \"default\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(containsDiagnostic(store, "unknown scratchpad 'default'"));
+
+  file.write("[[scratchpad]]\nname = \"terminal\"\n[[window_rule]]\ndefault_scratchpad = \"missing\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(store.config().windowRules[0].opacity == 0.5);
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_scratchpad (unknown scratchpad 'missing')"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = \"\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.default_scratchpad"));
+
+  file.write("[[window_rule]]\ndefault_scratchpad = 1\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].defaultScratchpad);
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_scratchpad (expected non-empty string)"));
 }
 
 UMBRIEL_TEST(securityContextRulesLoadAndKeepTheManagerBlocked) {
@@ -2485,6 +2590,9 @@ blur = true
   CHECK(!animation.overview.enabled);
   CHECK_EQ(animation.overview.durationMs, 700);
   CHECK(animation.overview.curve.easing == umbriel::Easing::CustomBezier);
+  // The shared curve reaches every duration-based event, but the filmstrip settle keeps its spring until asked.
+  CHECK(animation.overview.workspaceCurve.easing == umbriel::Easing::Spring);
+  CHECK_EQ(animation.overview.workspaceCurve.spring.stiffness, 1000.0);
   CHECK_EQ(animation.windowsMove.durationMs, 320);
   CHECK_EQ(animation.scratchpad.dim, 0.4);
   CHECK(animation.scratchpad.blur);

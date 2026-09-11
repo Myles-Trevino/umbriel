@@ -65,8 +65,10 @@ settings from the dynamic table below. Pinned and scratchpad windows are
 floating, so `is_floating = true` also matches them. Opening settings resolve
 against the state the window opens with, before `default_floating` and
 `default_pinned` apply, so a rule that sets one of those cannot also select on
-the state it produces. `is_alone` never selects opening settings; its size
-effects are described in [The only window in the workspace](#the-only-window-in-the-workspace).
+the state it produces. `is_alone` selects only the four size settings described
+in [The only window in the workspace](#the-only-window-in-the-workspace), and a
+window that opens as the only tiled one is configured with them from its first
+configure.
 
 ## Settings applied when a window opens
 
@@ -79,6 +81,7 @@ opening settings do not overwrite user changes made in the meantime.
 |-----|------|-------------|
 | `default_output` | string | Open on a specific output (e.g. `"DP-1"`). |
 | `default_workspace` | int or string | Place on an existing workspace by 1-based position (1 to 64) or exact, case-sensitive name. On dynamic outputs, integer positions beyond the current count clamp to the last workspace; names never clamp. |
+| `default_scratchpad` | string | Store the window in the implicit `"default"` scratchpad or an exact configured scratchpad name. Hidden scratchpads stay hidden and do not take focus. |
 | `default_fullscreen` | bool | Open fullscreen across the entire output, ignoring layout struts and layer-shell exclusive zones. |
 | `default_floating` | bool | Force floating (`true`) or force tiling (`false`). |
 | `default_maximize` | bool | Open maximized. A tiled column still respects layout struts and gaps. Parented transient dialogs keep their natural size. |
@@ -91,6 +94,10 @@ opening settings do not overwrite user changes made in the meantime.
 | `default_position` | table | Floating windows only, initial position: `{ x = int, y = int, anchor = string }`. Ignored for tiled windows. |
 | `default_scrolling_column` | string | Scrolling windows only. Place windows with the same non-empty name in one column. Floating windows and other layout modes ignore it. |
 | `default_scrolling_column_order` | int | Scrolling windows only. Position within `default_scrolling_column`, independent of launch timing. Lower values open higher in horizontal scrolling and farther left in vertical scrolling. Windows without an order follow ordered windows. |
+
+Parented toplevels, usually dialogs, float by default even when their parent is
+still opening. Set `default_floating = false` in a matching rule to force one to
+tile instead.
 
 For tiled windows, `default_maximize` expands the column to the full width
 inside configured struts and gaps; for floating windows, it fills the usable
@@ -141,6 +148,42 @@ name. Integer positions can infer an output only when exactly one static
 inventory owns that position. Otherwise Umbriel keeps the launch output and
 resolves the target there. If it does not exist there, Umbriel keeps the normal
 workspace placement.
+
+## Scratchpad placement
+
+`default_scratchpad` stores a matching window directly in a scratchpad when it
+opens:
+
+```toml
+[[scratchpad]]
+name = "terminal"
+
+[[window_rule]]
+match.app_id = "^scratchpad-terminal$"
+default_scratchpad = "terminal"
+default_output = "DP-1"
+default_workspace = 2
+```
+
+With no `[[scratchpad]]` definitions, the only valid target is `"default"`.
+With named definitions, the value must exactly match one of their names.
+Unknown names are ignored and reported in the configuration diagnostics.
+
+A hidden scratchpad remains hidden and the new window does not take focus. If
+the selected scratchpad is already visible, the window joins it where it is
+currently shown. `default_output` and `default_workspace` select the window's
+saved restore destination. `default_floating` selects whether restoring it
+returns it tiled or floating.
+
+Without a scratchpad geometry override, `default_size`, `default_width`,
+`default_height`, and `default_position` set the window's initial scratchpad
+geometry using the assigned output's usable area.
+
+Scratchpad presentation takes precedence over `default_pinned`,
+`default_fullscreen`, `default_maximize`, and `default_maximize_to_edges`.
+The enabled `animation.scratchpad` fullscreen, maximize, or scale setting also
+takes precedence over opening size and position settings. A matching title
+that arrives just after mapping can still select the scratchpad rule.
 
 ## Floating position
 
@@ -281,6 +324,14 @@ Only one of these is applied at a time, in the same precedence as at map time:
 fullscreen, then maximized to edges, then maximized, then width. If the window
 is already in the target state, the rule does not take over what the user or a
 previous rule already chose.
+
+A window that opens as the only tiled window on its workspace is configured
+with these settings right away, in the same configure that carries its first
+size, so its first frame is already the one the rule asks for. The rule still
+owns that state: the window gives it up when a second window arrives. When the
+window's normal rules set no `default_width`, the width it returns to is
+`layout.scrolling.default_width_fraction`, because the alone width, not the
+client's own preference, sized the window as it opened.
 
 The rule is compatible with other matches.
 

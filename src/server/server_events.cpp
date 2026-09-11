@@ -720,6 +720,32 @@ namespace umbriel {
     kLog.info("renderer recreated");
   }
 
+  void
+  Server::onProtocolMessage(void* data, wl_protocol_logger_type direction, const wl_protocol_logger_message* message) {
+    if (direction != WL_PROTOCOL_LOGGER_REQUEST
+        || message == nullptr
+        || message->resource == nullptr
+        || message->message == nullptr
+        || message->arguments_count != 1
+        || message->arguments == nullptr) {
+      return;
+    }
+    const char* resourceClass = wl_resource_get_class(message->resource);
+    if (resourceClass == nullptr
+        || std::string_view(resourceClass) != "xdg_toplevel"
+        || std::string_view(message->message->name) != "set_parent") {
+      return;
+    }
+
+    auto* server = static_cast<Server*>(data);
+    wlr_xdg_toplevel* toplevel = wlr_xdg_toplevel_from_resource(message->resource);
+    if (View* view = viewForToplevel(*server, toplevel)) {
+      // wlroots has not handled the request yet, so the raw nullable object is
+      // still available even when its toplevel has not mapped.
+      view->recordOpeningParentRequest(message->arguments[0].o != nullptr);
+    }
+  }
+
   void Server::onNewOutput(wl_listener* listener, void* data) {
     Server* self;
     self = wl_container_of(listener, self, m_newOutput);
@@ -2435,8 +2461,21 @@ namespace umbriel {
   }
 
   void Server::removeKeyboard(Keyboard* keyboard) {
+    wlr_seat* seat = m_seat->wlr();
+    const bool seatKeyboardRemoved = wlr_seat_get_keyboard(seat) == keyboard->wlr();
     const bool sourceRemoved = m_keyboardLayoutSource == keyboard;
     std::erase_if(m_keyboards, [keyboard](const std::unique_ptr<Keyboard>& entry) { return entry.get() == keyboard; });
+    if (seatKeyboardRemoved) {
+      wlr_keyboard* replacement = nullptr;
+      for (const auto& entry : m_keyboards) {
+        if (entry->wlr()->keymap != nullptr) {
+          replacement = entry->wlr();
+          break;
+        }
+      }
+      // Detach wlroots' later destroy listener so it cannot clear the replacement.
+      wlr_seat_set_keyboard(seat, replacement);
+    }
     if (sourceRemoved) {
       m_keyboardLayoutSource = nullptr;
       for (const auto& entry : m_keyboards) {

@@ -120,16 +120,26 @@ struct fx_animation_shader *fx_animation_shader_create(struct wlr_renderer *rend
 		"varying vec2 v_texcoord;\n"
 		"uniform sampler2D umbriel_texture;\n"
 		"uniform mat3 umbriel_sample_matrix;\n"
+		"uniform sampler2D umbriel_previous_texture;\n"
+		"uniform mat3 umbriel_previous_sample_matrix;\n"
 		"uniform float umbriel_progress;\n"
 		"uniform float umbriel_linear_progress;\n"
 		"uniform float umbriel_direction;\n"
 		"uniform vec2 umbriel_size;\n"
+		"uniform vec4 umbriel_random_seed;\n"
 		"#define umbriel_clamped_progress clamp(umbriel_progress, 0.0, 1.0)\n"
 		"vec4 umbriel_sample(vec2 uv) {\n"
 		"  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);\n"
 		"  vec2 p = (vec3(uv, 1.0) * umbriel_sample_matrix).xy;\n"
 		"  if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, vec2(1.0)))) return vec4(0.0);\n"
 		"  return texture2D(umbriel_texture, p);\n"
+		"}\n#line 1\n";
+	static const char previous_sample[] =
+		"vec4 umbriel_sample_previous(vec2 uv) {\n"
+		"  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);\n"
+		"  vec2 p = (vec3(uv, 1.0) * umbriel_previous_sample_matrix).xy;\n"
+		"  if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, vec2(1.0)))) return vec4(0.0);\n"
+		"  return texture2D(umbriel_previous_texture, p);\n"
 		"}\n#line 1\n";
 	static const char suffix[] =
 		"\nvoid main() { gl_FragColor = animation(v_texcoord); }\n";
@@ -142,14 +152,15 @@ struct fx_animation_shader *fx_animation_shader_create(struct wlr_renderer *rend
 		return NULL;
 	}
 	struct fx_animation_shader *shader = calloc(1, sizeof(*shader));
-	char *fragment = malloc(sizeof(preamble) + strlen(source) + sizeof(suffix));
+	char *fragment = malloc(sizeof(preamble) + sizeof(previous_sample) +
+		strlen(source) + sizeof(suffix));
 	if (shader == NULL || fragment == NULL) {
 		free(shader);
 		free(fragment);
 		wlr_egl_restore_context(&previous);
 		return NULL;
 	}
-	sprintf(fragment, "%s%s%s", preamble, source, suffix);
+	sprintf(fragment, "%s%s%s%s", preamble, previous_sample, source, suffix);
 	wlr_log(WLR_DEBUG, "Compiling animation shader: %s", label);
 	shader->program = link_program(fragment);
 	free(fragment);
@@ -168,10 +179,14 @@ struct fx_animation_shader *fx_animation_shader_create(struct wlr_renderer *rend
 	shader->position = glGetAttribLocation(shader->program, "pos");
 	shader->tex = glGetUniformLocation(shader->program, "umbriel_texture");
 	shader->sample_matrix = glGetUniformLocation(shader->program, "umbriel_sample_matrix");
+	shader->previous_tex = glGetUniformLocation(shader->program, "umbriel_previous_texture");
+	shader->previous_sample_matrix = glGetUniformLocation(
+		shader->program, "umbriel_previous_sample_matrix");
 	shader->progress = glGetUniformLocation(shader->program, "umbriel_progress");
 	shader->linear_progress = glGetUniformLocation(shader->program, "umbriel_linear_progress");
 	shader->direction = glGetUniformLocation(shader->program, "umbriel_direction");
 	shader->size = glGetUniformLocation(shader->program, "umbriel_size");
+	shader->random_seed = glGetUniformLocation(shader->program, "umbriel_random_seed");
 	wlr_egl_restore_context(&previous);
 	return shader;
 }

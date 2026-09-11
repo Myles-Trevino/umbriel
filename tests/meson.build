@@ -1,6 +1,7 @@
 # Unit tests. Each entry is [name, test sources, extra dependencies]. Every test gets umbriel_pure_dep; add umbriel_core_dep to the third field for a test that
 # needs compositor code. Either way a test never lists or recompiles a source.
 unit_tests = [
+  ['overview-navigation', ['unit/overview_navigation.cpp'], []],
   ['presented-crop', ['unit/presented_crop.cpp'], []],
   ['scene-node', ['unit/scene_node.cpp'], []],
   ['scene-clip', ['unit/scene_clip.cpp'], [wayland_server_dep]],
@@ -197,6 +198,8 @@ unmap_client = executable(
     xdg_activation_client_c,
     xdg_toplevel_tag_client_h,
     xdg_toplevel_tag_client_c,
+    xdg_foreign_client_h,
+    xdg_foreign_client_c,
     content_type_client_h,
     content_type_client_c,
     color_management_client_h,
@@ -283,7 +286,13 @@ security_context_client = executable(
 # Harness helper that logs the seat input events a window receives, for input state checks.
 seat_log_client = executable(
   'seat-log-client',
-  ['harness/clients/seat_log_client.cpp', xdg_shell_client_h, xdg_shell_client_c],
+  [
+    'harness/clients/seat_log_client.cpp',
+    xdg_shell_client_h,
+    xdg_shell_client_c,
+    xdg_foreign_client_h,
+    xdg_foreign_client_c,
+  ],
   dependencies: [wayland_client_dep],
 )
 

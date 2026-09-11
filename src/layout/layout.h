@@ -30,6 +30,7 @@ namespace umbriel {
   enum class MasterPosition {
     Left,
     Right,
+    Center,
   };
 
   enum class CenterFocusedColumn {
@@ -234,6 +235,12 @@ namespace umbriel {
     [[nodiscard]] virtual std::optional<View*> focusVerticalLeaf(const View* /*view*/, int /*direction*/) const {
       return std::nullopt;
     }
+
+    // Views a directional move from `from` could equally have landed on, with
+    // `target` the geometric answer: the target column in column layouts, the
+    // subtree the move enters in dwindle. Fewer than two entries means there
+    // is nothing to choose between, so the caller keeps `target`.
+    [[nodiscard]] virtual std::vector<View*> focusPeers(const View* from, const View* target) const;
 
     virtual bool cycleWidth(int columnIndex, int direction) = 0;
     virtual bool toggleFullWidth(int columnIndex) = 0;

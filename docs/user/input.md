@@ -56,6 +56,11 @@ their own XKB keymaps, and Umbriel attaches each device to the seat only after
 its first usable keymap is ready. Applications therefore never receive the
 temporary empty keymap from a virtual keyboard that is still initializing.
 
+If the current keyboard disappears, Umbriel immediately selects another
+connected keyboard with a usable keymap, when available. Newly opened
+applications receive that keymap without waiting for keyboard input, including
+when an input method destroys its virtual keyboard.
+
 `layout` takes a comma-separated list to load several layouts at once
 (`layout = "us,de"`, optionally with a matching `variant = ",nodeadkeys"`). The
 first entry is active at startup. Switch between them with the
@@ -156,16 +161,18 @@ restores the device default. Options are applied only when supported by the
 device; an explicitly configured unsupported option is reported in the log.
 
 The effective `natural_scroll` value also controls Umbriel's three-finger
-gestures: workspace switching along the output's workspace axis, strip scrolling
-across it, and workspace selection while the overview is open. A per-device
-override or preserved libinput default applies to gestures from that device. The
+gestures: workspace switching along the output's workspace axis and strip
+scrolling across it, both inside and outside overview. A per-device override or
+preserved libinput default applies to gestures from that device. The
 four-finger overview open and close gesture keeps its fixed direction.
 
 `accel_profile` and `sensitivity` work like their `[input.mouse]` counterparts,
 including custom curves. Both remain unset by default, which uses each
 touchpad's libinput default profile and speed. Removing either setting on reload
 restores the corresponding default. `sensitivity` alone adjusts pointer speed
-under the device's default profile.
+under the device's default profile. Both also change how far three-finger
+gestures travel, because libinput accelerates gesture movement the same way it
+accelerates the pointer. Two-finger scrolling is not accelerated.
 
 `click_method` decides how a physical press becomes a button. `button_areas`
 splits the bottom of the pad into left, middle, and right zones, while
@@ -181,7 +188,9 @@ focused window, so `2.0` scrolls twice as fast and `0.5` half as fast. It
 remains unset by default (identity, `1.0`) and takes the next scroll event on
 reload. It applies only to the continuous scroll delta: discrete notches,
 overview wheel stepping, and three-finger-swipe strip travel keep their own
-counting semantics.
+counting semantics. Inside the overview, both two- and three-finger navigation
+use [`overview.scroll_factor_horizontal` and
+`overview.scroll_factor_vertical`](workspaces-overview.md) instead.
 
 Set `disable_on_external_mouse = true` to disable the touchpad while an
 external mouse is connected. Libinput re-enables it automatically once the
@@ -366,7 +375,8 @@ action comes from a keybind, wheel bind, or IPC. Pointer-driven focus, automatic
 focus after a window closes, gestures, and overview selection do not warp the
 cursor. `window-focus:<id>` remains focus-only; use
 `window-focus-warp:<id>` when an individual id-based request must always move
-the cursor.
+the cursor. Either action summons a target that is hidden in a scratchpad to
+the output under the pointer before focusing it.
 
 ### Focus
 
@@ -378,7 +388,7 @@ follows_mouse_max_scroll = 0.5  # optional, measured in viewport widths
 
 | Key                        | Type  | Default    | Description                                                                                                                                                                     |
 | -------------------------- | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `follows_mouse`            | bool  | `false`    | Focus the pointer target on enter, after compositor focus changes reveal another target, and after client drag completion.                                                      |
+| `follows_mouse`            | bool  | `false`    | Focus the pointer target during motion, when a Dwindle or master tile replaces the focused tile beneath it, and after client drag completion.                                   |
 | `follows_mouse_max_scroll` | float | (no limit) | Do not change focus when revealing the window would scroll farther than this many viewport widths. `0.0` allows only windows that are already fully visible. Omit for no limit. |
 
 Mapping windows and switching workspaces can change which window is under a
@@ -386,6 +396,13 @@ stationary pointer. The existing focus remains until the next pointer motion,
 which selects the window under the pointer without requiring a border crossing.
 Finishing a client data drag performs the same refresh at the unchanged cursor
 position, so dropping over another window selects it immediately.
+
+Closing a focused Dwindle or master tile is handled immediately when the pointer
+belongs to that tile. After the layout reflows, focus follows the survivor that
+takes over the same pointer position. If the pointer rests over a different
+window, the layout's normal close replacement keeps focus. Scrolling workspaces
+also keep their normal close replacement because the strip can animate several
+windows beneath a stationary pointer.
 
 For example, a window three screens away requires a limit of at least `3.0`.
 Values outside `0.0` to `100.0` are clamped and reported.

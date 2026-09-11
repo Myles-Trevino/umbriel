@@ -53,6 +53,32 @@ wait_for_windows 2
 spawn_client c
 wait_for_windows 3
 
+# Focus memory: leaving the stack and coming back lands on the row that was focused last.
+"$UMBRIEL" msg window-focus-left > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-a" and .focused == true)' \
+  "focus-left did not reach master"
+"$UMBRIEL" msg window-focus-right > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-c" and .focused == true)' \
+  "focus-right did not land on the stack top first"
+"$UMBRIEL" msg window-focus-down > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-b" and .focused == true)' \
+  "focus-down did not reach the lower stack row"
+"$UMBRIEL" msg window-focus-left > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-a" and .focused == true)' \
+  "focus-left did not return to master"
+"$UMBRIEL" msg window-focus-right > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-b" and .focused == true)' \
+  "focus-right did not return to the last-focused stack row"
+"$UMBRIEL" msg window-focus-up > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-c" and .focused == true)' \
+  "focus-up did not restore c for the consume step"
+
 # consume-left pulls c into the master column so the count actions have two master rows to move.
 "$UMBRIEL" msg window-consume-left > /dev/null
 
@@ -63,8 +89,8 @@ wait_for_query \
 
 "$UMBRIEL" msg window-focus-left > /dev/null
 wait_for_query \
-  'any(.[]; .title == "harness-master-a" and .focused == true)' \
-  "focus-left did not cross from stack to master"
+  'any(.[]; .title == "harness-master-c" and .focused == true)' \
+  "focus-left did not cross back to the master column's last-focused row"
 
 "$UMBRIEL" msg layout-master-count-decrease > /dev/null
 wait_for_query \
@@ -75,6 +101,12 @@ wait_for_query \
 wait_for_query \
   'any(.[]; .title == "harness-master-a" and .x == 10 and .y == 10 and .w == 686 and .h == 344) and any(.[]; .title == "harness-master-c" and .x == 10 and .y == 366 and .w == 686 and .h == 344) and any(.[]; .title == "harness-master-b" and .x == 708 and .y == 10 and .w == 562 and .h == 700)' \
   "layout-master-count-increase did not promote the stack top to the master bottom"
+
+# Cycling below starts from the master top row.
+"$UMBRIEL" msg window-focus-up > /dev/null
+wait_for_query \
+  'any(.[]; .title == "harness-master-a" and .focused == true)' \
+  "focus-up did not reach the master top row"
 
 "$UMBRIEL" msg window-focus-next > /dev/null
 wait_for_query \
@@ -102,4 +134,4 @@ wait_for_query \
   'any(.[]; .title == "harness-master-c" and .x == 10 and .y == 10 and .w == 686 and .h == 344) and any(.[]; .title == "harness-master-a" and .x == 10 and .y == 366 and .w == 686 and .h == 344 and .focused == true) and any(.[]; .title == "harness-master-b" and .x == 708 and .y == 10 and .w == 562 and .h == 700)' \
   "window-swap-next did not exchange master rows while retaining focus"
 
-echo "master count, focus order, and swap ordering hold with real clients"
+echo "master count, focus memory, focus order, and swap ordering hold with real clients"

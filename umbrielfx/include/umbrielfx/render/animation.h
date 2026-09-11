@@ -2,6 +2,7 @@
 #define UMBRIELFX_ANIMATION_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <wlr/util/box.h>
 
 struct wlr_renderer;
@@ -16,6 +17,10 @@ struct fx_animation_parameters {
 	float progress;
 	float linear_progress;
 	float direction;
+	// Nonzero and unique for each logical transition, stable while it runs.
+	uint64_t transition_id;
+	// Stable values in [0, 1) for the lifetime of transition_id.
+	float random_seed[4];
 };
 
 // Compilation happens with the renderer's context current. Sources provide
@@ -30,9 +35,11 @@ void fx_animation_shader_unref(struct fx_animation_shader *shader);
 void wlr_scene_node_set_animation(struct wlr_scene_node *node, unsigned slot,
 	struct fx_animation_shader *shader, const struct fx_animation_parameters *parameters);
 void wlr_scene_node_clear_animations(struct wlr_scene_node *node);
-// Freeze current parameters into a snapshot. Outer lifecycle effects become
-// inner opening effects so the new close transition can use its normal slot.
-void wlr_scene_node_copy_animations(struct wlr_scene_node *destination, struct wlr_scene_node *source);
+// Freeze current parameters into a snapshot and transfer feedback history from
+// the source that is about to be retired. Outer lifecycle effects become inner
+// opening effects so the new close transition can use its normal slot.
+void wlr_scene_node_copy_animations_for_snapshot(
+	struct wlr_scene_node *destination, struct wlr_scene_node *source);
 
 // Keep the shadow in its stacking layer, but derive its animated silhouette
 // from source. Color is the unattenuated shadow color; source alpha supplies

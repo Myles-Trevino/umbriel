@@ -69,6 +69,17 @@ namespace umbriel {
     return std::max(1, static_cast<int>(std::lround(fraction * (viewportPrimary + gap) - gap)));
   }
 
+  std::vector<View*> Layout::focusPeers(const View* from, const View* target) const {
+    if (target == nullptr) {
+      return {};
+    }
+    const int column = columnOf(target);
+    if (column < 0 || column == columnOf(from)) {
+      return {};
+    }
+    return columns()[static_cast<size_t>(column)].views;
+  }
+
   View* directionalNeighbor(std::span<const LayoutTarget> targets, const View* view, bool horizontal, int direction) {
     if (view == nullptr || direction == 0) {
       return nullptr;

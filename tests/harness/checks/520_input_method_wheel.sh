@@ -38,6 +38,8 @@ duration_ms = 1
 
 [keybinds]
 "Mod+WheelDown" = "workspace-next"
+"Alt" = "workspace-next"
+"Super" = "workspace-next"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 
@@ -56,6 +58,7 @@ sleep 0.1
 POINTER_PID=$!
 sleep 0.1
 "$INPUT_METHOD" > "$INPUT_METHOD_LOG" 2>&1 &
+INPUT_METHOD_PID=$!
 
 for _ in $(seq 40); do
   grep -qx 'grabbed' "$INPUT_METHOD_LOG" 2>/dev/null && break
@@ -88,4 +91,52 @@ if grep -q '^key 30 1$' "$FIRST_LOG" 2>/dev/null; then
   exit 1
 fi
 
-echo "input-method grabs preserve modifier wheel bindings and keyboard focus"
+# Observe the IME echo while Super is held, then verify the release action.
+"$UMBRIEL" msg workspace-switch:1 > /dev/null
+"$POINTER" "$OUTPUT_W" "$OUTPUT_H" key-press 125 pause 1000 key-release 125 > "$POINTER_LOG" 2>&1 &
+POINTER_PID=$!
+for _ in $(seq 40); do
+  grep -q '^key 125 1$' "$FIRST_LOG" 2>/dev/null && break
+  sleep 0.01
+done
+if ! grep -q '^key 125 1$' "$FIRST_LOG" || [[ $(active_title) != input-first ]]; then
+  echo "expected the IME's Super press echo on workspace 1 before releasing the modifier"
+  exit 1
+fi
+wait "$POINTER_PID"
+if [[ $(active_title) != input-second ]]; then
+  echo "IME echo cancelled the modifier tap instead of switching to workspace 2 on release"
+  exit 1
+fi
+
+# An unrelated virtual keyboard's key press still cancels a held modifier tap.
+"$UMBRIEL" msg workspace-switch:1 > /dev/null
+presses_before=$(grep -c '^key 56 1$' "$FIRST_LOG" || true)
+"$POINTER" "$OUTPUT_W" "$OUTPUT_H" key-press 56 pause 1000 key-release 56 > "$POINTER_LOG" 2>&1 &
+POINTER_PID=$!
+for _ in $(seq 40); do
+  [[ $(grep -c '^key 56 1$' "$FIRST_LOG" || true) -gt $presses_before ]] && break
+  sleep 0.01
+done
+if [[ $(grep -c '^key 56 1$' "$FIRST_LOG" || true) -le $presses_before ]]; then
+  echo "input method did not echo the held Alt key"
+  exit 1
+fi
+# Keep this keyboard alive past the release so its destruction cannot cancel the tap.
+"$POINTER" "$OUTPUT_W" "$OUTPUT_H" tap 30 pause 1200
+wait "$POINTER_PID"
+if [[ $(active_title) != input-first ]]; then
+  echo "an unrelated virtual keyboard's key press failed to cancel the modifier tap"
+  exit 1
+fi
+
+kill "$INPUT_METHOD_PID"
+wait "$INPUT_METHOD_PID" || true
+"$POINTER" "$OUTPUT_W" "$OUTPUT_H" tap 56
+if [[ $(active_title) != input-second ]]; then
+  echo "virtual keyboard modifier tap did not switch to workspace 2 without an input method"
+  exit 1
+fi
+"$UMBRIEL" msg workspace-switch:1 > /dev/null
+
+echo "input-method grabs preserve modifier wheel bindings, taps, cancellation, and keyboard focus"

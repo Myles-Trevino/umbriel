@@ -327,6 +327,19 @@ UMBRIEL_TEST(ruleEqualitySeesAnOptionChangeUnderTheSamePattern) {
   CHECK(ConfigChange::between(before, after).windowRules);
 }
 
+UMBRIEL_TEST(ruleEqualitySeesDefaultScratchpadChange) {
+  Config before;
+  Config after;
+  WindowRule first;
+  first.defaultScratchpad = "terminal";
+  WindowRule second;
+  second.defaultScratchpad = "music";
+  before.windowRules.push_back(std::move(first));
+  after.windowRules.push_back(std::move(second));
+
+  CHECK(ConfigChange::between(before, after).windowRules);
+}
+
 UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
   const Config before;
   const Config after;

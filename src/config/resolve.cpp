@@ -120,6 +120,9 @@ namespace umbriel {
       if (overrides.master.newOnTop) {
         resolved.master.newOnTop = *overrides.master.newOnTop;
       }
+      if (overrides.master.newBecomesMaster) {
+        resolved.master.newBecomesMaster = *overrides.master.newBecomesMaster;
+      }
       if (overrides.master.position) {
         resolved.master.position = *overrides.master.position;
       }
@@ -254,6 +257,9 @@ namespace umbriel {
       if (rule.defaultWorkspace) {
         resolved.defaultWorkspace = rule.defaultWorkspace;
       }
+      if (rule.defaultScratchpad) {
+        resolved.defaultScratchpad = rule.defaultScratchpad;
+      }
       if (rule.defaultScrollingColumn) {
         resolved.defaultScrollingColumn = rule.defaultScrollingColumn;
       }
@@ -371,6 +377,7 @@ namespace umbriel {
     resolved.dwindle.preserveSplit = config.layout.dwindle.preserveSplit;
     resolved.master.defaultWidthFraction = config.layout.master.defaultWidthFraction;
     resolved.master.newOnTop = config.layout.master.newOnTop;
+    resolved.master.newBecomesMaster = config.layout.master.newBecomesMaster;
     resolved.master.position = config.layout.master.position;
     const int borderWidth = config.appearance.totalBorderWidth();
     resolved.totalGap = resolved.gap + 2 * borderWidth;

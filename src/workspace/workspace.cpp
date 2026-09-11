@@ -226,6 +226,11 @@ namespace umbriel {
       return;
     }
     m_views.push_back(view);
+    if (m_views.size() == 1) {
+      // Occupancy is part of the IPC workspace listing, so the empty-to-occupied edge has to push an event even on a
+      // static output, where reconciliation never adds or removes a workspace.
+      m_group->server()->scheduleIpcWorkspacesEvent();
+    }
     updateUrgent();
     const bool fs = view->toplevel()->current.fullscreen || view->toplevel()->scheduled.fullscreen;
     if (view->pinned()) {
@@ -256,7 +261,9 @@ namespace umbriel {
     }
     View* replacement = m_focusedView == view ? focusReplacementForRemoval(view) : nullptr;
     detachFromLayout(view);
-    std::erase(m_views, view);
+    if (std::erase(m_views, view) > 0 && m_views.empty()) {
+      m_group->server()->scheduleIpcWorkspacesEvent();
+    }
     if (view == m_lastAloneSoleView) {
       // The window we remembered as the only one is gone: forget it, so another window that replaces it is still
       // noticed as new.
@@ -296,10 +303,10 @@ namespace umbriel {
     return focusedColumn >= 0 ? focusedColumn + 1 : static_cast<int>(m_layout->columns().size());
   }
 
-  bool Workspace::wouldBeAloneAfterAttach(const View* joining) const {
+  bool Workspace::isOnlyTiledView(const View* view) const {
     for (const Column& column : m_layout->columns()) {
-      for (View* view : column.views) {
-        if (view != joining) {
+      for (View* member : column.views) {
+        if (member != view) {
           return false;
         }
       }
@@ -832,12 +839,29 @@ namespace umbriel {
     return target < 0 || target >= static_cast<int>(views.size()) ? nullptr : views[static_cast<size_t>(target)];
   }
 
+  View* Workspace::preferRecentPeer(View* target) const {
+    if (target == nullptr || m_group == nullptr) {
+      return target;
+    }
+    const std::vector<View*> peers = m_layout->focusPeers(m_focusedView, target);
+    if (peers.size() < 2) {
+      return target;
+    }
+    for (const auto& entry : m_group->server()->registry().all()) {
+      View* candidate = entry.get();
+      if (candidate->mapped() && candidate->workspace() == this && std::ranges::find(peers, candidate) != peers.end()) {
+        return candidate;
+      }
+    }
+    return target;
+  }
+
   View* Workspace::focusAdjacent(int direction) const {
-    return scrollingVertical() ? focusWithinLane(direction) : focusAlongStrip(direction);
+    return preferRecentPeer(scrollingVertical() ? focusWithinLane(direction) : focusAlongStrip(direction));
   }
 
   View* Workspace::focusVertical(int direction) const {
-    return scrollingVertical() ? focusAlongStrip(direction) : focusWithinLane(direction);
+    return preferRecentPeer(scrollingVertical() ? focusAlongStrip(direction) : focusWithinLane(direction));
   }
 
   View* Workspace::focusFirstColumn() const {

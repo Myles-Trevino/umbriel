@@ -19,6 +19,7 @@
 #include <wlr/util/transform.h>
 
 #include "render/color.h"
+#include "render/fx_renderer/animation_history.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "render/tracy.h"
 #include "umbrielfx/render/fx_renderer/fx_offscreen_buffers.h"
@@ -138,6 +139,7 @@ struct scene_animation {
 	struct wlr_scene *scene;
 	struct fx_animation_shader *shaders[FX_ANIMATION_SLOTS];
 	struct fx_animation_parameters parameters[FX_ANIMATION_SLOTS];
+	struct fx_animation_history histories[FX_ANIMATION_SLOTS];
 };
 static struct wl_list scene_animations = { &scene_animations, &scene_animations };
 
@@ -210,6 +212,7 @@ static void scene_animation_destroy(struct wlr_addon *addon) {
 	struct scene_animation *animation = wl_container_of(addon, animation, addon);
 	for (unsigned i = 0; i < FX_ANIMATION_SLOTS; i++) {
 		fx_animation_shader_unref(animation->shaders[i]);
+		fx_animation_history_finish(&animation->histories[i]);
 	}
 	wl_list_remove(&animation->link);
 	wlr_addon_finish(addon);
@@ -1128,24 +1131,43 @@ void wlr_scene_node_set_animation(struct wlr_scene_node *node, unsigned slot,
 		}
 		animation->node = node;
 		animation->scene = scene_node_get_root(node);
+		for (unsigned i = 0; i < FX_ANIMATION_SLOTS; i++) {
+			fx_animation_history_init(&animation->histories[i]);
+		}
 		wlr_addon_init(&animation->addon, &node->addons,
 			&scene_animation_impl, &scene_animation_impl);
 		wl_list_insert(&scene_animations, &animation->link);
 	}
 	struct fx_animation_shader *previous = animation->shaders[slot];
+	const bool same_transition = previous != NULL && shader != NULL &&
+		parameters != NULL &&
+		parameters->transition_id == animation->parameters[slot].transition_id;
+	const bool restarted = previous != NULL && shader != NULL && !same_transition;
 	if (previous != NULL && shader != NULL && parameters != NULL &&
-			parameters->linear_progress >= animation->parameters[slot].linear_progress &&
+			same_transition &&
 			previous->renderer == shader->renderer) {
 		shader = previous;
 	}
-	if (previous == shader && parameters != NULL &&
-			memcmp(parameters, &animation->parameters[slot], sizeof(*parameters)) == 0) {
+	struct fx_animation_parameters next = parameters != NULL
+		? *parameters : animation->parameters[slot];
+	const bool parameters_equal =
+		next.progress == animation->parameters[slot].progress &&
+		next.linear_progress == animation->parameters[slot].linear_progress &&
+		next.direction == animation->parameters[slot].direction &&
+		next.transition_id == animation->parameters[slot].transition_id &&
+		memcmp(next.random_seed, animation->parameters[slot].random_seed,
+			sizeof(next.random_seed)) == 0;
+	if (previous == shader && !restarted &&
+			parameters_equal) {
 		return;
+	}
+	if (previous != shader || restarted) {
+		fx_animation_history_reset(&animation->histories[slot]);
 	}
 	animation->shaders[slot] = fx_animation_shader_ref(shader);
 	fx_animation_shader_unref(previous);
-	if (parameters != NULL) {
-		animation->parameters[slot] = *parameters;
+	if (parameters != NULL || shader != NULL) {
+		animation->parameters[slot] = next;
 	}
 	bool populated = false;
 	for (unsigned i = 0; i < FX_ANIMATION_SLOTS; i++) {
@@ -1168,15 +1190,23 @@ void wlr_scene_node_clear_animations(struct wlr_scene_node *node) {
 	}
 }
 
-void wlr_scene_node_copy_animations(struct wlr_scene_node *destination, struct wlr_scene_node *source) {
+void wlr_scene_node_copy_animations_for_snapshot(
+		struct wlr_scene_node *destination, struct wlr_scene_node *source) {
 	struct scene_animation *animation = scene_animation_get(source);
 	if (animation == NULL) {
 		return;
 	}
 	for (unsigned slot = 0; slot < FX_ANIMATION_SLOTS; slot++) {
 		if (animation->shaders[slot] != NULL) {
-			wlr_scene_node_set_animation(destination, slot >= 4 ? 3 : slot,
+			const unsigned destination_slot = slot >= 4 ? 3 : slot;
+			wlr_scene_node_set_animation(destination, destination_slot,
 				animation->shaders[slot], &animation->parameters[slot]);
+			struct scene_animation *copy = scene_animation_get(destination);
+			if (copy != NULL) {
+				copy->parameters[destination_slot] = animation->parameters[slot];
+				fx_animation_history_move(&copy->histories[destination_slot],
+					&animation->histories[slot]);
+			}
 		}
 	}
 }
@@ -3008,8 +3038,10 @@ static void render_animated_range(struct render_list_entry *entries, int high, i
 		}
 		for (unsigned slot = 0; slot < FX_ANIMATION_SLOTS; slot++) {
 			if (captured[slot]) {
-				fx_render_pass_end_animation(pass, animation->shaders[slot],
-					&animation->parameters[slot], &box, &logical_box, data->transform, &clip);
+				fx_render_pass_end_animation_with_history(pass, animation->shaders[slot],
+					&animation->parameters[slot], &box, &logical_box, data->transform, &clip,
+					&animation->histories[slot], data->output->output,
+					!data->shadow_capture);
 			}
 		}
 		pixman_region32_fini(&clip);
@@ -3524,10 +3556,9 @@ static bool color_management_is_scanout_allowed(const struct wlr_output_image_de
 		return img_desc->transfer_function == buffer->transfer_function &&
 				img_desc->primaries == buffer->primaries;
 	}
-	// If the output doesn't have colorimetry image description set, we can only
-	// scan out buffers with default colorimetry (gamma2.2 transfer and sRGB
-	// primaries) used in wlroots.
-	return buffer->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_GAMMA22 &&
+	// If the output doesn't have an image description, only the implicit
+	// sRGB color space can be scanned out without conversion.
+	return buffer->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_SRGB &&
 			buffer->primaries == WLR_COLOR_NAMED_PRIMARIES_SRGB;
 }
 
@@ -3858,7 +3889,7 @@ static bool scene_output_combine_color_transforms(
 		inv_eotf = wlr_color_transform_ref(supplied);
 	} else {
 		inv_eotf = wlr_color_transform_init_linear_to_inverse_eotf(
-			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
+			WLR_COLOR_TRANSFER_FUNCTION_SRGB);
 		if (inv_eotf == NULL) {
 			goto cleanup_transforms;
 		}

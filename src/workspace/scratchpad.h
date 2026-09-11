@@ -39,7 +39,20 @@ namespace umbriel {
     [[nodiscard]] Output* outputFor(const View* view) const;
     [[nodiscard]] std::string_view nameFor(const View* view) const;
     [[nodiscard]] bool hasScratchpad(std::string_view name) const;
+    struct WindowRuleAdmission {
+      Output* restoreOutput = nullptr;
+      Workspace* restoreWorkspace = nullptr;
+      Output* focusOrigin = nullptr;
+      std::optional<bool> restoreTiled;
+      bool updateRestoreLocation = false;
+    };
+    [[nodiscard]] Output* presentationOutput(std::string_view name, Output* fallback) const;
+    [[nodiscard]] Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
+    [[nodiscard]] bool
+    assignByWindowRule(View* view, std::string_view name, Output* placementOutput, const WindowRuleAdmission& options);
+    // Show a scratchpad on the invoking output without changing keyboard focus.
+    bool summon(std::string_view name, Output* invokingOutput);
     bool toggle(std::string_view name, Output* invokingOutput);
     void hideAll();
     bool restoreFocused(std::string_view name);
@@ -95,6 +108,11 @@ namespace umbriel {
     [[nodiscard]] const Entry* findEntry(const View* view) const;
     [[nodiscard]] bool hasEntries(std::string_view name) const;
     [[nodiscard]] bool visibleOn(Output* output) const;
+    enum class Admission { Interactive, WindowRule };
+    bool admit(
+        View* view, std::string_view name, Output* invokingOutput, Admission admission,
+        const WindowRuleAdmission& options
+    );
     void setVisible(std::string_view name, bool visible, bool animateTransition = true);
     void moveScratchpad(
         std::string_view name, Output* output, View* alreadyPositioned = nullptr, bool clearDisplacement = true

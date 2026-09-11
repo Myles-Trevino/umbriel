@@ -15,7 +15,8 @@ struct fx_animation_shader {
 	struct wl_listener destroy;
 	GLuint program;
 	GLint proj, tex_proj, position, tex, sample_matrix;
-	GLint progress, linear_progress, direction, size;
+	GLint previous_tex, previous_sample_matrix;
+	GLint progress, linear_progress, direction, size, random_seed;
 };
 
 GLuint compile_shader(GLuint type, const GLchar *src);
