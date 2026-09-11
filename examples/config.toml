@@ -490,7 +490,7 @@ center_focused = "never"                        # never, always, or on_overflow
 # preserve_split = false                        # Keep every split direction fixed after creation
 
 [layout.master]
-position = "left"                               # left or right master area
+position = "left"                               # left, right, or center master area
 default_width_fraction = 0.55                   # Initial master area fraction, 0.1-0.9
 new_on_top = true                               # Put new windows at the top of the stack
 new_becomes_master = false                      # New windows take the master slot

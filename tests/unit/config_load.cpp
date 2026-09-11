@@ -564,6 +564,21 @@ new_becomes_master = false
   CHECK(containsDiagnostic(store, "unknown key layout.master.surprise"));
 }
 
+UMBRIEL_TEST(masterPositionAcceptsCenterAndRejectsOtherValues) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[layout.master]\nposition = \"center\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.master.position == umbriel::MasterPosition::Center);
+
+  file.write("[layout.master]\nposition = \"middle\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().layout.master.position == umbriel::MasterPosition::Left);
+  CHECK(containsDiagnostic(store, R"(unknown layout.master.position "middle")"));
+}
+
 UMBRIEL_TEST(scrollingDefaultWidthIsOptional) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();

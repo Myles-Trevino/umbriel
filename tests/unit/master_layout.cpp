@@ -561,4 +561,129 @@ UMBRIEL_TEST(newViewKeepsTheMasterCount) {
   CHECK_EQ(fixture.layout.columns()[1].views.size(), size_t{1});
 }
 
+namespace {
+
+  // Content is 1260x700 with totalGap 12: available = 1236, master = round(0.55 * 1236) = 680, each side 278.
+  struct CenterFixture : Fixture {
+    CenterFixture() { config.master.position = umbriel::MasterPosition::Center; }
+  };
+
+} // namespace
+
+UMBRIEL_TEST(centerPlacesALoneMasterAtItsFraction) {
+  CenterFixture fixture;
+  fixture.addViews(1);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box box = fixture.layout.targetBox(stub(0));
+  CHECK_EQ(box.x, 300);
+  CHECK_EQ(box.width, 680);
+  CHECK_EQ(box.height, 700);
+}
+
+UMBRIEL_TEST(centerKeepsTheMasterBoxWithOneSideFilled) {
+  CenterFixture fixture;
+  fixture.addViews(2);
+  fixture.layout.arrange(kUsable);
+
+  CHECK_EQ(fixture.layout.targetBox(stub(0)).x, 300);
+  CHECK_EQ(fixture.layout.targetBox(stub(0)).width, 680);
+  CHECK_EQ(fixture.layout.targetBox(stub(1)).x, 10);
+  CHECK_EQ(fixture.layout.targetBox(stub(1)).width, 278);
+}
+
+UMBRIEL_TEST(centerAlternatesSidesLeftFirst) {
+  CenterFixture fixture;
+  fixture.addViews(5);
+  fixture.layout.arrange(kUsable);
+
+  CHECK_EQ(fixture.layout.columnOf(stub(0)), 1);
+  CHECK_EQ(fixture.layout.columnOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.columnOf(stub(2)), 2);
+  CHECK_EQ(fixture.layout.columnOf(stub(3)), 0);
+  CHECK_EQ(fixture.layout.columnOf(stub(4)), 2);
+  // new_on_top puts the newer row above the older one within its side.
+  CHECK_EQ(fixture.layout.rowOf(stub(3)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(1)), 1);
+  CHECK_EQ(fixture.layout.targetBox(stub(4)).x, 992);
+  CHECK_EQ(fixture.layout.targetBox(stub(4)).width, 278);
+}
+
+UMBRIEL_TEST(centerConsumeCrossesThreeAreas) {
+  CenterFixture fixture;
+  fixture.addViews(3);
+  fixture.layout.arrange(kUsable);
+
+  CHECK(fixture.layout.consume(stub(2), -1));
+  CHECK_EQ(fixture.layout.columnOf(stub(2)), 1);
+  CHECK_EQ(fixture.layout.columns()[1].views.size(), size_t{2});
+  // The left stack is the first visual column, so nothing is left of it.
+  CHECK(!fixture.layout.consume(stub(1), -1));
+}
+
+UMBRIEL_TEST(centerSideFractionIsHalfTheComplement) {
+  CenterFixture fixture;
+  fixture.addViews(3);
+
+  CHECK(std::fabs(fixture.layout.widthFraction(0) - 0.225) < 1e-9);
+  CHECK(fixture.layout.setWidthFraction(0, 0.3));
+  CHECK(std::fabs(fixture.layout.widthFraction(1) - 0.4) < 1e-9);
+  CHECK(std::fabs(fixture.layout.widthFraction(2) - 0.3) < 1e-9);
+}
+
+UMBRIEL_TEST(centerMasterResizesSymmetrically) {
+  CenterFixture fixture;
+  fixture.addViews(3);
+  fixture.layout.arrange(kUsable);
+
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT, kUsable);
+  CHECK(resize != nullptr);
+  if (resize == nullptr) {
+    return;
+  }
+  resize->applyDelta(100.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box master = fixture.layout.targetBox(stub(0));
+  CHECK(std::abs(master.width - 880) <= 1);
+  CHECK(std::abs(master.x - 200) <= 1);
+}
+
+UMBRIEL_TEST(centerRemovingTheMasterPromotesFromTheFullerSide) {
+  CenterFixture fixture;
+  fixture.addViews(4);
+
+  // Left holds [3, 1], right holds [2].
+  fixture.layout.removeView(stub(0));
+  CHECK_EQ(fixture.layout.columnOf(stub(3)), 1);
+  CHECK_EQ(fixture.layout.columns()[1].views.size(), size_t{1});
+  CHECK_EQ(fixture.layout.columnOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.columnOf(stub(2)), 2);
+}
+
+UMBRIEL_TEST(centerSnapshotRoundTripsTheSecondStack) {
+  CenterFixture source;
+  source.addViews(3);
+  const umbriel::LayoutCapture capture = source.layout.captureState();
+
+  CenterFixture restored;
+  CHECK(restored.layout.restoreState(*capture.snapshot, capture.members));
+  for (int id = 0; id < 3; ++id) {
+    CHECK_EQ(restored.layout.columnOf(stub(id)), source.layout.columnOf(stub(id)));
+    CHECK_EQ(restored.layout.rowOf(stub(id)), source.layout.rowOf(stub(id)));
+  }
+}
+
+UMBRIEL_TEST(leavingCenterFoldsTheSecondStackOntoTheStack) {
+  CenterFixture fixture;
+  fixture.addViews(3);
+  fixture.config.master.position = umbriel::MasterPosition::Left;
+  fixture.layout.arrange(kUsable);
+
+  CHECK_EQ(fixture.layout.columns().size(), size_t{2});
+  CHECK_EQ(fixture.layout.columns()[1].views.size(), size_t{2});
+  CHECK_EQ(fixture.layout.columns()[1].views[0], stub(1));
+  CHECK_EQ(fixture.layout.columns()[1].views[1], stub(2));
+}
+
 int main() { return RUN_TESTS(); }

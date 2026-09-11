@@ -30,6 +30,7 @@ namespace umbriel {
   enum class MasterPosition {
     Left,
     Right,
+    Center,
   };
 
   enum class CenterFocusedColumn {

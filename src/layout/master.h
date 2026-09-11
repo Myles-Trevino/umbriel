@@ -2,6 +2,7 @@
 
 #include "layout/layout.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -62,6 +63,20 @@ namespace umbriel {
   private:
     [[nodiscard]] double masterFrac() const;
     [[nodiscard]] bool masterIsLeft() const;
+    [[nodiscard]] bool masterIsCenter() const;
+    // The areas in visual order, master centered between both stacks in center mode. Unused slots are null.
+    [[nodiscard]] std::array<Area*, 3> orderedAreas();
+    [[nodiscard]] std::array<const Area*, 3> orderedAreas() const;
+    // Where a new stack row goes: the emptier stack in center mode, ties to m_stack.
+    [[nodiscard]] Area& insertionStack();
+    [[nodiscard]] const Area& insertionStack() const;
+    // Where a promotion takes its row from: the fuller stack in center mode, ties to m_stack. Null when every stack
+    // is empty.
+    [[nodiscard]] Area* promotionStack();
+    // Outside center mode the second stack cannot exist, so a reload that leaves center appends it to m_stack.
+    void foldSecondStack();
+    // Whether the width actions have a boundary to move: the master margins in center mode, both areas otherwise.
+    [[nodiscard]] bool widthAdjustable() const;
     [[nodiscard]] Area* areaOf(const View* view);
     [[nodiscard]] const Area* areaOf(const View* view) const;
     [[nodiscard]] Area* visualArea(int columnIndex);
@@ -73,6 +88,9 @@ namespace umbriel {
 
     Area m_master;
     Area m_stack;
+    // Center mode splits the stack in two: m_stack is the left column, m_secondStack the right one.
+    // Always empty with position "left" or "right".
+    Area m_secondStack;
     double m_masterFrac = -1.0;
     double m_savedFrac = 0.0;
     mutable std::vector<Column> m_columns;

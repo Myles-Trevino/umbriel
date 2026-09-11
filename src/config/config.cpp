@@ -360,7 +360,7 @@ namespace umbriel {
       }
       const auto* value = node->as_string();
       if (value == nullptr) {
-        warnAt(node->source(), R"({}.position must be a string ("left" or "right"))", context);
+        warnAt(node->source(), R"({}.position must be a string ("left", "right", or "center"))", context);
         return std::nullopt;
       }
       const std::string_view position = value->get();
@@ -370,7 +370,10 @@ namespace umbriel {
       if (position == "right") {
         return MasterPosition::Right;
       }
-      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left" or "right"))", context, position);
+      if (position == "center") {
+        return MasterPosition::Center;
+      }
+      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left", "right", or "center"))", context, position);
       return std::nullopt;
     }
 
