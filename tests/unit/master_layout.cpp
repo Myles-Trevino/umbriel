@@ -528,4 +528,37 @@ UMBRIEL_TEST(swapViewsAcrossAreasExchangesMembership) {
   CHECK(!fixture.layout.swapViews(stub(0), stub(0)));
 }
 
+UMBRIEL_TEST(newViewReplacesTheMasterWhenConfigured) {
+  Fixture fixture;
+  fixture.config.master.newBecomesMaster = true;
+  fixture.addViews(3);
+
+  CHECK_EQ(fixture.layout.columnOf(stub(2)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(2)), 0);
+  CHECK_EQ(fixture.layout.columns()[0].views.size(), size_t{1});
+  // Each displaced master lands on the stack top, so the stack reads newest first.
+  CHECK_EQ(fixture.layout.columnOf(stub(1)), 1);
+  CHECK_EQ(fixture.layout.rowOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.columnOf(stub(0)), 1);
+  CHECK_EQ(fixture.layout.rowOf(stub(0)), 1);
+}
+
+UMBRIEL_TEST(newViewKeepsTheMasterCount) {
+  Fixture fixture;
+  fixture.config.master.newBecomesMaster = true;
+  fixture.addViews(2);
+  CHECK(fixture.layout.promoteFromStack());
+
+  // The flag already made stub(1) master and pushed stub(0) to the stack, and the promote pulled stub(0) back, so
+  // master holds [1, 0]. The new view takes the top slot and only the last master row leaves.
+  fixture.layout.insertView(stub(2), 0);
+  CHECK_EQ(fixture.layout.columns()[0].views.size(), size_t{2});
+  CHECK_EQ(fixture.layout.columnOf(stub(2)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(2)), 0);
+  CHECK_EQ(fixture.layout.columnOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(1)), 1);
+  CHECK_EQ(fixture.layout.columnOf(stub(0)), 1);
+  CHECK_EQ(fixture.layout.columns()[1].views.size(), size_t{1});
+}
+
 int main() { return RUN_TESTS(); }

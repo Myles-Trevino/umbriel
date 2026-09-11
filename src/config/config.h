@@ -66,6 +66,7 @@ namespace umbriel {
     struct Master {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> newOnTop;
+      std::optional<bool> newBecomesMaster;
       std::optional<MasterPosition> position;
       bool operator==(const Master&) const = default;
     } master;
@@ -111,6 +112,7 @@ namespace umbriel {
     struct Master {
       double defaultWidthFraction = 0.55;
       bool newOnTop = true;
+      bool newBecomesMaster = false;
       MasterPosition position = MasterPosition::Left;
       bool operator==(const Master&) const = default;
     } master;
@@ -658,6 +660,7 @@ namespace umbriel {
       struct Master {
         double defaultWidthFraction = 0.55;
         bool newOnTop = true;
+        bool newBecomesMaster = false;
         MasterPosition position = MasterPosition::Left;
         bool operator==(const Master&) const = default;
       } master;

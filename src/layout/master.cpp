@@ -246,6 +246,14 @@ namespace umbriel {
     if (m_master.views.empty()) {
       m_master.views.push_back(view);
       m_master.weights.push_back(1.0);
+    } else if (m_config != nullptr && m_config->master.newBecomesMaster) {
+      // The master count does not change, so the last master row drops to the stack top with its weight.
+      m_stack.views.insert(m_stack.views.begin(), m_master.views.back());
+      m_stack.weights.insert(m_stack.weights.begin(), m_master.weights.back());
+      m_master.views.pop_back();
+      m_master.weights.pop_back();
+      m_master.views.insert(m_master.views.begin(), view);
+      m_master.weights.insert(m_master.weights.begin(), 1.0);
     } else {
       const bool newOnTop = m_config == nullptr || m_config->master.newOnTop;
       m_stack.views.insert(newOnTop ? m_stack.views.begin() : m_stack.views.end(), view);

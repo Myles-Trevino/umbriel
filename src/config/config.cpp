@@ -608,7 +608,8 @@ namespace umbriel {
                 overrides.master.position = position;
               }
               sm.real("default_width_fraction", 0.1, 0.9, overrides.master.defaultWidthFraction)
-                  .boolean("new_on_top", overrides.master.newOnTop);
+                  .boolean("new_on_top", overrides.master.newOnTop)
+                  .boolean("new_becomes_master", overrides.master.newBecomesMaster);
             });
           },
           layoutContext
@@ -1301,7 +1302,8 @@ namespace umbriel {
             loaded.layout.master.position = *position;
           }
           sm.real("default_width_fraction", 0.1, 0.9, loaded.layout.master.defaultWidthFraction)
-              .boolean("new_on_top", loaded.layout.master.newOnTop);
+              .boolean("new_on_top", loaded.layout.master.newOnTop)
+              .boolean("new_becomes_master", loaded.layout.master.newBecomesMaster);
         });
       });
     }

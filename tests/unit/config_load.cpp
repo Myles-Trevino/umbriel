@@ -527,6 +527,7 @@ mode = "master"
 position = "right"
 default_width_fraction = 0.05
 new_on_top = false
+new_becomes_master = true
 surprise = true
 
 [output.DP-1]
@@ -539,6 +540,7 @@ name = "dev"
 position = "left"
 default_width_fraction = 0.7
 new_on_top = true
+new_becomes_master = false
 )");
 
   ConfigStore& store = umbriel::configStore();
@@ -550,11 +552,14 @@ new_on_top = true
   CHECK(store.config().layout.master.position == umbriel::MasterPosition::Right);
   CHECK_EQ(store.config().layout.master.defaultWidthFraction, 0.1);
   CHECK(!store.config().layout.master.newOnTop);
+  CHECK(store.config().layout.master.newBecomesMaster);
   CHECK_EQ(store.config().workspaceRules.size(), size_t{1});
   CHECK(store.config().workspaceRules[0].layout.master.position == umbriel::MasterPosition::Left);
   CHECK(store.config().workspaceRules[0].layout.master.defaultWidthFraction.has_value());
   CHECK_EQ(*store.config().workspaceRules[0].layout.master.defaultWidthFraction, 0.7);
   CHECK(store.config().workspaceRules[0].layout.master.newOnTop == true);
+  CHECK(store.config().workspaceRules[0].layout.master.newBecomesMaster.has_value());
+  CHECK(store.config().workspaceRules[0].layout.master.newBecomesMaster == false);
   CHECK(containsDiagnostic(store, "layout.master.default_width_fraction = 0.05 out of range, clamped to 0.1"));
   CHECK(containsDiagnostic(store, "unknown key layout.master.surprise"));
 }
