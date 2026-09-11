@@ -390,6 +390,9 @@ follows_mouse = false                           # Focus on pointer motion and Dw
 # Resize, maximize, fullscreen, and close actions target a scratchpad that owns
 # keyboard focus. Layout-relative window actions leave the workspace behind it
 # unchanged.
+# `window-focus:<window-id>` and `window-focus-warp:<window-id>` also summon a
+# hidden scratchpad target to the output under the pointer. The `-warp` form
+# then moves the cursor to that target.
 # Documentation: https://docs.noctalia.dev/umbriel/scratchpads/
 "Mod+Shift+Space" = "window-move-to-scratchpad"
 "Mod+Space" = "scratchpad-toggle"

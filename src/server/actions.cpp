@@ -986,6 +986,16 @@ namespace umbriel {
         }
         return false;
       }
+      if (ScratchpadManager* scratchpad = server.scratchpadManager();
+          scratchpad != nullptr && scratchpad->contains(view) && !view->onActiveWorkspace()) {
+        // Hidden scratchpad entries fail FocusManager's visibility gate. Summon
+        // their pad using the normal pointer-output policy, then select the
+        // exact requested entry below without briefly focusing its remembered
+        // window first.
+        if (Output* output = server.outputFromWlr(server.preferredOutput()); output != nullptr) {
+          scratchpad->summon(scratchpad->nameFor(view), output);
+        }
+      }
       server.focusView(view, FocusReason::ForeignActivation);
       if constexpr (Warp) {
         warpCursorToWindow(server, *view);
