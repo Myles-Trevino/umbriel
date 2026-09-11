@@ -1339,6 +1339,213 @@ namespace umbriel {
       return true;
     }
 
+    bool swapActiveWorkspaceWindows(Server& server, Output* sourceOutput, Output* targetOutput, std::string* error) {
+      if (sourceOutput == nullptr || targetOutput == nullptr || sourceOutput == targetOutput) {
+        return reject(error, "invalid outputs for swap");
+      }
+      WorkspaceGroup* sourceGroup = sourceOutput->workspaceGroup();
+      WorkspaceGroup* targetGroup = targetOutput->workspaceGroup();
+      if (sourceGroup == nullptr || targetGroup == nullptr) {
+        return reject(error, "output has no workspace group");
+      }
+      Workspace* sourceWs = sourceGroup->active();
+      Workspace* targetWs = targetGroup->active();
+      if (sourceWs == nullptr || targetWs == nullptr) {
+        return reject(error, "output has no active workspace");
+      }
+      if (!sourceWs->hasViews() && !targetWs->hasViews()) {
+        return true;
+      }
+
+      View* sourceFocused = sourceWs->focusedView();
+      View* targetFocused = targetWs->focusedView();
+      View* seatFocus = seatFocusedWindow(server);
+
+      double sourceScroll = 0.0;
+      bool sourceCenteredRest = false;
+      if (const ScrollingLayout* sc = sourceWs->scrollingLayout()) {
+        sourceScroll = sc->scroll();
+        sourceCenteredRest = sc->centeredRest();
+      }
+
+      double targetScroll = 0.0;
+      bool targetCenteredRest = false;
+      if (const ScrollingLayout* sc = targetWs->scrollingLayout()) {
+        targetScroll = sc->scroll();
+        targetCenteredRest = sc->centeredRest();
+      }
+
+      struct ColumnSnapshot {
+        std::vector<View*> views;
+        double widthFrac = 0.5;
+        double savedWidthFrac = 0.0;
+        std::vector<double> heightWeights;
+        double topGapWeight = 1.0;
+        double bottomGapWeight = 1.0;
+      };
+
+      const auto snapshotColumns = [](Workspace* ws) {
+        std::vector<ColumnSnapshot> cols;
+        for (const Column& c : ws->layout().columns()) {
+          cols.push_back({
+              .views = c.views,
+              .widthFrac = c.widthFrac,
+              .savedWidthFrac = c.savedWidthFrac,
+              .heightWeights = c.heightWeights,
+              .topGapWeight = c.topGapWeight,
+              .bottomGapWeight = c.bottomGapWeight,
+          });
+        }
+        return cols;
+      };
+
+      const auto snapshotFloats = [](Workspace* ws) {
+        std::vector<View*> floats;
+        for (View* view : ws->allViews()) {
+          if (view->floating() && !view->pinned()) {
+            floats.push_back(view);
+          }
+        }
+        return floats;
+      };
+
+      const std::vector<ColumnSnapshot> sourceCols = snapshotColumns(sourceWs);
+      const std::vector<View*> sourceFloats = snapshotFloats(sourceWs);
+
+      const std::vector<ColumnSnapshot> targetCols = snapshotColumns(targetWs);
+      const std::vector<View*> targetFloats = snapshotFloats(targetWs);
+
+      for (const ColumnSnapshot& col : sourceCols) {
+        for (View* v : col.views) {
+          v->moveToWorkspace(targetWs, /*attachToLayout=*/false);
+        }
+      }
+      for (View* v : sourceFloats) {
+        v->rememberFloatingPosition();
+        v->moveToWorkspace(targetWs, /*attachToLayout=*/false);
+      }
+
+      for (const ColumnSnapshot& col : targetCols) {
+        for (View* v : col.views) {
+          v->moveToWorkspace(sourceWs, /*attachToLayout=*/false);
+        }
+      }
+      for (View* v : targetFloats) {
+        v->rememberFloatingPosition();
+        v->moveToWorkspace(sourceWs, /*attachToLayout=*/false);
+      }
+
+      const auto buildColumns = [](Workspace* dest, const std::vector<ColumnSnapshot>& cols) {
+        for (const ColumnSnapshot& col : cols) {
+          if (col.views.empty()) {
+            continue;
+          }
+          View* first = col.views.front();
+          dest->layout().insertView(first, static_cast<int>(dest->layout().columns().size()));
+          if (ScrollingLayout* scrolling = dest->scrollingLayout()) {
+            const int targetCol = scrolling->columnOf(first);
+            const double normalWidth = col.savedWidthFrac > 0.0 ? col.savedWidthFrac : col.widthFrac;
+            scrolling->setWidthFraction(targetCol, normalWidth);
+            if (col.savedWidthFrac > 0.0) {
+              scrolling->toggleFullWidth(targetCol);
+            }
+            for (size_t row = 0; row < col.heightWeights.size(); ++row) {
+              scrolling->setHeightWeight(targetCol, static_cast<int>(row), col.heightWeights[row]);
+            }
+            scrolling->setTopGapWeight(targetCol, col.topGapWeight);
+            scrolling->setBottomGapWeight(targetCol, col.bottomGapWeight);
+          }
+          for (size_t row = 1; row < col.views.size(); ++row) {
+            View* view = col.views[row];
+            dest->layout().insertViewIntoColumn(view, dest->layout().columnOf(first), static_cast<int>(row));
+          }
+        }
+      };
+
+      buildColumns(targetWs, sourceCols);
+      for (View* v : sourceFloats) {
+        v->restoreFloatingPosition();
+      }
+
+      buildColumns(sourceWs, targetCols);
+      for (View* v : targetFloats) {
+        v->restoreFloatingPosition();
+      }
+
+      if (ScrollingLayout* sc = targetWs->scrollingLayout()) {
+        sc->setScroll(sourceScroll, sourceCenteredRest);
+        targetWs->clampScrollToRange();
+      }
+
+      if (ScrollingLayout* sc = sourceWs->scrollingLayout()) {
+        sc->setScroll(targetScroll, targetCenteredRest);
+        sourceWs->clampScrollToRange();
+      }
+
+      if (sourceFocused != nullptr && sourceFocused->workspace() == targetWs) {
+        targetWs->setFocusedView(sourceFocused);
+      } else if (targetWs->hasViews()) {
+        targetWs->setFocusedView(targetWs->allViews().front());
+      }
+
+      if (targetFocused != nullptr && targetFocused->workspace() == sourceWs) {
+        sourceWs->setFocusedView(targetFocused);
+      } else if (sourceWs->hasViews()) {
+        sourceWs->setFocusedView(sourceWs->allViews().front());
+      }
+
+      if (seatFocus != nullptr && seatFocus->mapped()) {
+        server.focusView(seatFocus, FocusReason::Gesture);
+        maybeWarpCursorToWindow(server, seatFocus);
+      } else if (sourceWs->focusedView() != nullptr) {
+        server.focusView(sourceWs->focusedView(), FocusReason::Gesture);
+        maybeWarpCursorToWindow(server, sourceWs->focusedView());
+      }
+
+      sourceWs->markArrange(true);
+      targetWs->markArrange(true);
+      sourceWs->flushArrange();
+      targetWs->flushArrange();
+
+      wlr_output_schedule_frame(sourceOutput->wlr());
+      wlr_output_schedule_frame(targetOutput->wlr());
+
+      return true;
+    }
+
+    template <wlr_direction D>
+    bool actionWorkspaceSwapActiveOutput(Server& server, const Keybind& /*bind*/, std::string* error) {
+      std::string message;
+      Output* target = adjacentOutput(server, D, &message);
+      if (target == nullptr) {
+        return reject(error, std::move(message));
+      }
+      return swapActiveWorkspaceWindows(server, server.outputFromWlr(server.preferredOutput()), target, error);
+    }
+
+    bool actionWorkspaceSwapActiveOutputs(Server& server, const Keybind& /*bind*/, std::string* error) {
+      Output* current = server.outputFromWlr(server.preferredOutput());
+      if (current == nullptr) {
+        return reject(error, "no active output");
+      }
+      std::vector<Output*> enabled;
+      for (const auto& out : server.outputs()) {
+        if (out->wlr()->enabled) {
+          enabled.push_back(out.get());
+        }
+      }
+      if (enabled.size() == 2) {
+        Output* other = (enabled[0] == current) ? enabled[1] : enabled[0];
+        return swapActiveWorkspaceWindows(server, current, other, error);
+      }
+      for (wlr_direction dir : {WLR_DIRECTION_DOWN, WLR_DIRECTION_UP, WLR_DIRECTION_RIGHT, WLR_DIRECTION_LEFT}) {
+        if (Output* target = adjacentOutput(server, dir, nullptr)) {
+          return swapActiveWorkspaceWindows(server, current, target, error);
+        }
+      }
+      return reject(error, "could not determine adjacent output to swap with");
+    }
+
     // Overlays
     bool actionOverviewToggle(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
       server.overview()->toggle();
@@ -1524,6 +1731,11 @@ namespace umbriel {
         &actionWorkspaceMoveToOutput<WLR_DIRECTION_RIGHT>,
         &actionWorkspaceMoveToOutput<WLR_DIRECTION_UP>,
         &actionWorkspaceMoveToOutput<WLR_DIRECTION_DOWN>,
+        &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_LEFT>,
+        &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_RIGHT>,
+        &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_UP>,
+        &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_DOWN>,
+        &actionWorkspaceSwapActiveOutputs,
         &actionModifyWidth,
         &actionWindowCenter,
         &actionWorkspaceSetLayout,

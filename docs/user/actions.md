@@ -157,6 +157,11 @@ described in [Workspace selectors](workspaces.md#workspace-selectors).
 | `workspace-next` | Switch to the next workspace on this output |
 | `workspace-previous` | Switch to the previous workspace on this output |
 | `workspace-set-layout:<scrolling\|dwindle\|master\|toggle>` | Set the active workspace's layout mode |
+| `workspace-swap-active-output-down` | Swap active workspace windows with the output below |
+| `workspace-swap-active-output-left` | Swap active workspace windows with the output left |
+| `workspace-swap-active-output-right` | Swap active workspace windows with the output right |
+| `workspace-swap-active-output-up` | Swap active workspace windows with the output above |
+| `workspace-swap-active-outputs` | Swap active workspace windows between outputs |
 | `workspace-switch:<workspace>[/<output>]` | Switch to the selected workspace |
 
 ## Overview

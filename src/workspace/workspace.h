@@ -168,6 +168,7 @@ namespace umbriel {
 
     [[nodiscard]] const std::vector<View*>& allViews() const noexcept { return m_views; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
+    void clampScrollToRange();
 
   private:
     void applyPositions(bool animate);
@@ -183,9 +184,6 @@ namespace umbriel {
     [[nodiscard]] std::optional<std::array<int, 2>> focusedFloatingAxis(bool width) const;
     // The focused floating window's size as a fraction of the usable axis; nullopt when unavailable.
     [[nodiscard]] std::optional<double> focusedFloatingFraction(bool width) const;
-    // Pull the scroll offset back into [0, maxScroll]. Only for removals: a
-    // touchpad swipe overscrolls on purpose.
-    void clampScrollToRange();
     [[nodiscard]] View* focusAlongStrip(int direction) const;
     [[nodiscard]] View* focusWithinLane(int direction) const;
     // Directional focus lands on the most recently focused window of the group

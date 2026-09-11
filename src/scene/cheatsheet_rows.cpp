@@ -373,6 +373,11 @@ namespace {
     case A::WorkspaceMoveToOutputRight:
     case A::WorkspaceMoveToOutputUp:
     case A::WorkspaceMoveToOutputDown:
+    case A::WorkspaceSwapActiveOutputLeft:
+    case A::WorkspaceSwapActiveOutputRight:
+    case A::WorkspaceSwapActiveOutputUp:
+    case A::WorkspaceSwapActiveOutputDown:
+    case A::WorkspaceSwapActiveOutputs:
       return Group::Workspaces;
     case A::OutputFocusLeft:
     case A::OutputFocusRight:
