@@ -185,6 +185,10 @@ namespace umbriel {
     void clampScrollToRange();
     [[nodiscard]] View* focusAlongStrip(int direction) const;
     [[nodiscard]] View* focusWithinLane(int direction) const;
+    // Directional focus lands on the most recently focused window of the group
+    // the move entered (target column, or crossed dwindle subtree). Moves that
+    // stay inside one group keep `target`.
+    [[nodiscard]] View* preferRecentPeer(View* target) const;
     bool moveLaneAlongStrip(int direction);
     bool moveWithinLane(int direction);
     // Take `view` out of the layout while holding visible lanes still.

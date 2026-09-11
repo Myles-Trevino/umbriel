@@ -307,6 +307,24 @@ UMBRIEL_TEST(directionalFocusCrossesTheMasterStackBoundary) {
   CHECK_EQ(*left, stub(0));
 }
 
+UMBRIEL_TEST(directionalFocusWaitsForTheArrangeAfterAStructuralChange) {
+  Fixture fixture;
+  fixture.addViews(3);
+  fixture.layout.arrange(kUsable);
+
+  // consume moves stub(2) into the master column, which the boxes only reflect
+  // after the next arrange. Until then the layout declines to answer so focus
+  // follows column order rather than the old geometry.
+  CHECK(fixture.layout.consume(stub(2), -1));
+  CHECK(!fixture.layout.focusHorizontalLeaf(stub(2), 1).has_value());
+  CHECK(!fixture.layout.focusVerticalLeaf(stub(2), -1).has_value());
+
+  fixture.layout.arrange(kUsable);
+  const auto right = fixture.layout.focusHorizontalLeaf(stub(2), 1);
+  CHECK(right.has_value());
+  CHECK_EQ(right.value_or(nullptr), stub(1));
+}
+
 UMBRIEL_TEST(initialSizeMatchesTheArrangeThatFollows) {
   Fixture fixture;
   for (int id = 0; id < 3; ++id) {

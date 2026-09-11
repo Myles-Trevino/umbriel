@@ -77,6 +77,8 @@ namespace umbriel {
     double m_savedFrac = 0.0;
     mutable std::vector<Column> m_columns;
     std::vector<LayoutTarget> m_targets;
+    // True between a structural change and the arrange that re-sizes the rows: m_targets still hold the old boxes.
+    bool m_geometryStale = true;
   };
 
 } // namespace umbriel

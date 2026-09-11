@@ -220,6 +220,7 @@ namespace umbriel {
   }
 
   void MasterStackLayout::rebuildColumns() {
+    m_geometryStale = true;
     m_columns.clear();
     const Area* ordered[2] = {
         masterIsLeft() ? &m_master : &m_stack,
@@ -461,6 +462,7 @@ namespace umbriel {
       arrangeArea(masterIsLeft() ? m_stack : m_master, right);
     }
     rebuildColumns();
+    m_geometryStale = false;
   }
 
   wlr_box MasterStackLayout::targetBox(const View* view) const {
@@ -493,10 +495,18 @@ namespace umbriel {
   }
 
   std::optional<View*> MasterStackLayout::focusHorizontalLeaf(const View* view, int direction) const {
+    // A structural change invalidates the boxes until the next arrange. Answering from them would send focus by the
+    // old geometry, so the caller falls back to column and row order instead.
+    if (m_geometryStale) {
+      return std::nullopt;
+    }
     return directionalNeighbor(m_targets, view, true, direction);
   }
 
   std::optional<View*> MasterStackLayout::focusVerticalLeaf(const View* view, int direction) const {
+    if (m_geometryStale) {
+      return std::nullopt;
+    }
     return directionalNeighbor(m_targets, view, false, direction);
   }
 

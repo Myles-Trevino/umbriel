@@ -828,12 +828,29 @@ namespace umbriel {
     return target < 0 || target >= static_cast<int>(views.size()) ? nullptr : views[static_cast<size_t>(target)];
   }
 
+  View* Workspace::preferRecentPeer(View* target) const {
+    if (target == nullptr || m_group == nullptr) {
+      return target;
+    }
+    const std::vector<View*> peers = m_layout->focusPeers(m_focusedView, target);
+    if (peers.size() < 2) {
+      return target;
+    }
+    for (const auto& entry : m_group->server()->registry().all()) {
+      View* candidate = entry.get();
+      if (candidate->mapped() && candidate->workspace() == this && std::ranges::find(peers, candidate) != peers.end()) {
+        return candidate;
+      }
+    }
+    return target;
+  }
+
   View* Workspace::focusAdjacent(int direction) const {
-    return scrollingVertical() ? focusWithinLane(direction) : focusAlongStrip(direction);
+    return preferRecentPeer(scrollingVertical() ? focusWithinLane(direction) : focusAlongStrip(direction));
   }
 
   View* Workspace::focusVertical(int direction) const {
-    return scrollingVertical() ? focusAlongStrip(direction) : focusWithinLane(direction);
+    return preferRecentPeer(scrollingVertical() ? focusAlongStrip(direction) : focusWithinLane(direction));
   }
 
   View* Workspace::focusFirstColumn() const {

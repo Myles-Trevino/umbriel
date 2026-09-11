@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Dwindle column movement follows screen direction rather than depth-first leaf order. In A | (B above C), moving C
-# left must swap it with A, not move it upward into B's tile.
+# left must swap it with A, not move it upward into B's tile. Leaving and re-entering the right-hand split also
+# returns focus to the tile that was focused there last, not to the geometrically nearest one.
 set -euo pipefail
 
 readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
@@ -64,6 +65,16 @@ fi
 
 "$UMBRIEL" msg "window-focus:$lower_id" > /dev/null
 wait_for_focus "$lower_id"
+
+upper_id=$(jq -r '.[] | select(.title == "dwindle-move-upper-right") | .id' <<< "$windows")
+left_id=$(jq -r '.[] | select(.title == "dwindle-move-left") | .id' <<< "$windows")
+"$UMBRIEL" msg window-focus-left > /dev/null
+wait_for_focus "$left_id"
+"$UMBRIEL" msg window-focus-right > /dev/null
+if ! wait_for_focus "$lower_id"; then
+  echo "focus-right did not return to the last-focused tile of the right split (upper is $upper_id)"
+  exit 1
+fi
 "$UMBRIEL" msg column-move-left > /dev/null
 
 moved_x=$lower_x
