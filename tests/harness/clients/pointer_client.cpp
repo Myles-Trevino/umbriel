@@ -189,8 +189,9 @@ int main(int argc, char** argv) {
   }
 
   const std::vector<std::string> args(argv + 3, argv + argc);
-  const bool needsKeyboard =
-      std::ranges::find(args, "mod") != args.end() || std::ranges::find(args, "tap") != args.end();
+  const bool needsKeyboard = std::ranges::any_of(args, [](const std::string& command) {
+    return command == "mod" || command == "tap" || command == "key-press" || command == "key-release";
+  });
   VirtualKeyboard keyboard;
   if (needsKeyboard && !initializeKeyboard(keyboard, state, display)) {
     return EXIT_FAILURE;
@@ -256,14 +257,20 @@ int main(int argc, char** argv) {
       const uint32_t depressed = modifierMask(keyboard, args[i + 1]);
       i += 1;
       zwp_virtual_keyboard_v1_modifiers(keyboard.protocol, depressed, 0, 0, 0);
-    } else if (command == "tap") {
+    } else if (command == "tap" || command == "key-press" || command == "key-release") {
       needs(1);
       const auto key = static_cast<uint32_t>(std::atoi(args[i + 1].c_str()));
       i += 1;
-      zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_PRESSED);
-      zwlr_virtual_pointer_v1_frame(pointer);
-      wl_display_roundtrip(display);
-      zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_RELEASED);
+      if (command != "key-release") {
+        zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_PRESSED);
+      }
+      if (command == "tap") {
+        zwlr_virtual_pointer_v1_frame(pointer);
+        wl_display_roundtrip(display);
+      }
+      if (command != "key-press") {
+        zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_RELEASED);
+      }
     } else if (command == "pause") {
       needs(1);
       const auto duration = std::chrono::milliseconds(std::atoi(args[i + 1].c_str()));

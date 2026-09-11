@@ -60,15 +60,22 @@ namespace umbriel {
   }
 
   wlr_input_method_keyboard_grab_v2* InputMethodRelay::grabForKeyboard(wlr_keyboard* keyboard) const {
-    if (m_inputMethod == nullptr || m_inputMethod->keyboard_grab == nullptr || keyboard == nullptr) {
-      return nullptr;
-    }
-    wlr_virtual_keyboard_v1* virtualKeyboard = wlr_input_device_get_virtual_keyboard(&keyboard->base);
-    if (virtualKeyboard != nullptr
-        && wl_resource_get_client(virtualKeyboard->resource) == wl_resource_get_client(m_inputMethod->resource)) {
+    if (m_inputMethod == nullptr
+        || m_inputMethod->keyboard_grab == nullptr
+        || keyboard == nullptr
+        || ownsKeyboard(keyboard)) {
       return nullptr;
     }
     return m_inputMethod->keyboard_grab;
+  }
+
+  bool InputMethodRelay::ownsKeyboard(wlr_keyboard* keyboard) const {
+    if (m_inputMethod == nullptr || keyboard == nullptr) {
+      return false;
+    }
+    wlr_virtual_keyboard_v1* virtualKeyboard = wlr_input_device_get_virtual_keyboard(&keyboard->base);
+    return virtualKeyboard != nullptr
+        && wl_resource_get_client(virtualKeyboard->resource) == wl_resource_get_client(m_inputMethod->resource);
   }
 
   void InputMethodRelay::onNewTextInput(wl_listener* listener, void* data) {
