@@ -4,7 +4,7 @@ set -euo pipefail
 
 failed=0
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly DELAYED_LOG="$UMBRIEL_RUNTIME_DIR/named-delayed.log"
 readonly FIRST_LOG="$UMBRIEL_RUNTIME_DIR/named-first.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/named-column-control"

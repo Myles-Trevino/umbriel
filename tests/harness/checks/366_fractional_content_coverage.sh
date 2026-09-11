@@ -8,7 +8,7 @@
 # exact texel centers, which is why the destination is not stretched instead.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/fractional-client}"
+readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/fractional-content-client.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/fractional-content.png"
 
@@ -20,12 +20,14 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 duration_ms = 1
 
+[colors.border]
+focused = "#FF0000"
+unfocused = "#FF0000"
+
 [appearance]
 border_width = 1
 outer_border_width = 0
 corner_radius = 12
-border_focused = "#FF0000"
-border_unfocused = "#FF0000"
 
 [[window_rule]]
 match.title = "^fractional-content$"

@@ -31,6 +31,7 @@ namespace umbriel {
     // True while the ring exists and is showing. Fullscreen disables the tree
     // rather than destroying it, so existence alone does not answer this.
     [[nodiscard]] bool bordersVisible() const;
+    [[nodiscard]] wlr_scene_tree* borderTree() const { return m_borderTree; }
     void setBordersEnabled(bool enabled);
     void updateBorderGeometry(int contentWidth, int contentHeight);
     // `alpha` premultiplies the border color so a fading view's ring fades with it.
@@ -60,6 +61,10 @@ namespace umbriel {
     void raiseShadowToTop();
     void updateShadow(int contentWidth, int contentHeight, int borderInset, int cornerRadius);
     void hideShadow();
+    void setShadowAnimationSource(wlr_scene_node* source) { m_shadow.setAnimationSource(source); }
+    [[nodiscard]] ShadowSnapshot snapshotShadow(wlr_scene_tree* parent, wlr_scene_node* source) const {
+      return m_shadow.snapshot(parent, source);
+    }
 
     // Shadows follow the full view opacity. Blur follows only transition
     // opacity, otherwise a window rule attenuates the backdrop twice.

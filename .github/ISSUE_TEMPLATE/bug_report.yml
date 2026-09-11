@@ -163,12 +163,12 @@ body:
 
         If you selected `Other` above, name the exact distribution or installation method here.
         - GPU and driver: e.g. AMD RX 7800 XT (amdgpu)
-        - wlroots version, and whether SceneFX came from the system or the submodule
+        - wlroots version
         - Outputs: count, resolution, refresh rate, scale, transform
         - Kernel version
       placeholder: |
         GPU and driver: AMD RX 7800 XT (amdgpu)
-        wlroots: 0.20.0, SceneFX: submodule
+        wlroots: 0.20.2
         Outputs: DP-1 3840x2160@144 scale 1.5, HDMI-A-1 1920x1080@60 scale 1
         Kernel: 6.17.4
       render: text

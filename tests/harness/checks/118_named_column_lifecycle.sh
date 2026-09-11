@@ -2,7 +2,7 @@
 # Late named scrolling-column rules preserve ownership, focus, width, and maximize state across relocation.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly MOVE_FIFO="$UMBRIEL_RUNTIME_DIR/named-move-control"
 readonly MAX_MOVE_FIFO="$UMBRIEL_RUNTIME_DIR/named-max-move-control"
 readonly MAX_RECLASSIFY_FIFO="$UMBRIEL_RUNTIME_DIR/named-max-reclassify-control"

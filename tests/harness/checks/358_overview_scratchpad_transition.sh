@@ -2,7 +2,7 @@
 # Opening overview dismisses a visible scratchpad immediately instead of showing its ordinary hide fade underneath.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/overview-scratchpad-transition-client.log"
 readonly BEFORE="$UMBRIEL_RUNTIME_DIR/overview-scratchpad-transition-before.png"
 readonly EARLY="$UMBRIEL_RUNTIME_DIR/overview-scratchpad-transition-early.png"
@@ -62,19 +62,23 @@ dim = 0.5
 blur = false
 scale = 0.0
 
+[colors]
+backdrop = "#FFFFFFFF"
+
+[colors.overview]
+background_tint = "#00000000"
+workspace_background = "#00000000"
+
 [appearance]
 border_width = 0
 outer_border_width = 0
 corner_radius = 0
-backdrop_color = "#FFFFFFFF"
 
 [appearance.blur]
 enabled = false
 
 [overview]
 background_blur = false
-background_tint = "#00000000"
-workspace_background = "#00000000"
 shortcuts = false
 
 [[window_rule]]
@@ -95,9 +99,9 @@ if ! grep -q '^mapped$' "$CLIENT_LOG"; then
   exit 1
 fi
 
-"$UMBRIEL" msg window-move-to-scratchpad:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
 wait_for_empty_workspace
-"$UMBRIEL" msg scratchpad-toggle:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
 sleep 0.1
 grim "$BEFORE"
 assert_blue before-overview "$BEFORE"

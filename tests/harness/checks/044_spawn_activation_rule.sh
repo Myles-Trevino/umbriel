@@ -3,7 +3,7 @@
 # after activation and before remap so the policy must be matched from the final map metadata, not cached too early.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/spawn-rule-client.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/spawn-rule-control"
 readonly TOKEN_FILE="$UMBRIEL_RUNTIME_DIR/spawn-rule-token"

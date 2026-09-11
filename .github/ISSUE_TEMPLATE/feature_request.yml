@@ -106,7 +106,7 @@ body:
 
         - Why does this belong in the compositor rather than in a shell, a client, or a script?
         - Does it extend something Umbriel already does, or does it open a new front?
-        - Does it fall out of wlroots and SceneFX, or does it need new machinery or a new dependency?
+        - Does it fall out of wlroots and umbrielfx, or does it need new machinery or a new dependency?
         - What is the smallest version of it that solves your problem?
       placeholder: |
         Belongs in the compositor because ...
@@ -121,7 +121,7 @@ body:
     attributes:
       label: Prior art and references
       description: |
-        Links to protocol specs, wlroots or SceneFX APIs, related issues, mockups, or how other compositors handle it.
+        Links to protocol specs, wlroots or umbrielfx APIs, related issues, mockups, or how other compositors handle it.
 
         "Project X has this" is context, not a reason. Keep the problem above as the reason.
       placeholder: |

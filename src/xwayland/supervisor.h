@@ -36,6 +36,7 @@ namespace umbriel {
     // The DISPLAY the satellite owns, or empty when no satellite is running. Children inherit this; when it is empty
     // they must have DISPLAY *unset* rather than inherited, or X11 clients fall back to the outer session.
     [[nodiscard]] const std::string& display() const { return m_display; }
+    [[nodiscard]] bool executableAvailable() const { return !m_executable.empty(); }
     [[nodiscard]] pid_t pid() const { return m_pid; }
 
   private:

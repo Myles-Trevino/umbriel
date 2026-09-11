@@ -4,14 +4,19 @@ mode := "debug"
 build-dir := "build-" + mode
 prefix := "/usr/local"
 cpp-std := "c++23"
+# Defaults for asan mode. Leak detection is off: Mesa leaks its EGL setup on
+# every renderer teardown, which buries a real finding. A later key wins, so
+# ASAN_OPTIONS from the environment is appended and overrides these.
+asan-options := "abort_on_error=1:detect_leaks=0:halt_on_error=1"
 
 default:
     @just --list
 
+[no-exit-message]
 configure m=mode install_prefix=prefix:
     #!/usr/bin/env bash
     set -euo pipefail
-    args=(-Dcpp_std={{cpp-std}} --prefix "{{install_prefix}}")
+    args=(-Dcpp_std={{cpp-std}} -Dtests=enabled --prefix "{{install_prefix}}")
     case "{{m}}" in
       release)
         args+=(--buildtype=release -Db_lto=true)
@@ -19,17 +24,29 @@ configure m=mode install_prefix=prefix:
       asan)
         args+=(--buildtype=debug -Db_sanitize=address)
         ;;
-      debug|*)
+      debug)
         args+=(--buildtype=debug)
+        ;;
+      *)
+        # Recipes that build take the mode as their first argument, so a stray
+        # argument lands here. Configuring build-{{m}} for it would run whatever
+        # follows against a fresh throwaway build directory.
+        echo "unknown build mode '{{m}}': expected debug, release, or asan" >&2
+        echo "harness checks select by name, not mode: 'just check {{m}}'" >&2
+        exit 2
         ;;
     esac
     if [[ -d "build-{{m}}" ]]; then
-        meson setup "build-{{m}}" "${args[@]}" --reconfigure
+        # A build directory rejects an option added since it was configured
+        # until Meson re-reads the option file, so regenerate and try again.
+        meson setup "build-{{m}}" "${args[@]}" --reconfigure \
+          || { meson setup "build-{{m}}" --reconfigure && meson setup "build-{{m}}" "${args[@]}" --reconfigure; }
     else
         meson setup "build-{{m}}" "${args[@]}"
     fi
     ln -sfn "build-{{m}}/compile_commands.json" compile_commands.json
 
+[no-exit-message]
 _ensure-configured m=mode:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -56,7 +73,7 @@ run m=mode startup="": (build m)
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "{{m}}" == "asan" ]]; then
-        export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=0:halt_on_error=1}"
+        export ASAN_OPTIONS="{{asan-options}}${ASAN_OPTIONS:+:${ASAN_OPTIONS}}"
     fi
     args=()
     if [[ -n "${2:-}" ]]; then
@@ -65,31 +82,51 @@ run m=mode startup="": (build m)
     exec ./build-{{m}}/umbriel "${args[@]}"
 
 test m=mode: (configure m)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{m}}" == "asan" ]]; then
+        export ASAN_OPTIONS="{{asan-options}}${ASAN_OPTIONS:+:${ASAN_OPTIONS}}"
+    fi
     meson compile -C build-{{m}} unit-tests
     meson test -C build-{{m}} --print-errorlogs
 
-# Whole harness suite, or the checks whose names contain any given fragment. Each
-# check runs against its own headless compositor instance, so a fragment selects
-# a group as readily as a single check.
-# The build is silent unless it fails: the run's own report is the output.
+# The umbrielfx renderer ownership check needs a real DRM render node, which a
+# container or a headless runner does not have, so it is a tool rather than a
+# suite entry. This runs it against every render node this machine exposes.
 [no-exit-message]
-verify m=mode *filters: (_ensure-configured m)
+gpu-test m=mode: (_ensure-configured m)
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! build_log=$(meson compile -C build-{{m}} umbriel harness-clients 2>&1); then
+    nodes=(/dev/dri/renderD*)
+    if [[ ! -e ${nodes[0]} ]]; then
+        echo "no DRM render node under /dev/dri: nothing to check" >&2
+        exit 1
+    fi
+    ninja -C build-{{m}} umbrielfx/umbrielfx-renderer-test
+    ./build-{{m}}/umbrielfx/umbrielfx-renderer-test "${nodes[@]}"
+
+# Regressions for the GitHub workflow scripts. Pure Python, builds nothing.
+test-workflows:
+    python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py'
+
+# Harness checks: the whole suite, or the ones whose names contain any given fragment, each against its own headless compositor instance. `just check 310`, `just check 310 520`, `just check overview`, `just check 310 -v` to keep the output of passing checks. Checks run several at a time; `just check -j16` or `CHECK_JOBS=16` changes how many. Another build directory is `mode=`, as in `just mode=asan check 310`.
+[no-exit-message]
+check *filters: (_ensure-configured mode)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{mode}}" == "asan" ]]; then
+        export ASAN_OPTIONS="{{asan-options}}${ASAN_OPTIONS:+:${ASAN_OPTIONS}}"
+    fi
+    # Silent unless it fails: the run's own report is the output.
+    if ! build_log=$(meson compile -C build-{{mode}} umbriel harness-clients 2>&1); then
         printf '%s\n' "$build_log" >&2
         exit 1
     fi
-    bash tests/harness/verify.sh ./build-{{m}}/umbriel {{filters}}
+    bash tests/harness/check.sh ./build-{{mode}}/umbriel {{filters}}
 
-# One check, a group, or a few, on the default build, without naming the mode:
-# `just check 310`, `just check drag`, `just check 310 -v` for full output.
-[no-exit-message]
-check +filters: (verify mode filters)
-
-# Names of every harness check. Boots nothing.
-checks:
-    @bash tests/harness/verify.sh ./build-{{mode}}/umbriel --list
+# Names of every harness check. Boots and builds nothing.
+check-names:
+    @bash tests/harness/check.sh ./build-{{mode}}/umbriel --list
 
 format:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print0 | xargs -0 clang-format -i

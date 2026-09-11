@@ -14,7 +14,7 @@ in
   disabledModules = [ "programs/wayland/umbriel.nix" ];
 
   options.programs.umbriel = {
-    enable = lib.mkEnableOption "Umbriel, a Wayland compositor built on wlroots and SceneFX.";
+    enable = lib.mkEnableOption "Umbriel, a Wayland compositor built on wlroots.";
 
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;

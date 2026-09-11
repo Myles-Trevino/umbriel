@@ -7,7 +7,7 @@
 # which the header directive above asks the harness for.
 set -euo pipefail
 
-POINTER=${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}
+POINTER=${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}
 readonly KEY_O=24
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'

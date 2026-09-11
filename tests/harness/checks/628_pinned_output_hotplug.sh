@@ -6,7 +6,7 @@
 # harness: outputs=2
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/pinned-output-hotplug-client.log"
 
 env REDRAW_ON_CLOSE=1 "$CLIENT" pinned-output-hotplug 1200 700 > "$CLIENT_LOG" 2>&1 &

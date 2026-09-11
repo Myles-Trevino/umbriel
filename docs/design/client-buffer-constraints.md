@@ -16,7 +16,7 @@ resolution.
 
 ## Capture readback format
 
-`fx_texture_preferred_read_format` in the SceneFX fork never reports packed
+`fx_texture_preferred_read_format` in `umbrielfx` never reports packed
 24-bit. It is the only shm format the capture protocols offer clients, and the
 NVIDIA blob reports `GL_RGB` / `GL_UNSIGNED_BYTE` for opaque targets, which maps
 to `DRM_FORMAT_BGR888`. Clients assume a 4-byte pixel, derive `width * 4`, and
@@ -24,13 +24,35 @@ wlroots rejects it because a stride must divide by the pixel size. GLES2 always
 allows `GL_RGBA` / `GL_UNSIGNED_BYTE` readback, so the clamp to 32-bit costs
 nothing at 8bpc.
 
-Do not fix this by dropping `DRM_FORMAT_BGR888` from the fork's pixel format
+Do not fix this by dropping `DRM_FORMAT_BGR888` from `umbrielfx`'s pixel format
 table: the table also drives `wl_shm` advertisement and texture upload, and it
 is identical to wlroots' gles2 table.
+
+Readback support must also accept the bound framebuffer's
+`GL_IMPLEMENTATION_COLOR_READ_FORMAT` / `GL_IMPLEMENTATION_COLOR_READ_TYPE`
+pair. NVIDIA supports AB30 readback without advertising its texture-upload
+extension. Applying only the upload capability check rejects valid 10-bit
+readback and prevents the FP16 renderer tests from checking their pixels.
 
 To reproduce without NVIDIA, hardcode `gl_format = GL_RGB`,
 `gl_type = GL_UNSIGNED_BYTE`, `alpha_size = 0` after the `glGetIntegerv` calls
 and capture with `grim`.
+
+## HDR shader precision
+
+Client texture conversion and the output transform both require unconditional
+`highp float`. This preserves the output shader as the renderer-wide precision
+gate: implementations without fragment highp cannot initialize the renderer,
+and HDR is never exposed with arithmetic known to be insufficient.
+
+On NVIDIA 610.57.04, relying only on the shader macro selected mediump and
+corrupted PQ decoding: `color-pq-roundtrip` returned red 90 instead of 96.
+Forcing highp fixed the test, while explicit highp samplers alone did not.
+
+GLES3 detection remains limited to the packed 2_10_10_10 texture type, which
+is core functionality in GLES3. The capability is enabled by either the
+context version or the extension string. Framebuffer readback retains its
+separate implementation-format check.
 
 ## HDR capture view
 
@@ -40,11 +62,33 @@ the output buffer's DRM format while storing Gamma 2.2 SDR values. For an XR30
 HDR output, replacing that sidecar with XR24 after negotiation makes the client
 request packed 10-bit readback from an 8-bit framebuffer.
 
-SceneFX creates the sidecar lazily from its pre-output-transform linear blend
-buffer. This can happen during texture import, outside the normal SceneFX
-render pass, so the SceneFX EGL context must be current while the framebuffer
-is allocated. Export-DMA-BUF frames bypass the SDR sidecar and retain the
-output's native representation.
+Each output owns one shared FP16 blend buffer and one shared SDR capture
+sidecar. Their lifetime is tied to that output, rather than to its swapchain
+buffers, so changing swapchain depth does not duplicate either allocation. The
+blend buffer always represents the latest complete composed frame. Incremental
+rendering updates the region drawn for the current frame while preserving the
+previous frame everywhere else.
+
+Creating or resizing the shared blend buffer requires whole-output damage for
+that frame. A new buffer is cleared and has no valid pixels outside partial
+damage, including pixels that blur may sample. The full redraw establishes the
+complete-frame invariant before incremental damage resumes. An untransformed
+composition or direct scanout bypasses the shared target and invalidates it, so
+the next transformed composition also performs a full redraw.
+
+`umbrielfx` creates the capture sidecar lazily from the pre-output-transform
+linear blend buffer. The sidecar is generation-matched to that blend buffer:
+capture can reuse it only when the requested output buffer has the same blend
+generation, dimensions, and DRM format. A conversion for a newer generation
+does not overwrite the sidecar while a capture texture still holds it. This
+conversion can happen during texture import, outside the normal `umbrielfx`
+render pass, so its EGL context must be current while the framebuffer is
+allocated. Export-DMA-BUF frames bypass the SDR sidecar and retain the output's
+native representation.
+
+Output color LUTs are cached as renderer-local textures keyed by the immutable
+LUT transform. Reusing an output transform therefore reuses its uploaded
+texture, while transform and renderer destruction both release the cache entry.
 
 ## Windows-scRGB luminance
 
@@ -56,8 +100,8 @@ buffer as Windows-scRGB would incorrectly dim parametric extended-linear
 content.
 
 Umbriel therefore marks only image descriptions created by
-`create_windows_scrgb` with a SceneFX luminance multiplier of `80 / 203`.
-SceneFX applies that multiplier while normalizing the buffer into its
+`create_windows_scrgb` with an `umbrielfx` luminance multiplier of `80 / 203`.
+`umbrielfx` applies that multiplier while normalizing the buffer into its
 reference-white-relative blend space. The output transform subsequently maps
 the normalized reference white to the configured output `sdr_white` level.
 Buffers using this multiplier cannot use direct scanout because scanout would

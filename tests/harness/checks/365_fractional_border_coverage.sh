@@ -4,7 +4,7 @@
 # background in the stripe is an antialiasing error rather than a curve.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/fractional-border-client.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/fractional-border.png"
 
@@ -13,12 +13,14 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 duration_ms = 1
 
+[colors.border]
+focused = "#FF0000"
+unfocused = "#FF0000"
+
 [appearance]
 border_width = 1
 outer_border_width = 0
 corner_radius = 24
-border_focused = "#FF0000"
-border_unfocused = "#FF0000"
 
 [output."HEADLESS-1"]
 scale = 1.25

@@ -1,7 +1,9 @@
 #include "config/config.h"
 #include "config/resolve.h"
 #include "core/log.h"
+#include "input/cursor.h"
 #include "output/output.h"
+#include "overview/overview.h"
 #include "server/server.h"
 #include "view/view.h"
 #include "wlr.h"
@@ -94,19 +96,14 @@ namespace umbriel {
 
   void View::handleSetTitle() {
     updateForeignIdentity();
-    if (!m_initialRulesSettled) {
-      const bool titlePresent = m_toplevel->title != nullptr && m_toplevel->title[0] != '\0';
-      if (titlePresent) {
-        // Real title just arrived: settle and apply newly selected one-shot effects.
-        m_initialRulesSettled = true;
-        applyWindowRules(m_initialRules);
-      } else {
-        // Still empty title; refresh non-disruptive effects with whatever matches now.
-        applyDynamicRules();
-      }
-    } else {
-      applyDynamicRules();
+    // A title the client set settles the opening rules even when it is empty: an empty title is matchable, an absent
+    // one is not. applyWindowRules refreshes dynamic effects itself.
+    if (!m_initialRulesSettled && m_toplevel->title != nullptr) {
+      m_initialRulesSettled = true;
+      applyWindowRules(m_initialRules);
+      return;
     }
+    applyDynamicRules();
   }
 
   void View::handleSetAppId() {
@@ -142,6 +139,10 @@ namespace umbriel {
         workspace != nullptr ? workspace->name() : "", workspace != nullptr && !workspace->active()
     );
     m_server->focusView(this, FocusReason::ForeignActivation);
+    Overview* overview = m_server->overview();
+    if (config().input.cursor.followsFocus && (overview == nullptr || !overview->active())) {
+      m_server->cursor()->warpToView(*this);
+    }
   }
 
   void View::handleForeignClose() { wlr_xdg_toplevel_send_close(m_toplevel); }

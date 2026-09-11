@@ -3,7 +3,7 @@
 # fullscreen. Client-provided alpha remains active in every state.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/subsurface-client}"
+readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/tests/subsurface-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/fullscreen-rule-opacity-client.log"
 readonly RULE_APP_ID=fullscreen-rule-opacity
 
@@ -17,10 +17,12 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 duration_ms = 1
 
+[colors]
+backdrop = "#00FF00FF"
+
 [appearance]
 border_width = 0
 corner_radius = 0
-backdrop_color = "#00FF00FF"
 
 [[window_rule]]
 match.app_id = "^fullscreen-rule-opacity$"

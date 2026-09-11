@@ -5,8 +5,8 @@
 # running each assertion, which also covers listener lifetime.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
-readonly SECURITY_CONTEXT_CLIENT="${UMBRIEL_SECURITY_CONTEXT_CLIENT:-./build-debug/security-context-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
+readonly SECURITY_CONTEXT_CLIENT="${UMBRIEL_SECURITY_CONTEXT_CLIENT:-./build-debug/tests/security-context-client}"
 
 if [[ ! -x $GLOBAL_CLIENT || ! -x $SECURITY_CONTEXT_CLIENT ]]; then
   echo "required harness clients are not built"
@@ -26,6 +26,7 @@ readonly -a NORMAL_GLOBALS=(
   wl_output
   xdg_wm_base
   xdg_toplevel_tag_manager_v1
+  zxdg_exporter_v2
   zxdg_decoration_manager_v1
   org_kde_kwin_server_decoration_manager
   zwp_relative_pointer_manager_v1
@@ -42,8 +43,10 @@ readonly -a NORMAL_GLOBALS=(
 readonly -a RESTRICTED_GLOBALS=(
   wp_security_context_manager_v1
   zxdg_output_manager_v1
+  zxdg_importer_v2
   ext_idle_notifier_v1
   ext_data_control_manager_v1
+  zwlr_data_control_manager_v1
   zwlr_layer_shell_v1
   ext_session_lock_manager_v1
   zwp_input_method_manager_v2

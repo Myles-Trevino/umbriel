@@ -5,7 +5,7 @@
 set -euo pipefail
 
 readonly TITLE=floating-maximize-animation
-readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/fractional-client}"
+readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/floating-maximize-animation.log"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'

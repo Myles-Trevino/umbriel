@@ -4,7 +4,7 @@
 # fullscreen surface instead of an output-sized rounded tile.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/subsurface-client}"
+readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/tests/subsurface-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/fullscreen-chrome-client.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/fullscreen-chrome.png"
 

@@ -10,12 +10,17 @@
 // surface is hidden, `a` or `c` queues activation before the remap commit.
 // CONTENT_TYPE sets a surface hint before its initial commit. CONTENT_TYPE_ON_SUBSURFACE places it on a rendering
 // child, matching current Proton behavior. XDG_TAG sets a toplevel tag before the initial commit.
-// CONTENT_TYPE_AFTER_MAP, XDG_TAG_AFTER_MAP, and TITLE_AFTER_MAP update their metadata on stdin.
+// CONTENT_TYPE_AFTER_MAP, XDG_TAG_AFTER_MAP, and TITLE_AFTER_MAP update their metadata on stdin. NO_TITLE never sets a
+// title at all. With TRANSIENT_SUITE, TRANSIENT_PARENT_SIZE=<width>x<height> gives the parent its own size.
+// TRANSIENT_SUITE=mapped-together maps the parent and this toplevel in one flush, parenting from the first configure
+// so the compositor maps both in the same dispatch. TRANSIENT_FOREIGN_HANDLE=<handle> parents this toplevel to
+// another client's exported toplevel, the way a portal dialog is parented.
 
 #include "color-management-v1-client-protocol.h"
 #include "content-type-v1-client-protocol.h"
 #include "tearing-control-v1-client-protocol.h"
 #include "xdg-activation-v1-client-protocol.h"
+#include "xdg-foreign-unstable-v2-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-toplevel-tag-v1-client-protocol.h"
 
@@ -69,6 +74,7 @@ namespace {
     xdg_wm_base* wmBase = nullptr;
     xdg_activation_v1* activation = nullptr;
     xdg_toplevel_tag_manager_v1* xdgTagManager = nullptr;
+    zxdg_importer_v2* importer = nullptr;
     wp_content_type_manager_v1* contentTypeManager = nullptr;
     wp_content_type_v1* contentType = nullptr;
     wl_surface* contentTypeSurface = nullptr;
@@ -98,6 +104,7 @@ namespace {
     bool requestMaximizedAfterConfigure = false;
     bool maximizeRequested = false;
     bool logConfigures = false;
+    xdg_toplevel* parentOnFirstConfigure = nullptr;
     bool requestFullscreen = false;
     bool fullscreenRequested = false;
     bool requestHdr = false;
@@ -124,11 +131,12 @@ namespace {
   };
 
   struct AuxiliaryToplevel {
-    State* state = nullptr;
     wl_surface* surface = nullptr;
     xdg_surface* xdgSurface = nullptr;
     xdg_toplevel* toplevel = nullptr;
     Buffer buffer;
+    int width = 0;
+    int height = 0;
     bool mapped = false;
   };
 
@@ -238,10 +246,10 @@ namespace {
       .name = seatName,
   };
 
-  Buffer createBuffer(State& state) {
+  Buffer createBuffer(State& state, int width, int height) {
     Buffer buffer;
-    const int stride = state.width * 4;
-    buffer.size = static_cast<size_t>(stride * state.height);
+    const int stride = width * 4;
+    buffer.size = static_cast<size_t>(stride * height);
     const int fd = memfd_create("umbriel-unmap-client", MFD_CLOEXEC);
     if (fd < 0 || ftruncate(fd, static_cast<off_t>(buffer.size)) < 0) {
       if (fd >= 0) {
@@ -258,7 +266,7 @@ namespace {
     std::fill_n(static_cast<uint32_t*>(buffer.pixels), buffer.size / sizeof(uint32_t), 0xFF5577AA);
 
     wl_shm_pool* pool = wl_shm_create_pool(state.shm, fd, static_cast<int>(buffer.size));
-    buffer.resource = wl_shm_pool_create_buffer(pool, 0, state.width, state.height, stride, WL_SHM_FORMAT_ARGB8888);
+    buffer.resource = wl_shm_pool_create_buffer(pool, 0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
     return buffer;
@@ -268,11 +276,12 @@ namespace {
     auto& window = *static_cast<AuxiliaryToplevel*>(data);
     xdg_surface_ack_configure(xdgSurface, serial);
     if (window.mapped) {
+      wl_surface_commit(window.surface);
       return;
     }
     window.mapped = true;
     wl_surface_attach(window.surface, window.buffer.resource, 0, 0);
-    wl_surface_damage_buffer(window.surface, 0, 0, window.state->width, window.state->height);
+    wl_surface_damage_buffer(window.surface, 0, 0, window.width, window.height);
     wl_surface_commit(window.surface);
   }
 
@@ -299,9 +308,10 @@ namespace {
       .wm_capabilities = nullptr,
   };
 
-  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title) {
-    window.state = &state;
-    window.buffer = createBuffer(state);
+  bool createAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title, int width, int height) {
+    window.width = width;
+    window.height = height;
+    window.buffer = createBuffer(state, width, height);
     if (window.buffer.resource == nullptr) {
       return false;
     }
@@ -311,13 +321,24 @@ namespace {
     window.toplevel = xdg_surface_get_toplevel(window.xdgSurface);
     xdg_toplevel_add_listener(window.toplevel, &kAuxiliaryToplevelListener, &window);
     xdg_toplevel_set_title(window.toplevel, title);
-    wl_surface_commit(window.surface);
+    return true;
+  }
+
+  bool waitForAuxiliaryToplevel(State& state, AuxiliaryToplevel& window) {
     while (!window.mapped) {
       if (wl_display_dispatch(state.display) < 0) {
         return false;
       }
     }
     return true;
+  }
+
+  bool mapAuxiliaryToplevel(State& state, AuxiliaryToplevel& window, const char* title, int width, int height) {
+    if (!createAuxiliaryToplevel(state, window, title, width, height)) {
+      return false;
+    }
+    wl_surface_commit(window.surface);
+    return waitForAuxiliaryToplevel(state, window);
   }
 
   void xdgSurfaceConfigure(void* data, xdg_surface* xdgSurface, uint32_t serial) {
@@ -338,6 +359,11 @@ namespace {
       state.maximizeRequested = true;
       return;
     }
+    if (state.parentOnFirstConfigure != nullptr) {
+      // The parent's map commit is queued ahead of this one in the same flush, so the compositor has it mapped by the
+      // time it reads this request.
+      xdg_toplevel_set_parent(state.toplevel, state.parentOnFirstConfigure);
+    }
     state.mapped = true;
     wl_surface_attach(state.surface, state.buffer.resource, 0, 0);
     wl_surface_damage_buffer(state.surface, 0, 0, state.width, state.height);
@@ -357,19 +383,22 @@ namespace {
 
   void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* states) {
     auto& state = *static_cast<State*>(data);
+    bool fullscreen = false;
     if (state.logConfigures) {
       std::println("configured-size={}x{}", width, height);
-      std::fflush(stdout);
     }
     const auto* configured = static_cast<const uint32_t*>(states->data);
     const size_t count = states->size / sizeof(uint32_t);
     for (size_t index = 0; index < count; ++index) {
+      fullscreen = fullscreen || configured[index] == XDG_TOPLEVEL_STATE_FULLSCREEN;
       if (configured[index] == XDG_TOPLEVEL_STATE_MAXIMIZED) {
         std::println("configured-maximized");
-        std::fflush(stdout);
-        break;
       }
     }
+    if (state.logConfigures) {
+      std::println("configured-state={}x{} {}", width, height, fullscreen ? "fullscreen" : "windowed");
+    }
+    std::fflush(stdout);
   }
 
   void toplevelClose(void* data, xdg_toplevel*) {
@@ -459,6 +488,8 @@ namespace {
       state.xdgTagManager = static_cast<xdg_toplevel_tag_manager_v1*>(
           wl_registry_bind(registry, name, &xdg_toplevel_tag_manager_v1_interface, std::min(version, 1U))
       );
+    } else if (std::strcmp(interface, zxdg_importer_v2_interface.name) == 0) {
+      state.importer = static_cast<zxdg_importer_v2*>(wl_registry_bind(registry, name, &zxdg_importer_v2_interface, 1));
     } else if (std::strcmp(interface, wp_content_type_manager_v1_interface.name) == 0) {
       state.contentTypeManager = static_cast<wp_content_type_manager_v1*>(
           wl_registry_bind(registry, name, &wp_content_type_manager_v1_interface, std::min(version, 1U))
@@ -642,6 +673,8 @@ int main(int argc, char** argv) {
   const char* initialXdgTag = std::getenv("XDG_TAG");
   const char* updatedXdgTag = std::getenv("XDG_TAG_AFTER_MAP");
   const char* updatedTitle = std::getenv("TITLE_AFTER_MAP");
+  // A toplevel that never sets a title, which is distinct from one that sets an empty title.
+  const bool skipTitle = std::getenv("NO_TITLE") != nullptr;
   const bool updateOnStdin = updatedContentType != nullptr || updatedXdgTag != nullptr || updatedTitle != nullptr;
   if (parseContentType(initialContentType) < 0 || parseContentType(updatedContentType) < 0) {
     std::println(stderr, "unmap-client: CONTENT_TYPE values must be none, photo, video, or game");
@@ -705,20 +738,49 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  state.buffer = createBuffer(state);
+  state.buffer = createBuffer(state, state.width, state.height);
   if (state.buffer.resource == nullptr) {
     std::println(stderr, "unmap-client: failed to allocate shared-memory buffer");
     return EXIT_FAILURE;
   }
 
-  const bool transientSuite = std::getenv("TRANSIENT_SUITE") != nullptr;
+  const char* transientSuiteMode = std::getenv("TRANSIENT_SUITE");
+  const bool transientSuite = transientSuiteMode != nullptr;
+  const bool clearUnmappedTransientParent =
+      transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent-cleared") == 0;
+  const bool unmappedTransientParent =
+      clearUnmappedTransientParent || (transientSuite && std::strcmp(transientSuiteMode, "unmapped-parent") == 0);
+  const bool mappedTogether = transientSuite && std::strcmp(transientSuiteMode, "mapped-together") == 0;
+  const bool parentInitialCommitOnly = unmappedTransientParent || mappedTogether;
+  const char* foreignHandle = std::getenv("TRANSIENT_FOREIGN_HANDLE");
+  if (foreignHandle != nullptr && state.importer == nullptr) {
+    std::println(stderr, "unmap-client: compositor is missing zxdg_importer_v2");
+    return EXIT_FAILURE;
+  }
+  int parentWidth = state.width;
+  int parentHeight = state.height;
+  if (const char* size = std::getenv("TRANSIENT_PARENT_SIZE"); size != nullptr
+      && (std::sscanf(size, "%dx%d", &parentWidth, &parentHeight) != 2 || parentWidth < 1 || parentHeight < 1)) {
+    std::println(stderr, "unmap-client: TRANSIENT_PARENT_SIZE must be <width>x<height>");
+    return EXIT_FAILURE;
+  }
   AuxiliaryToplevel transientParent;
   AuxiliaryToplevel transientUnrelated;
-  if (transientSuite
-      && (!mapAuxiliaryToplevel(state, transientParent, "transient-parent")
-          || !mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated"))) {
-    std::println(stderr, "unmap-client: failed to map transient-suite support windows");
-    return EXIT_FAILURE;
+  if (transientSuite) {
+    const bool supportReady = parentInitialCommitOnly
+        ? createAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
+        : mapAuxiliaryToplevel(state, transientParent, "transient-parent", parentWidth, parentHeight)
+            && mapAuxiliaryToplevel(state, transientUnrelated, "transient-unrelated", state.width, state.height);
+    if (!supportReady) {
+      std::println(stderr, "unmap-client: failed to create transient-suite support windows");
+      return EXIT_FAILURE;
+    }
+    if (parentInitialCommitOnly) {
+      // Queue the parent's initial commit without dispatching its configure. The child therefore sends set_parent
+      // while this toplevel is still unmapped, or, mapped together, its configure arrives in the same read as the
+      // child's and its map commit goes out in the same flush.
+      wl_surface_commit(transientParent.surface);
+    }
   }
 
   state.surface = wl_compositor_create_surface(state.compositor);
@@ -736,7 +798,7 @@ int main(int argc, char** argv) {
       std::println(stderr, "unmap-client: compositor is missing wl_subcompositor");
       return EXIT_FAILURE;
     }
-    state.colorChildBuffer = createBuffer(state);
+    state.colorChildBuffer = createBuffer(state, state.width, state.height);
     if (state.colorChildBuffer.resource == nullptr) {
       std::println(stderr, "unmap-client: failed to allocate color child buffer");
       return EXIT_FAILURE;
@@ -815,7 +877,9 @@ int main(int argc, char** argv) {
   xdg_surface_add_listener(state.xdgSurface, &kXdgSurfaceListener, &state);
   state.toplevel = xdg_surface_get_toplevel(state.xdgSurface);
   xdg_toplevel_add_listener(state.toplevel, &kToplevelListener, &state);
-  xdg_toplevel_set_title(state.toplevel, state.title);
+  if (!skipTitle) {
+    xdg_toplevel_set_title(state.toplevel, state.title);
+  }
   if (state.appId != nullptr) {
     xdg_toplevel_set_app_id(state.toplevel, state.appId);
   }
@@ -828,8 +892,18 @@ int main(int argc, char** argv) {
     // as a post-map maximize request.
     xdg_toplevel_set_maximized(state.toplevel);
   }
-  if (transientSuite) {
+  if (mappedTogether) {
+    state.parentOnFirstConfigure = transientParent.toplevel;
+  } else if (transientSuite) {
     xdg_toplevel_set_parent(state.toplevel, transientParent.toplevel);
+    if (clearUnmappedTransientParent) {
+      xdg_toplevel_set_parent(state.toplevel, nullptr);
+    }
+  }
+  zxdg_imported_v2* imported = nullptr;
+  if (foreignHandle != nullptr) {
+    imported = zxdg_importer_v2_import_toplevel(state.importer, foreignHandle);
+    zxdg_imported_v2_set_parent_of(imported, state.surface);
   }
   wl_surface_commit(state.surface);
 
@@ -936,6 +1010,12 @@ int main(int argc, char** argv) {
   }
   if (state.xdgTagManager != nullptr) {
     xdg_toplevel_tag_manager_v1_destroy(state.xdgTagManager);
+  }
+  if (imported != nullptr) {
+    zxdg_imported_v2_destroy(imported);
+  }
+  if (state.importer != nullptr) {
+    zxdg_importer_v2_destroy(state.importer);
   }
   if (state.activation != nullptr) {
     xdg_activation_v1_destroy(state.activation);

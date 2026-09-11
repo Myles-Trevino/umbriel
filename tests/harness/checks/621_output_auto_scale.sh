@@ -5,7 +5,7 @@
 # working in both layouts.
 set -euo pipefail
 
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 BASELINE=$(< "$UMBRIEL_CONFIG")
 
 write_config() {

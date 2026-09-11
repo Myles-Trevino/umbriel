@@ -2,13 +2,13 @@
 #include "cli/outputs.h"
 #include "config/config.h"
 #include "config/config_diag.h"
+#include "core/build_info.h"
 #include "core/fdlimit.h"
 #include "core/log.h"
 #include "scene/cheatsheet_rows.h"
 #include "server/ipc.h"
 #include "server/ipc_commands.h"
 #include "server/server.h"
-#include "umbriel_git_revision.h"
 
 #include <algorithm>
 #include <csignal>
@@ -30,10 +30,6 @@
 #endif
 #endif
 
-#ifndef UMBRIEL_VERSION
-#define UMBRIEL_VERSION "unknown"
-#endif
-
 namespace {
   constexpr Logger kLog("main");
 
@@ -48,30 +44,29 @@ namespace {
       }
     }
 
-    umbriel::loadConfig(configPath);
+    (void)umbriel::loadConfig(configPath);
     const auto& diags = umbriel::configDiagnostics();
     if (diags.empty()) {
       std::println("config: ok ({})", umbriel::configRootPath().string());
       return EXIT_SUCCESS;
     }
-    bool hasError = false;
     for (const auto& d : diags) {
       const std::string loc = d.location();
       if (d.severity == umbriel::ConfigDiagnostic::Severity::Error) {
-        hasError = true;
         std::println(stderr, "error: {}{}", loc.empty() ? "" : loc + ": ", d.message);
       } else {
         std::println(stderr, "warning: {}{}", loc.empty() ? "" : loc + ": ", d.message);
       }
     }
-    return hasError ? EXIT_FAILURE : EXIT_SUCCESS;
+    std::println(stderr, "configuration invalid");
+    return EXIT_FAILURE;
   }
 
   void printHelp(FILE* stream) {
     auto row = [stream](std::string_view lead, std::string_view cmd, std::string_view desc) {
       std::println(stream, "{}umbriel {:<30} {}", lead, cmd, desc);
     };
-    std::println(stream, "umbriel {}: a wayland compositor\n", UMBRIEL_VERSION);
+    std::println(stream, "umbriel {}: a wayland compositor\n", umbriel::build_info::version());
     row("Usage: ", "[-s <command>] [-c <config>]", "run the compositor");
     for (const auto& spec : umbriel::ipcCommands()) {
       std::string cmd{spec.name};
@@ -124,11 +119,27 @@ int main(int argc, char** argv) {
   mallopt(M_ARENA_MAX, 2);
 #endif
   if (argc >= 2) {
+    auto isJsonFlag = [](const char* arg) { return std::strcmp(arg, "--json") == 0 || std::strcmp(arg, "-j") == 0; };
+    auto isHelpFlag = [](const char* arg) { return std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0; };
+
     if (std::strcmp(argv[1], "validate") == 0) {
       return validateConfig(argc, argv);
     }
     if (std::strcmp(argv[1], "outputs") == 0) {
-      return umbriel::runOutputsCommand();
+      bool json = false;
+      for (int i = 2; i < argc; ++i) {
+        if (isHelpFlag(argv[i])) {
+          printHelp(stdout);
+          return EXIT_SUCCESS;
+        }
+        if (isJsonFlag(argv[i])) {
+          json = true;
+        } else {
+          printHelp(stderr);
+          return EXIT_FAILURE;
+        }
+      }
+      return umbriel::runOutputsCommand(json);
     }
     if (std::strcmp(argv[1], "help") == 0 || std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "--help") == 0) {
       printHelp(stdout);
@@ -136,18 +147,16 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0 || std::strcmp(argv[1], "-V") == 0) {
       constexpr std::string_view unknownRevision = "unknown";
-      const std::string_view revision = UMBRIEL_GIT_REVISION;
+      const std::string_view revision = umbriel::build_info::revision();
       if (!revision.empty() && revision != unknownRevision) {
-        std::println("umbriel {} ({})", UMBRIEL_VERSION, revision);
+        std::println("umbriel {} ({})", umbriel::build_info::version(), revision);
       } else {
-        std::println("umbriel {}", UMBRIEL_VERSION);
+        std::println("umbriel {}", umbriel::build_info::version());
       }
       return EXIT_SUCCESS;
     }
 
     // IPC subcommands
-    auto isJsonFlag = [](const char* arg) { return std::strcmp(arg, "--json") == 0 || std::strcmp(arg, "-j") == 0; };
-    auto isHelpFlag = [](const char* arg) { return std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0; };
 
     // Not an IpcCommandSpec: the reply is a stream, not one response, so it has its own client path.
     if (std::strcmp(argv[1], "subscribe") == 0) {
@@ -313,8 +322,11 @@ int main(int argc, char** argv) {
   }
 
   try {
-    kLog.info("starting umbriel version={} commit={}", UMBRIEL_VERSION, UMBRIEL_GIT_REVISION);
-    umbriel::loadConfig(configPath);
+    kLog.info("starting umbriel version={} commit={}", umbriel::build_info::version(), umbriel::build_info::revision());
+    if (!umbriel::loadConfig(configPath)) {
+      kLog.error("initial configuration is invalid; refusing to start");
+      return EXIT_FAILURE;
+    }
     umbriel::Server server;
 
     // SIGINT and SIGTERM are handled on the event loop by the server itself. SIG_IGN for SIGCHLD reaps spawned children

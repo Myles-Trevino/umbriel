@@ -16,10 +16,11 @@ are required, `[bracket]` forms are optional.
 |------|---------|
 | `<cmd>` | Command line, run through the shell: `spawn:kitty` |
 | `<name>` | Submap to enter; `submap:reset` leaves one level |
-| `<workspace>[/<output>]` | Workspace name or 1-based position, optionally qualified by output: `workspace-switch:CHAT/HDMI-A-1` |
+| `<workspace>[/<output>]` | Bare digits select a 1-based position, other text selects a name, and double quotes force a name; append `/output` to scope either form |
 | `<window-id>` | Window id from `umbriel windows` |
 | `[<window-id>]` | The same id; the bare action targets the focused window |
-| `[<output>]` | Connector or monitor name. Bare scratchpad actions target the output under the pointer; bare `dpms-off` and `dpms-on` target every configured output |
+| `[<output>]` | Connector or monitor name. Bare `dpms-off` and `dpms-on` target every configured output |
+| `[<scratchpad>]` | Scratchpad name. The bare form selects the implicit `default` scratchpad, which exists only when no named scratchpads are configured |
 | `<fraction>` | `0.1` to `1.0` of the column extent, or of the usable area for a floating window |
 | `<delta>` | Signed `-0.9` to `0.9`; the result clamps to `0.1` to `1.0` |
 | `<scrolling\|dwindle\|master\|toggle>` | Layout mode for `workspace-set-layout`; `toggle` cycles scrolling, dwindle, master |
@@ -41,7 +42,7 @@ are required, `[bracket]` forms are optional.
 | `output-focus-left` | Focus the output to the left |
 | `output-focus-right` | Focus the output to the right |
 | `output-focus-up` | Focus the output above |
-| `window-focus:<window-id>` | Focus the given window |
+| `window-focus:<window-id>` | Focus the given window, summoning it if hidden in a scratchpad |
 | `window-focus-down` | Focus the next window down in the column |
 | `window-focus-last` | Focus the previously focused window |
 | `window-focus-left` | Focus the window to the left |
@@ -56,7 +57,7 @@ are required, `[bracket]` forms are optional.
 | `window-focus-right` | Focus the window to the right |
 | `window-focus-switch-floating` | Focus the last window of the opposite floating state |
 | `window-focus-up` | Focus the next window up in the column |
-| `window-focus-warp:<window-id>` | Focus the given window and warp the cursor to it |
+| `window-focus-warp:<window-id>` | Focus the given window, summon it if hidden in a scratchpad, and warp the cursor to it |
 | `workspace-focus-last` | Focus the previously active workspace |
 
 ## Move & size
@@ -115,27 +116,28 @@ Sizing rules per layout live in [Sizing behavior](layout.md#sizing-behavior).
 |--------|--------|
 | `window-close:[<window-id>]` | Close the focused window, or the given window |
 | `window-toggle-floating` | Float or tile the focused window |
-| `window-toggle-fullscreen` | Toggle fullscreen for the focused window |
+| `window-toggle-fullscreen` | Toggle fullscreen or exit a window covering the focus |
 | `window-toggle-maximize` | Toggle full width for the focused column |
 | `window-toggle-maximize-to-edges` | Toggle maximize without gaps, struts, or borders |
 | `window-toggle-pinned` | Pin the focused window above other windows |
 
 ## Scratchpad
 
-Every output has its own holding area. [Scratchpads](scratchpad.md) covers the
-workflow, restoration rules, and multi-output behavior.
+Scratchpads are global named holding areas that roam between outputs.
+[Scratchpads](scratchpad.md) covers their configuration, restoration rules, and
+multi-output behavior.
 
 | Action | Effect |
 |--------|--------|
-| `scratchpad-focus-next:[<output>]` | Focus the next visible scratchpad window |
-| `scratchpad-toggle:[<output>]` | Show or hide the output's scratchpad windows |
-| `window-move-to-scratchpad:[<output>]` | Move the focused window into the scratchpad |
-| `window-restore-from-scratchpad:[<output>]` | Return the scratchpad window to its saved workspace |
-| `window-toggle-scratchpad:[<output>]` | Move the focused window to or from the scratchpad |
+| `scratchpad-focus-next:[<scratchpad>]` | Focus the next visible scratchpad window |
+| `scratchpad-toggle:[<scratchpad>]` | Show or hide the selected scratchpad windows |
+| `window-move-to-scratchpad:[<scratchpad>]` | Move the focused window into a scratchpad |
+| `window-restore-from-scratchpad:[<scratchpad>]` | Return a scratchpad window to its saved workspace |
+| `window-toggle-scratchpad:[<scratchpad>]` | Move the focused window to or from a scratchpad |
 
 ## Workspaces
 
-Selector resolution, including numeric names and `/output` qualifiers, is
+Selector resolution, including forced numeric names and `/output` qualifiers, is
 described in [Workspace selectors](workspaces.md#workspace-selectors).
 
 | Action | Effect |
@@ -200,9 +202,9 @@ does, this is the full list:
 | `layout-master-count-increase`, `layout-master-count-decrease` | No effect | No effect | Moves one window between master and stack |
 
 Dwindle and master have no horizontal viewport, so the vertical splits and areas
-absorb what scrolling would express as column geometry. On a vertical scrolling
-workspace the directional actions follow their visual directions; see [Vertical
-workspaces](layout.md#vertical-workspaces).
+absorb what scrolling would express as column geometry. On an output with
+horizontal workspaces the strip is vertical and the directional actions follow
+their visual directions; see [Vertical strips](layout.md#vertical-strips).
 
 ## Notes
 
@@ -215,21 +217,32 @@ workspaces](layout.md#vertical-workspaces).
   the quit bind confirms, any other key or a click cancels, and a second
   `session-quit` also quits. While the session is locked it quits without the
   dialog.
-- **Cursor.** With `input.cursor.follows_focus` enabled, the focus actions warp
-  the cursor to the visible center of the selected window, including `window-
-  focus-switch-floating` and `window-focus-last`. Pointer-driven and automatic
-  focus changes never move the cursor. `window-focus:<window-id>` stays focus-
-  only, while `window-focus-warp:<window-id>` always moves it.
+- **Cursor.** With `input.cursor.follows_focus` enabled, focus navigation and
+  window or column transfers between workspaces warp the cursor to the visible
+  center of the focused window. This includes local `window-move-or-output-*`
+  moves, transfers to another output, output focus actions, and foreign-
+  toplevel activation requests from docks and taskbars. Pointer-driven and
+  automatic focus changes never move the cursor. `window-focus:<window-id>`
+  stays focus-only, while `window-focus-warp:<window-id>` always moves it.
+- **Hidden scratchpads.** Either ID-targeted focus action summons a matching
+  hidden scratchpad window to the output under the pointer before focusing it.
 - **Across outputs.** Directions never wrap: with no monitor in that direction
   the action fails with an IPC error naming it ("no output to the left" and
-  friends). Otherwise the cursor warps to the center of the target monitor, so
-  focus follows the action. Output direction comes from output centers in
-  logical coordinates, so fractional-scale rounding does not hide a neighbor.
+  friends). Otherwise the cursor warps to the center of the target monitor so
+  focus follows the action. With `input.cursor.follows_focus` enabled, it then
+  settles on the focused window's visible center when the target workspace has
+  one. A moved window or column uses that same target. Output direction comes
+  from output centers in logical coordinates, so fractional-scale rounding does
+  not hide a neighbor.
 - **Cycling.** `window-focus-next` and `window-focus-previous` walk the tiled
   windows in layout order, then the floating ones, wrapping in both directions.
   `window-swap-next` and `window-swap-previous` exchange the focused tiled
   window with its layout-order neighbor, wrap at both ends, and keep focus on
   the moved window.
+- **Focus memory.** Directional focus that leaves the current group lands on
+  the window that was focused there most recently: the target column in
+  scrolling and master, the split it enters in dwindle. When nothing in that
+  group has been focused yet, it lands on the geometric neighbor.
 - **Workspace order.** `workspace-next`, `workspace-previous`, `workspace-move-
   up`, and `workspace-move-down` never wrap: on the first workspace, the
   previous forms are silent no-ops. On a dynamic output, `workspace-next`

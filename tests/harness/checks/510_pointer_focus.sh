@@ -5,7 +5,7 @@ set -euo pipefail
 readonly BTN_LEFT=272 # evdev BTN_LEFT
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 printf '\n[layout.scrolling]\ndefault_width_fraction = 0.5\n' >> "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
@@ -48,6 +48,17 @@ wait_for_focus_at() {
   done
   echo "expected the window at x=$want to be focused, focus is at $(focused_x)"
   echo "  windows: $("$UMBRIEL" windows --json | jq -c '[.[] | {x, focused, active}]')"
+  return 1
+}
+
+wait_for_window_x() {
+  local id=$1 want=$2 actual=none
+  for _ in $(seq 40); do
+    actual=$("$UMBRIEL" windows --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .x')
+    [[ $actual == "$want" ]] && return 0
+    sleep 0.25
+  done
+  echo "expected window $id at x=$want, got x=$actual"
   return 1
 }
 
@@ -133,4 +144,21 @@ sleep 1
 pointer click "$BTN_LEFT"
 wait_for_focus_at 10
 
-echo "click focus and configured window and workspace focus-navigation cursor warps are correct"
+# Moving the focused left window to workspace 2 places it to the right of the
+# window already there. Match the reported follows-mouse setup. The cursor must
+# follow the moved window, so a focus-only detour followed by an unmoved click
+# returns focus to it.
+printf '\n[input.focus]\nfollows_mouse = true\n' >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+destination_id=$("$UMBRIEL" windows --json | jq -r \
+  --arg left "$left_id" --arg right "$right_id" '.[] | select(.id != $left and .id != $right) | .id')
+"$UMBRIEL" msg "window-move-to-workspace:2" > /dev/null
+wait_for_window_x "$left_id" 646
+sleep 1
+wait_for_focus_at 646
+"$UMBRIEL" msg "window-focus:$destination_id" > /dev/null
+wait_for_focus_at 10
+pointer click "$BTN_LEFT"
+wait_for_focus_at 646
+
+echo "click focus and configured focus-navigation and workspace-transfer cursor warps are correct"

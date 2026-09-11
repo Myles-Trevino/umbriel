@@ -1,8 +1,7 @@
 {
-  description = "Umbriel, a Wayland compositor built on wlroots and SceneFX.";
+  description = "Umbriel, a Wayland compositor built on wlroots.";
 
   inputs = {
-    self.submodules = true;
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
     xdg-desktop-portal-umbriel = {
       url = "github:noctalia-dev/xdg-desktop-portal-umbriel";

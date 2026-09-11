@@ -21,6 +21,7 @@
 #include "scene/config_banner.h"
 #include "scene/hint_rect.h"
 #include "scene/quit_confirm.h"
+#include "server/backend_manager.h"
 #include "server/ipc.h"
 #include "server/wine_color_manager.h"
 #include "view/view.h"
@@ -50,7 +51,7 @@ namespace umbriel {
     // Security-context clients only receive reviewed, ordinary application
     // protocols. New globals stay unavailable until they are classified here.
     // [[security_context_rule]] widens the set for matching clients.
-    constexpr std::array<std::string_view, 28> kAllowedSecurityContextGlobals{
+    constexpr std::array<std::string_view, 29> kAllowedSecurityContextGlobals{
         "wl_shm",
         "wl_drm",
         "zwp_linux_dmabuf_v1",
@@ -68,6 +69,7 @@ namespace umbriel {
         "wp_color_manager_v1",
         "xdg_wm_base",
         "xdg_toplevel_tag_manager_v1",
+        "zxdg_exporter_v2",
         "zxdg_decoration_manager_v1",
         "org_kde_kwin_server_decoration_manager",
         "zwp_relative_pointer_manager_v1",
@@ -239,15 +241,20 @@ namespace umbriel {
     }
   }
 
+  pid_t surfaceClientPid(const wlr_surface* surface) {
+    if (surface == nullptr || surface->resource == nullptr) {
+      return -1;
+    }
+    pid_t pid = -1;
+    wl_client_get_credentials(wl_resource_get_client(surface->resource), &pid, nullptr, nullptr);
+    return pid > 0 ? pid : -1;
+  }
+
   bool Server::isXwaylandSurface(const wlr_surface* surface) const {
-    if (m_xwayland == nullptr || surface == nullptr || surface->resource == nullptr) {
+    if (m_xwayland == nullptr) {
       return false;
     }
-
-    pid_t pid = -1;
-    uid_t uid = 0;
-    gid_t gid = 0;
-    wl_client_get_credentials(wl_resource_get_client(surface->resource), &pid, &uid, &gid);
+    const pid_t pid = surfaceClientPid(surface);
     return pid > 0 && pid == m_xwayland->pid();
   }
 
@@ -260,16 +267,22 @@ namespace umbriel {
     if (m_display == nullptr) {
       throw std::runtime_error("failed to create wl_display");
     }
+    m_protocolLogger = wl_display_add_protocol_logger(m_display, onProtocolMessage, this);
+    if (m_protocolLogger == nullptr) {
+      throw std::runtime_error("failed to register Wayland protocol logger");
+    }
     wl_display_set_default_max_buffer_size(m_display, kWaylandClientBufferSize);
     m_clientCreated.notify = onClientCreated;
     wl_display_add_client_created_listener(m_display, &m_clientCreated);
 
-    m_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), &m_session);
-    if (m_backend == nullptr) {
+    m_backendManager = BackendManager::create(m_display, config().drm);
+    if (m_backendManager == nullptr) {
       throw std::runtime_error("failed to create wlr_backend");
     }
+    m_backend = m_backendManager->backend();
+    m_session = m_backendManager->session();
 
-    m_renderer = fx_renderer_create(m_backend);
+    m_renderer = m_backendManager->createRenderer();
     if (m_renderer == nullptr) {
       throw std::runtime_error("failed to create fx_renderer");
     }
@@ -303,7 +316,11 @@ namespace umbriel {
     if (m_allocator == nullptr) {
       throw std::runtime_error("failed to create wlr_allocator");
     }
+    if (!m_backendManager->verifyOpenDevices("after allocator creation")) {
+      throw std::runtime_error("renderer or allocator opened an excluded GPU");
+    }
 
+    prepareAnimationShaders(m_renderer);
     m_compositor = wlr_compositor_create(m_display, 5, m_renderer);
     wlr_subcompositor_create(m_display);
     wlr_data_device_manager_create(m_display);
@@ -326,10 +343,21 @@ namespace umbriel {
     if (m_contentTypeManager == nullptr) {
       throw std::runtime_error("failed to create content-type manager");
     }
-    wlr_ext_data_control_manager_v1_create(m_display, 1);
+    if (wlr_ext_data_control_manager_v1_create(m_display, 1) == nullptr) {
+      throw std::runtime_error("failed to create ext-data-control manager");
+    }
+    if (wlr_data_control_manager_v1_create(m_display) == nullptr) {
+      throw std::runtime_error("failed to create legacy data-control manager");
+    }
 
     m_outputLayout = wlr_output_layout_create(m_display);
     wlr_xdg_output_manager_v1_create(m_display, m_outputLayout);
+    // A scene helper served by libwlroots allocates nodes too small for
+    // umbrielfx's trailing fields, which renders every surface black instead of
+    // failing. Refuse to build a scene on top of that.
+    if (const char* mismatch = umbrielfx_scene_check_helpers(); mismatch != nullptr) {
+      throw std::runtime_error(std::string("umbrielfx scene helpers are not linked correctly: ") + mismatch);
+    }
     m_scene = wlr_scene_create();
     if (linuxDmabuf != nullptr) {
       wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
@@ -384,7 +412,7 @@ namespace umbriel {
 
     // Global stacking keeps scratchpads above normal windows and below drag, panels, fullscreen, overlays, and lock.
     // Per-output layer trees keep normal windows below panels.
-    m_backdrop = wlr_scene_rect_create(&m_scene->tree, 0, 0, config().appearance.backdropColor.data());
+    m_backdrop = wlr_scene_rect_create(&m_scene->tree, 0, 0, config().colors.backdrop.data());
     wlr_scene_rect_set_corner_radius(m_backdrop, 0);
     m_shellLayerTrees[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND] = wlr_scene_tree_create(&m_scene->tree);
     m_overviewBlurTree = wlr_scene_tree_create(&m_scene->tree);
@@ -410,7 +438,7 @@ namespace umbriel {
     m_bannerTree = wlr_scene_tree_create(&m_scene->tree);
     m_quitConfirmTree = wlr_scene_tree_create(&m_scene->tree);
     m_lockTree = wlr_scene_tree_create(&m_scene->tree);
-    m_lockBlank = wlr_scene_rect_create(m_lockTree, 0, 0, config().appearance.backdropColor.data());
+    m_lockBlank = wlr_scene_rect_create(m_lockTree, 0, 0, config().colors.backdrop.data());
     wlr_scene_rect_set_corner_radius(m_lockBlank, 0);
     wlr_scene_node_set_enabled(&m_lockBlank->node, false);
     wlr_scene_node_set_enabled(&m_lockTree->node, false);
@@ -425,6 +453,14 @@ namespace umbriel {
     wl_signal_add(&m_xdgShell->events.new_toplevel, &m_newXdgToplevel);
     m_newXdgPopup.notify = onNewXdgPopup;
     wl_signal_add(&m_xdgShell->events.new_popup, &m_newXdgPopup);
+
+    wlr_xdg_foreign_registry* foreignRegistry = wlr_xdg_foreign_registry_create(m_display);
+    if (foreignRegistry == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign registry");
+    }
+    if (wlr_xdg_foreign_v2_create(m_display, foreignRegistry) == nullptr) {
+      throw std::runtime_error("failed to create xdg-foreign global");
+    }
 
     m_xdgToplevelTagManager = wlr_xdg_toplevel_tag_manager_v1_create(m_display, 1);
     if (m_xdgToplevelTagManager == nullptr) {
@@ -519,6 +555,10 @@ namespace umbriel {
 
   Server::~Server() {
     m_stopping = true;
+    if (m_protocolLogger != nullptr) {
+      wl_protocol_logger_destroy(m_protocolLogger);
+      m_protocolLogger = nullptr;
+    }
     wl_list_remove(&m_clientCreated.link);
     wl_list_remove(&m_newOutput.link);
     wl_list_remove(&m_newInput.link);
@@ -570,6 +610,10 @@ namespace umbriel {
       wl_event_source_remove(m_backgroundFrameTimer);
       m_backgroundFrameTimer = nullptr;
     }
+    if (m_startupRulesTimer != nullptr) {
+      wl_event_source_remove(m_startupRulesTimer);
+      m_startupRulesTimer = nullptr;
+    }
     for (wl_event_source*& source : m_signalSources) {
       if (source != nullptr) {
         wl_event_source_remove(source);
@@ -586,8 +630,11 @@ namespace umbriel {
     m_scratchpadManager.reset();
     wlr_scene_node_destroy(&m_scene->tree.node);
     wlr_allocator_destroy(m_allocator);
+    clearAnimationShaderCache();
     wlr_renderer_destroy(m_renderer);
-    wlr_backend_destroy(m_backend);
+    m_backendManager.reset();
+    m_backend = nullptr;
+    m_session = nullptr;
     wl_display_destroy(m_display);
   }
 
@@ -650,6 +697,7 @@ namespace umbriel {
       wlr_log(WLR_ERROR, "failed to start backend");
       return false;
     }
+    m_backendManager->markStarted();
 
     // These are delivered through the event loop, not a signal handler, so the shutdown path is ordinary code. Note the
     // side effect: wl_event_loop_add_signal blocks the signal process-wide, and a blocked mask survives fork and exec,
@@ -705,6 +753,13 @@ namespace umbriel {
       spawn(command.c_str(), "session environment synchronization");
     }
     applyConfiguredEnvironment();
+
+    m_startTime = std::chrono::steady_clock::now();
+    m_startupRulesTimer = wl_event_loop_add_timer(loop, onStartupRulesTimer, this);
+    if (m_startupRulesTimer != nullptr) {
+      wl_event_source_timer_update(m_startupRulesTimer, kStartupWindowRuleDurationMs);
+    }
+
     if (startupCmd != nullptr) {
       spawn(startupCmd);
     }
@@ -724,7 +779,17 @@ namespace umbriel {
     return true;
   }
 
-  void Server::showConfigDiagnostics() { m_configBanner->show(configDiagnostics()); }
+  void Server::showConfigDiagnostics() {
+    std::vector<ConfigDiagnostic> diagnostics = configDiagnostics();
+    if (m_xwayland != nullptr && !m_xwayland->executableAvailable()) {
+      ConfigDiagnostic diagnostic;
+      diagnostic.severity = ConfigDiagnostic::Severity::Warning;
+      diagnostic.message =
+          "general.xwayland is enabled, but xwayland-satellite was not found on PATH; X11 applications will not work";
+      diagnostics.push_back(std::move(diagnostic));
+    }
+    m_configBanner->show(diagnostics);
+  }
 
   void Server::markDirty(Dirty what) {
     m_dirty |= what;
@@ -889,9 +954,10 @@ namespace umbriel {
 
   Server::CloseSnapshot::CloseSnapshot(
       Server& server, Output* output, wlr_scene_tree* tree, std::vector<BorderSnapshot> borders, int durationMs,
-      const AnimationCurve& curve, std::string_view style
+      const AnimationCurve& curve, std::string_view style, AnimationEvent event, ShadowSnapshot shadow
   )
-      : m_server(&server), m_tree(tree), m_output(output), m_borders(std::move(borders)) {
+      : m_server(&server), m_tree(tree), m_output(output), m_borders(std::move(borders)), m_shadow(shadow) {
+    m_event = event;
     if (m_tree != nullptr) {
       m_origX = m_tree->node.x;
       m_origY = m_tree->node.y;
@@ -907,7 +973,7 @@ namespace umbriel {
     m_alpha.snap(1.0);
     m_alpha.retarget(0.0, durationMs, curve);
 
-    if (style == "slide") {
+    if (style == "slide" && animationShader(server.renderer(), event) == nullptr) {
       m_posY.snap(m_origY);
       m_posY.retarget(m_origY + 80, durationMs, curve);
     }
@@ -917,6 +983,9 @@ namespace umbriel {
     if (m_server != nullptr) {
       m_server->unregisterAnimatable(this);
     }
+    if (m_shadow.tree != nullptr) {
+      wlr_scene_node_destroy(&m_shadow.tree->node);
+    }
     if (m_tree != nullptr) {
       wlr_scene_node_destroy(&m_tree->node);
     }
@@ -925,12 +994,15 @@ namespace umbriel {
   bool Server::CloseSnapshot::tickAnimations(uint64_t nowMsec) {
     const bool movedAlpha = m_alpha.tick(nowMsec);
     const bool movedY = m_posY.tick(nowMsec);
+    updateAnimationShader(&m_tree->node, m_server->renderer(), m_event, m_alpha, -1.0F);
 
     if (!movedAlpha && !movedY) {
       return false;
     }
     // Overshooting curves can push this out of range; wlr_scene_buffer_set_opacity asserts opacity is in [0, 1].
-    const auto alpha = std::clamp(static_cast<float>(m_alpha.current()), 0.0F, 1.0F);
+    const auto alpha = animationShader(m_server->renderer(), m_event) != nullptr
+        ? 1.0F
+        : std::clamp(static_cast<float>(m_alpha.current()), 0.0F, 1.0F);
     for (auto& [buffer, baseOpacity] : m_buffers) {
       wlr_scene_buffer_set_opacity(buffer, std::clamp(baseOpacity * alpha, 0.0F, 1.0F));
     }
@@ -942,8 +1014,17 @@ namespace umbriel {
       wlr_scene_border_set_colors(border.node, innerColor, outerColor);
     }
 
+    if (m_shadow.node != nullptr) {
+      auto color = m_shadow.color;
+      color[3] *= std::clamp(static_cast<float>(m_alpha.current()), 0.0F, 1.0F);
+      wlr_scene_shadow_set_color(m_shadow.node, color.data());
+    }
+
     if (m_tree != nullptr && movedY) {
       wlr_scene_node_set_position(&m_tree->node, m_origX, static_cast<int>(std::lround(m_posY.current())));
+      if (m_shadow.tree != nullptr) {
+        wlr_scene_node_set_position(&m_shadow.tree->node, m_tree->node.x, m_tree->node.y);
+      }
     }
     return m_alpha.animating() || m_posY.animating();
   }
@@ -1012,7 +1093,7 @@ namespace umbriel {
 
   void Server::animateCloseSnapshot(
       Output* output, wlr_scene_tree* tree, std::vector<BorderSnapshot> borders,
-      std::optional<CloseSnapshotOverrides> overrides
+      std::optional<CloseSnapshotOverrides> overrides, ShadowSnapshot shadow
   ) {
     int durationMs = 0;
     AnimationCurve curve{.easing = Easing::Snappy};
@@ -1025,6 +1106,9 @@ namespace umbriel {
       const auto& animation = config().animation;
       const auto& close = animation.windowsOut;
       if (!animation.enabled || !close.enabled) {
+        if (shadow.tree != nullptr) {
+          wlr_scene_node_destroy(&shadow.tree->node);
+        }
         wlr_scene_node_destroy(&tree->node);
         return;
       }
@@ -1033,13 +1117,23 @@ namespace umbriel {
       style = close.style;
     }
     if (durationMs <= 0) {
+      if (shadow.tree != nullptr) {
+        wlr_scene_node_destroy(&shadow.tree->node);
+      }
       wlr_scene_node_destroy(&tree->node);
       return;
     }
 
-    auto snapshot = std::make_unique<CloseSnapshot>(*this, output, tree, std::move(borders), durationMs, curve, style);
+    auto snapshot = std::make_unique<CloseSnapshot>(
+        *this, output, tree, std::move(borders), durationMs, curve, style,
+        overrides ? overrides->event : AnimationEvent::WindowsOut, shadow
+    );
     registerAnimatable(snapshot.get());
     m_closeSnapshots.push_back(std::move(snapshot));
   }
 
+  uint64_t Server::uptimeMs() const {
+    const auto diff = std::chrono::steady_clock::now() - m_startTime;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
+  }
 } // namespace umbriel

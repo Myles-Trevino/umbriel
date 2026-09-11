@@ -2,7 +2,7 @@
 # Late title rules preserve named scrolling-column width ownership and may reclassify a member.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/named-width-control"
 readonly RECLASSIFY_FIFO="$UMBRIEL_RUNTIME_DIR/named-reclassify-control"
 readonly ORDER_FIFO="$UMBRIEL_RUNTIME_DIR/named-order-control"

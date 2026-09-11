@@ -43,6 +43,23 @@ namespace umbriel {
                {"accent_secondary", rgbaHex(colors.accentSecondary)},
                {"warning", rgbaHex(colors.warning)},
                {"error", rgbaHex(colors.error)},
+               {"insert_hint", rgbaHex(colors.insertHint)},
+               {"backdrop", rgbaHex(colors.backdrop)},
+               {"shadow", rgbaHex(colors.shadow)},
+               {"border",
+                {
+                    {"focused", rgbaHex(colors.border.focused)},
+                    {"unfocused", rgbaHex(colors.border.unfocused)},
+                    {"scratchpad_focused", rgbaHex(colors.border.scratchpadFocused)},
+                    {"scratchpad_unfocused", rgbaHex(colors.border.scratchpadUnfocused)},
+                    {"outer", rgbaHex(colors.border.outer)},
+                }},
+               {"overview",
+                {
+                    {"background_tint", rgbaHex(colors.overview.backgroundTint)},
+                    {"workspace_background", rgbaHex(colors.overview.workspaceBackground)},
+                    {"badge", rgbaHex(colors.overview.badge)},
+                }},
                {"corner_radius", current.appearance.cornerRadius},
            }},
       };
@@ -79,6 +96,10 @@ namespace umbriel {
       // Same reuse as windowsEvent: the event and `umbriel workspaces` are the one payload, including the effective
       // layout mode of every workspace, which no Wayland protocol carries.
       return nlohmann::json{{"event", "workspaces"}, {"data", IpcCommands::workspaces(server, {}).at("ok")}};
+    }
+
+    nlohmann::json submapEvent(Server& server) {
+      return nlohmann::json{{"event", "submap"}, {"data", IpcCommands::submap(server, {}).at("ok")}};
     }
   } // namespace
 
@@ -375,6 +396,9 @@ namespace umbriel {
       if ((requested & Ipc::kEventWorkspaces) != 0) {
         append(workspacesEvent(*m_server));
       }
+      if ((requested & Ipc::kEventSubmap) != 0) {
+        append(submapEvent(*m_server));
+      }
       return response;
     }
     const IpcCommandSpec* spec = findIpcCommand(cmd);
@@ -440,5 +464,7 @@ namespace umbriel {
   void Ipc::notifyWindowsChanged() { broadcastEvent(kEventWindows, windowsEvent(*m_server)); }
 
   void Ipc::notifyWorkspacesChanged() { broadcastEvent(kEventWorkspaces, workspacesEvent(*m_server)); }
+
+  void Ipc::notifySubmapChanged() { broadcastEvent(kEventSubmap, submapEvent(*m_server)); }
 
 } // namespace umbriel

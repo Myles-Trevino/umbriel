@@ -1,7 +1,6 @@
 #include "config/change.h"
 #include "config/config.h"
 #include "config/config_watcher.h"
-#include "config/resolve.h"
 #include "config/store.h"
 #include "core/log.h"
 #include "input/cursor.h"
@@ -16,6 +15,7 @@
 #include "scene/cheatsheet.h"
 #include "scene/hint_rect.h"
 #include "scene/quit_confirm.h"
+#include "server/backend_manager.h"
 #include "server/ipc.h"
 #include "server/server.h"
 #include "view/popup.h"
@@ -25,22 +25,16 @@
 #include "workspace/workspace.h"
 
 #include <algorithm>
-#include <charconv>
-#include <limits>
+#include <array>
 #include <optional>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace umbriel {
 
   namespace {
     constexpr Logger kLog("server");
-
-    // Dynamic workspaces are numbered, static ones can be named; sort the numbers by value and push names to the end.
-    size_t workspaceOrder(std::string_view name) {
-      size_t index = 0;
-      const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), index);
-      return error == std::errc{} && end == name.data() + name.size() ? index : std::numeric_limits<size_t>::max();
-    }
 
     View* viewForToplevel(Server& server, wlr_xdg_toplevel* toplevel) {
       if (toplevel == nullptr) {
@@ -60,17 +54,6 @@ namespace umbriel {
       }
       wlr_surface* root = wlr_surface_get_root_surface(surface);
       return viewForToplevel(server, wlr_xdg_toplevel_try_from_wlr_surface(root));
-    }
-
-    pid_t surfaceClientPid(wlr_surface* surface) {
-      if (surface == nullptr || surface->resource == nullptr) {
-        return -1;
-      }
-      pid_t pid = -1;
-      uid_t uid = 0;
-      gid_t gid = 0;
-      wl_client_get_credentials(wl_resource_get_client(surface->resource), &pid, &uid, &gid);
-      return pid;
     }
 
     const char* deviceName(const wlr_input_device* device) {
@@ -170,6 +153,105 @@ namespace umbriel {
       if (libinput_device_config_scroll_set_natural_scroll_enabled(libinputDevice, enabled)
           != LIBINPUT_CONFIG_STATUS_SUCCESS) {
         kLog.warn("input: failed to apply {} to '{}'", setting, deviceName(device));
+      }
+    }
+
+    void applyClickMethod(
+        libinput_device* libinputDevice, const wlr_input_device* device, std::optional<ClickMethod> configured,
+        std::string_view setting
+    ) {
+      const uint32_t methods = libinput_device_config_click_get_methods(libinputDevice);
+      if (methods == 0) {
+        if (configured) {
+          kLog.warn("input: '{}' does not support {}", deviceName(device), setting);
+        }
+        return;
+      }
+      enum libinput_config_click_method method = libinput_device_config_click_get_default_method(libinputDevice);
+      if (configured) {
+        enum libinput_config_click_method requested = LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS;
+        const char* requestedName = "button_areas";
+        switch (*configured) {
+        case ClickMethod::ButtonAreas:
+          break;
+        case ClickMethod::ClickFinger:
+          requested = LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER;
+          requestedName = "clickfinger";
+          break;
+        }
+        if ((methods & requested) == 0) {
+          kLog.warn("input: '{}' does not support the {} click method", deviceName(device), requestedName);
+          return;
+        }
+        method = requested;
+      }
+      if (libinput_device_config_click_set_method(libinputDevice, method) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        if (configured) {
+          kLog.warn("input: failed to apply {} to '{}'", setting, deviceName(device));
+        } else {
+          kLog.warn("input: failed to restore the default click method for '{}'", deviceName(device));
+        }
+      }
+    }
+
+    // libinput's on-button-down scrolling: while the configured button is held (or latched, with the lock), motion
+    // turns into scroll events and the button itself stops clicking.
+    void applyScrollButton(
+        libinput_device* libinputDevice, const wlr_input_device* device, std::optional<uint32_t> configuredButton,
+        std::optional<bool> configuredLock, std::string_view buttonSetting, std::string_view lockSetting
+    ) {
+      const bool supported =
+          (libinput_device_config_scroll_get_methods(libinputDevice) & LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN) != 0;
+      if (!supported) {
+        if (configuredButton) {
+          kLog.warn("input: '{}' does not support {}", deviceName(device), buttonSetting);
+        } else if (configuredLock) {
+          kLog.warn("input: '{}' does not support {}", deviceName(device), lockSetting);
+        }
+        return;
+      }
+
+      if (!configuredButton) {
+        if (configuredLock) {
+          kLog.warn("input: '{}' ignores {} because {} is not set", deviceName(device), lockSetting, buttonSetting);
+        }
+        // The device may still carry a button-down method from an earlier config, so every default has to go back.
+        if (libinput_device_config_scroll_set_method(
+                libinputDevice, libinput_device_config_scroll_get_default_method(libinputDevice)
+            ) != LIBINPUT_CONFIG_STATUS_SUCCESS
+            || libinput_device_config_scroll_set_button(
+                   libinputDevice, libinput_device_config_scroll_get_default_button(libinputDevice)
+               ) != LIBINPUT_CONFIG_STATUS_SUCCESS
+            || libinput_device_config_scroll_set_button_lock(
+                   libinputDevice, libinput_device_config_scroll_get_default_button_lock(libinputDevice)
+               ) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+          kLog.warn("input: failed to restore the default scroll button state for '{}'", deviceName(device));
+        }
+        return;
+      }
+
+      if (libinput_device_config_scroll_set_button(libinputDevice, *configuredButton)
+          != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        const char* name = mouseButtonName(*configuredButton);
+        kLog.warn(
+            "input: could not apply {} to '{}': the device has no {} button", buttonSetting, deviceName(device),
+            name != nullptr ? name : "such"
+        );
+        return;
+      }
+      if (libinput_device_config_scroll_set_method(libinputDevice, LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN)
+          != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        kLog.warn("input: failed to apply {} to '{}'", buttonSetting, deviceName(device));
+        return;
+      }
+      const auto lockState = configuredLock.value_or(
+                                 libinput_device_config_scroll_get_default_button_lock(libinputDevice)
+                                 == LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_ENABLED
+                             )
+          ? LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_ENABLED
+          : LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_DISABLED;
+      if (libinput_device_config_scroll_set_button_lock(libinputDevice, lockState) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+        kLog.warn("input: failed to apply {} to '{}'", lockSetting, deviceName(device));
       }
     }
 
@@ -316,6 +398,15 @@ namespace umbriel {
         }
       }
 
+      const bool hasClickOverride = override != nullptr && override->clickMethod.has_value();
+      const std::optional<ClickMethod> clickMethod = hasClickOverride ? override->clickMethod
+          : isTouchpad                                                ? input.touchpad.clickMethod
+                                                                      : std::nullopt;
+      applyClickMethod(
+          libinputDevice, device, clickMethod,
+          hasClickOverride ? "input.device.click_method" : "input.touchpad.click_method"
+      );
+
       const std::optional<bool>& naturalScroll = override != nullptr && override->naturalScroll
           ? override->naturalScroll
           : isTouchpad ? input.touchpad.naturalScroll
@@ -325,6 +416,23 @@ namespace umbriel {
           override != nullptr && override->naturalScroll ? "input.device.natural_scroll"
               : isTouchpad                               ? "input.touchpad.natural_scroll"
                                                          : "input.mouse.natural_scroll"
+      );
+
+      // Button scrolling has no `[input.touchpad]` counterpart: a touchpad only gets it from its own device rule,
+      // never from `[input.mouse]`, since claiming a button there would cost the pad its two-finger scrolling.
+      const std::optional<uint32_t> scrollButton = override != nullptr && override->scrollButton
+          ? override->scrollButton
+          : isTouchpad ? std::nullopt
+                       : input.mouse.scrollButton;
+      const std::optional<bool> scrollButtonLock = override != nullptr && override->scrollButtonLock
+          ? override->scrollButtonLock
+          : isTouchpad ? std::nullopt
+                       : input.mouse.scrollButtonLock;
+      applyScrollButton(
+          libinputDevice, device, scrollButton, scrollButtonLock,
+          override != nullptr && override->scrollButton ? "input.device.scroll_button" : "input.mouse.scroll_button",
+          override != nullptr && override->scrollButtonLock ? "input.device.scroll_button_lock"
+                                                            : "input.mouse.scroll_button_lock"
       );
 
       const std::optional<AccelProfile> accelProfile = override != nullptr && override->accelProfile
@@ -348,6 +456,20 @@ namespace umbriel {
   void Server::applyConfig(const ConfigEffects& effects) {
     if (!effects.any()) {
       return;
+    }
+    // Settle every interaction whose meaning depends on the workspace axis or the
+    // layout objects about to be replaced, while those still exist.
+    if (effects.workspaceLayout || effects.workspaceInventory || effects.outputState) {
+      m_cursor->cancelLayoutInteraction();
+      m_gestures->cancelForLayoutChange();
+      for (const auto& output : m_outputs) {
+        if (WorkspaceGroup* group = output->workspaceGroup()) {
+          group->slideFinish();
+        }
+      }
+    }
+    if (effects.animation) {
+      prepareAnimationShaders(m_renderer);
     }
 
     if (effects.sceneBlur) {
@@ -466,7 +588,18 @@ namespace umbriel {
     cancelModifierTap();
     const ConfigReloadResult result = reloadConfig();
     if (result.success) {
+      if (result.change.drm) {
+        kLog.warn("DRM configuration changed; restart Umbriel to apply it");
+      }
+      if (result.change.keybinds) {
+        m_bindCooldowns.clear();
+      }
+      if (result.change.scratchpads && m_scratchpadManager != nullptr) {
+        m_scratchpadManager->reconcileConfig();
+      }
       if (result.effects.invalidatesOverview()) {
+        // A four-finger gesture must not reopen a presentation this close invalidates.
+        m_gestures->cancelForLayoutChange();
         m_overview->forceClose();
       }
       applyConfig(result.effects);
@@ -515,6 +648,14 @@ namespace umbriel {
     return 0;
   }
 
+  int Server::onStartupRulesTimer(void* data) {
+    auto* self = static_cast<Server*>(data);
+    for (const auto& view : self->m_registry.all()) {
+      view->refreshStartupRuleEffects();
+    }
+    return 0;
+  }
+
   // Fires when the underlying GL context is invalidated (GPU reset, VRAM lost after suspend, driver-detected hang).
   // Without this, the renderer keeps issuing GL calls into a dead context: Mesa's context_lost_nop_handler no-ops each
   // one and spams "[GLES2] GL_CONTEXT_LOST in context lost" ~40k lines/sec, and the desktop never comes back. Rebuild
@@ -531,7 +672,7 @@ namespace umbriel {
     wlr_renderer* oldRenderer = m_renderer;
     wlr_allocator* oldAllocator = m_allocator;
 
-    wlr_renderer* newRenderer = fx_renderer_create(m_backend);
+    wlr_renderer* newRenderer = m_backendManager->createRenderer();
     if (newRenderer == nullptr) {
       kLog.error("could not recreate fx_renderer after GPU reset, terminating");
       stop();
@@ -544,6 +685,13 @@ namespace umbriel {
       stop();
       return;
     }
+    if (!m_backendManager->verifyOpenDevices("after renderer recovery")) {
+      wlr_allocator_destroy(newAllocator);
+      wlr_renderer_destroy(newRenderer);
+      kLog.error("renderer recovery opened an excluded GPU, terminating");
+      stop();
+      return;
+    }
 
     // Rewire the lost signal onto the new renderer BEFORE swapping the pointers so that
     // a second reset during recreation is delivered.
@@ -552,6 +700,7 @@ namespace umbriel {
 
     m_renderer = newRenderer;
     m_allocator = newAllocator;
+    prepareAnimationShaders(m_renderer);
 
     // Point the compositor at the new renderer so clients' shm/dma-buf textures get
     // re-imported on next attach.
@@ -569,6 +718,32 @@ namespace umbriel {
     wlr_renderer_destroy(oldRenderer);
 
     kLog.info("renderer recreated");
+  }
+
+  void
+  Server::onProtocolMessage(void* data, wl_protocol_logger_type direction, const wl_protocol_logger_message* message) {
+    if (direction != WL_PROTOCOL_LOGGER_REQUEST
+        || message == nullptr
+        || message->resource == nullptr
+        || message->message == nullptr
+        || message->arguments_count != 1
+        || message->arguments == nullptr) {
+      return;
+    }
+    const char* resourceClass = wl_resource_get_class(message->resource);
+    if (resourceClass == nullptr
+        || std::string_view(resourceClass) != "xdg_toplevel"
+        || std::string_view(message->message->name) != "set_parent") {
+      return;
+    }
+
+    auto* server = static_cast<Server*>(data);
+    wlr_xdg_toplevel* toplevel = wlr_xdg_toplevel_from_resource(message->resource);
+    if (View* view = viewForToplevel(*server, toplevel)) {
+      // wlroots has not handled the request yet, so the raw nullable object is
+      // still available even when its toplevel has not mapped.
+      view->recordOpeningParentRequest(message->arguments[0].o != nullptr);
+    }
   }
 
   void Server::onNewOutput(wl_listener* listener, void* data) {
@@ -672,8 +847,49 @@ namespace umbriel {
     Server* self;
     self = wl_container_of(listener, self, m_newVirtualKeyboard);
     auto* keyboard = static_cast<wlr_virtual_keyboard_v1*>(data);
-    self->addKeyboard(&keyboard->keyboard.base);
-    self->updateSeatCapabilities();
+    if (keyboard->keyboard.keymap != nullptr) {
+      self->addKeyboard(&keyboard->keyboard.base);
+      self->updateSeatCapabilities();
+      return;
+    }
+
+    // Virtual-keyboard creation and keymap upload are separate protocol
+    // requests. Do not expose the device until it has a usable map, otherwise
+    // wlroots broadcasts a transient no-keymap event to every keyboard client.
+    auto* pending = new PendingVirtualKeyboard{
+        .server = self,
+        .keyboard = &keyboard->keyboard,
+    };
+    pending->keymap.notify = onPendingVirtualKeyboardKeymap;
+    wl_signal_add(&keyboard->keyboard.events.keymap, &pending->keymap);
+    pending->destroy.notify = onPendingVirtualKeyboardDestroy;
+    wl_signal_add(&keyboard->keyboard.base.events.destroy, &pending->destroy);
+  }
+
+  void Server::onPendingVirtualKeyboardKeymap(wl_listener* listener, void* /*data*/) {
+    PendingVirtualKeyboard* pending;
+    pending = wl_container_of(listener, pending, keymap);
+    if (pending->keyboard->keymap == nullptr) {
+      return;
+    }
+
+    Server* server = pending->server;
+    wlr_input_device* device = &pending->keyboard->base;
+    destroyPendingVirtualKeyboard(pending);
+    server->addKeyboard(device);
+    server->updateSeatCapabilities();
+  }
+
+  void Server::onPendingVirtualKeyboardDestroy(wl_listener* listener, void* /*data*/) {
+    PendingVirtualKeyboard* pending;
+    pending = wl_container_of(listener, pending, destroy);
+    destroyPendingVirtualKeyboard(pending);
+  }
+
+  void Server::destroyPendingVirtualKeyboard(PendingVirtualKeyboard* pending) {
+    wl_list_remove(&pending->keymap.link);
+    wl_list_remove(&pending->destroy.link);
+    delete pending;
   }
 
   void Server::onNewVirtualPointer(wl_listener* listener, void* data) {
@@ -1001,6 +1217,14 @@ namespace umbriel {
     }
     m_cursor->resetMode();
     m_cursor->clearConstraint();
+    m_lockFocusOutput.clear();
+    if (View* focused = View::fromSurface(m_seat->wlr()->keyboard_state.focused_surface)) {
+      if (Workspace* workspace = focused->workspace(); workspace != nullptr && workspace->group() != nullptr) {
+        if (const Output* output = workspace->group()->output(); output != nullptr) {
+          m_lockFocusOutput = output->wlr()->name;
+        }
+      }
+    }
     clearNormalFocus();
     updateIdleInhibit();
     updateLockBlank();
@@ -1013,9 +1237,12 @@ namespace umbriel {
     m_sessionLocked = false;
     updateIdleInhibit();
     wlr_scene_node_set_enabled(&m_lockBlank->node, false);
-    if (View* recent = m_registry.mostRecent()) {
-      focusView(recent);
-    }
+    // The cursor need not sit on the output that had focus, so restore the
+    // remembered one. refocus() then keeps that output's active workspace, which
+    // is what makes unlocking on an empty workspace stay there.
+    Output* output = m_lockFocusOutput.empty() ? nullptr : outputFromName(m_lockFocusOutput);
+    m_lockFocusOutput.clear();
+    refocus(output);
   }
 
   void Server::removeSessionLock(SessionLock* lock) {
@@ -1044,7 +1271,7 @@ namespace umbriel {
     if (layoutBox.width <= 0 || layoutBox.height <= 0) {
       return;
     }
-    wlr_scene_rect_set_color(m_lockBlank, config().appearance.backdropColor.data());
+    wlr_scene_rect_set_color(m_lockBlank, config().colors.backdrop.data());
     wlr_scene_rect_set_size(m_lockBlank, layoutBox.width, layoutBox.height);
     wlr_scene_node_set_position(&m_lockBlank->node, layoutBox.x, layoutBox.y);
   }
@@ -1055,7 +1282,7 @@ namespace umbriel {
     if (layoutBox.width <= 0 || layoutBox.height <= 0) {
       return;
     }
-    wlr_scene_rect_set_color(m_backdrop, config().appearance.backdropColor.data());
+    wlr_scene_rect_set_color(m_backdrop, config().colors.backdrop.data());
     wlr_scene_rect_set_size(m_backdrop, layoutBox.width, layoutBox.height);
     wlr_scene_node_set_position(&m_backdrop->node, layoutBox.x, layoutBox.y);
     for (const auto& output : m_outputs) {
@@ -1097,10 +1324,10 @@ namespace umbriel {
       notifyKeyboardLayoutIpc();
     }
 
-    // A virtual keyboard may arrive before its client provides a keymap. Keep
-    // an existing seat keyboard until real input selects another device, but an
-    // empty seat needs one for focus enter and input-method keymap delivery.
-    if (!seatHasKeyboard) {
+    // Pending virtual keyboards are promoted only after their first keymap.
+    // Keep the same guard for physical-keymap setup failures so wlroots never
+    // broadcasts a transient no-keymap event from this path.
+    if (!seatHasKeyboard && keyboard->wlr()->keymap != nullptr) {
       wlr_seat_set_keyboard(seat, keyboard->wlr());
     }
   }
@@ -1173,6 +1400,12 @@ namespace umbriel {
   void Server::notifyOverviewChanged() {
     if (m_ipc != nullptr) {
       m_ipc->notifyOverviewChanged();
+    }
+  }
+
+  void Server::notifySubmapChanged() {
+    if (m_ipc != nullptr) {
+      m_ipc->notifySubmapChanged();
     }
   }
 
@@ -1621,6 +1854,7 @@ namespace umbriel {
             .outputName = sourceName,
             .workspaceName = sourceGroup->active()->name(),
             .workspaceIndex = sourceGroup->active()->index(),
+            .workspaceNamed = sourceGroup->active()->named(),
         });
       }
     }
@@ -1648,6 +1882,8 @@ namespace umbriel {
         View::DisplacedHome home{
             .outputName = output->wlr()->name,
             .workspaceName = workspace->name(),
+            .workspaceIndex = workspace->index(),
+            .workspaceNamed = workspace->named(),
             .layoutSnapshot = nullptr,
             .layoutMember = 0,
             .ownsNamedScrollingColumnWidth = view->m_ownsNamedScrollingColumnWidth,
@@ -1765,9 +2001,8 @@ namespace umbriel {
       if (left.outputName != right.outputName) {
         return left.outputName < right.outputName;
       }
-      const size_t leftIndex = workspaceOrder(left.workspaceName);
-      const size_t rightIndex = workspaceOrder(right.workspaceName);
-      return leftIndex != rightIndex ? leftIndex < rightIndex : left.workspaceName < right.workspaceName;
+      return left.workspaceIndex != right.workspaceIndex ? left.workspaceIndex < right.workspaceIndex
+                                                         : left.workspaceName < right.workspaceName;
     });
 
     struct RestoredViewport {
@@ -1785,6 +2020,8 @@ namespace umbriel {
         const View::DisplacedHome& candidate = *displaced[last]->displacedHome();
         if (candidate.outputName != groupHome.outputName
             || candidate.workspaceName != groupHome.workspaceName
+            || candidate.workspaceIndex != groupHome.workspaceIndex
+            || candidate.workspaceNamed != groupHome.workspaceNamed
             || candidate.layoutProtectionOnly != groupHome.layoutProtectionOnly) {
           break;
         }
@@ -1815,21 +2052,23 @@ namespace umbriel {
       }
 
       Workspace* workspace = nullptr;
-      if (targetGroup->dynamic()) {
-        const size_t desired = workspaceOrder(groupHome.workspaceName);
-        if (desired != std::numeric_limits<size_t>::max() && desired >= 1) {
-          // A recreated dynamic group starts with workspace 1. Materialize an
-          // empty active workspace before a surviving workspace 2 is restored,
-          // then ordinary reconciliation can retain both.
-          while (targetGroup->workspaceCount() < desired) {
+      if (groupHome.workspaceNamed) {
+        workspace = targetGroup->workspaceNamed(groupHome.workspaceName);
+      } else {
+        if (targetGroup->dynamic()) {
+          // A recreated dynamic group starts with its configured names and
+          // sentinel. Materialize the saved anonymous position before
+          // restoring its surviving windows.
+          while (targetGroup->workspaceCount() <= groupHome.workspaceIndex) {
             if (targetGroup->insertDynamicWorkspace(targetGroup->workspaceCount()) == nullptr) {
               break;
             }
           }
-          workspace = targetGroup->workspaceNamed(groupHome.workspaceName);
         }
-      } else {
-        workspace = targetGroup->workspaceForSelector(groupHome.workspaceName);
+        workspace = targetGroup->workspaceAt(groupHome.workspaceIndex);
+        if (targetGroup->dynamic() && workspace != nullptr && workspace->named()) {
+          workspace = targetGroup->insertDynamicWorkspace(groupHome.workspaceIndex);
+        }
       }
       const bool selectorMatched = workspace != nullptr;
       if (workspace == nullptr) {
@@ -2071,14 +2310,18 @@ namespace umbriel {
         continue;
       }
 
-      Workspace* workspace = group->workspaceNamed(selection->workspaceName);
-      if (workspace == nullptr && group->dynamic()) {
+      Workspace* workspace = selection->workspaceNamed ? group->workspaceNamed(selection->workspaceName) : nullptr;
+      if (!selection->workspaceNamed && group->dynamic()) {
         while (group->workspaceCount() <= selection->workspaceIndex) {
           if (group->insertDynamicWorkspace(group->workspaceCount()) == nullptr) {
             break;
           }
         }
-        workspace = group->workspaceNamed(selection->workspaceName);
+        workspace = group->workspaceAt(selection->workspaceIndex);
+        if (workspace != nullptr && workspace->named()) {
+          Workspace* inserted = group->insertDynamicWorkspace(selection->workspaceIndex);
+          workspace = inserted != nullptr ? inserted : group->active();
+        }
       }
       if (workspace == nullptr && group->workspaceCount() > 0) {
         workspace = group->workspaceAt(std::min(selection->workspaceIndex, group->workspaceCount() - 1));
@@ -2169,10 +2412,39 @@ namespace umbriel {
       }
     }
 
-    if (wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat)) {
-      wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
-    } else {
+    wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat);
+    if (keyboard == nullptr) {
       wlr_seat_keyboard_notify_enter(seat, surface, nullptr, 0, nullptr);
+      return;
+    }
+
+    // The device's key array is physical state. Keys a bind consumed never
+    // reached a client and their release never will, so handing them over as
+    // held keys strands them: XWayland turns that into an endless key repeat.
+    const std::unordered_set<uint32_t>* consumed = nullptr;
+    for (const std::unique_ptr<Keyboard>& entry : m_keyboards) {
+      if (entry->wlr() == keyboard) {
+        consumed = &entry->consumedKeycodes();
+        break;
+      }
+    }
+    if (consumed == nullptr || consumed->empty()) {
+      wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
+      return;
+    }
+    std::array<uint32_t, WLR_KEYBOARD_KEYS_CAP> forwarded{};
+    size_t count = 0;
+    for (size_t i = 0; i < keyboard->num_keycodes; ++i) {
+      if (!consumed->contains(keyboard->keycodes[i])) {
+        forwarded[count++] = keyboard->keycodes[i];
+      }
+    }
+    wlr_seat_keyboard_notify_enter(seat, surface, forwarded.data(), count, &keyboard->modifiers);
+  }
+
+  void Server::forgetConsumedKeycodes() {
+    for (const std::unique_ptr<Keyboard>& entry : m_keyboards) {
+      entry->forgetConsumedKeycodes();
     }
   }
 
@@ -2189,8 +2461,21 @@ namespace umbriel {
   }
 
   void Server::removeKeyboard(Keyboard* keyboard) {
+    wlr_seat* seat = m_seat->wlr();
+    const bool seatKeyboardRemoved = wlr_seat_get_keyboard(seat) == keyboard->wlr();
     const bool sourceRemoved = m_keyboardLayoutSource == keyboard;
     std::erase_if(m_keyboards, [keyboard](const std::unique_ptr<Keyboard>& entry) { return entry.get() == keyboard; });
+    if (seatKeyboardRemoved) {
+      wlr_keyboard* replacement = nullptr;
+      for (const auto& entry : m_keyboards) {
+        if (entry->wlr()->keymap != nullptr) {
+          replacement = entry->wlr();
+          break;
+        }
+      }
+      // Detach wlroots' later destroy listener so it cannot clear the replacement.
+      wlr_seat_set_keyboard(seat, replacement);
+    }
     if (sourceRemoved) {
       m_keyboardLayoutSource = nullptr;
       for (const auto& entry : m_keyboards) {

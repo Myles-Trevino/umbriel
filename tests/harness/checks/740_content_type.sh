@@ -4,7 +4,7 @@
 # must refresh dynamic rules without replaying one-shot opening behavior.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/content-type-client.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/content-type-control"
 readonly BEFORE_SHOT="$UMBRIEL_RUNTIME_DIR/content-type-before.png"
@@ -21,10 +21,12 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 enabled = false
 
+[colors]
+backdrop = "#00FF00FF"
+
 [appearance]
 border_width = 0
 corner_radius = 0
-backdrop_color = "#00FF00FF"
 
 [[window_rule]]
 match.content_type = "game"

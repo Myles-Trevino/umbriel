@@ -142,11 +142,8 @@ namespace umbriel {
         view != nullptr && view->workspace() != nullptr && view->workspace()->group() != nullptr) {
       return view->workspace()->group()->output();
     }
-    const wlr_surface* root = wlr_surface_get_root_surface(surface);
-    for (const auto& entry : m_layerSurfaces) {
-      if (entry->layerSurface()->surface == root) {
-        return outputFromWlr(entry->layerSurface()->output);
-      }
+    if (LayerSurface* layer = LayerSurface::fromSurface(surface)) {
+      return layer->output();
     }
     return nullptr;
   }

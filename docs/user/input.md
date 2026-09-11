@@ -8,6 +8,7 @@ place.
 ```toml
 [input]
 middle_click_paste = false
+window_drag_toggle = "none"
 ```
 
 `middle_click_paste` controls the primary-selection clipboard. It defaults to
@@ -23,6 +24,20 @@ immediately on config reload, but protocol visibility is fixed when an
 application connects. Applications started while it was disabled must be
 restarted after re-enabling it.
 
+`window_drag_toggle` retargets a window drag in progress: while a window is held
+with one mouse button, a press of the other main button changes where the drag
+will put it. It defaults to `none`, which leaves the drag alone. `floating`
+switches between the tiled layout and floating. `pinned` switches pinning on and
+off; turning it off puts the window back in the tiled layout when that is where
+it was pinned from, and leaves it floating otherwise.
+
+The window's state changes when the drag drops, not when the button is pressed,
+so a drag can be retargeted as often as needed and toggling back and forth
+returns the window to the column width it was dragged out of. A drop that floats
+the window restores its remembered floating size, and the pointer keeps its grip
+on the same part of the window across that resize. A window that cannot take the
+target state (a fullscreen window cannot be pinned) drops where it was.
+
 ### Keyboard
 
 ```toml
@@ -35,6 +50,16 @@ repeat_delay = 600 # 0-10000 ms
 numlock_toggle = true # true enables NumLock when a keyboard connects; false leaves it off
 track_layout = "global" # "global", or "window" to track the layout per surface
 ```
+
+These settings apply to physical keyboards. Virtual keyboard clients provide
+their own XKB keymaps, and Umbriel attaches each device to the seat only after
+its first usable keymap is ready. Applications therefore never receive the
+temporary empty keymap from a virtual keyboard that is still initializing.
+
+If the current keyboard disappears, Umbriel immediately selects another
+connected keyboard with a usable keymap, when available. Newly opened
+applications receive that keymap without waiting for keyboard input, including
+when an input method destroys its virtual keyboard.
 
 `layout` takes a comma-separated list to load several layouts at once
 (`layout = "us,de"`, optionally with a matching `variant = ",nodeadkeys"`). The
@@ -124,6 +149,7 @@ natural_scroll = true
 # scroll_factor = 1.5         # touchpad scroll speed, 0.1 to 10.0
 # disable_while_typing = true
 # disable_on_external_mouse = true
+# click_method = "clickfinger"  # "button_areas" or "clickfinger"
 ```
 
 Tap-to-click is enabled by default. Set `tap = false` to disable it globally,
@@ -135,8 +161,8 @@ restores the device default. Options are applied only when supported by the
 device; an explicitly configured unsupported option is reported in the log.
 
 The effective `natural_scroll` value also controls Umbriel's three-finger
-gestures: horizontal strip scrolling, vertical workspace switching, and
-workspace selection while the overview is open. A per-device override or
+gestures: workspace switching along the output's workspace axis and strip
+scrolling across it, both inside and outside overview. A per-device override or
 preserved libinput default applies to gestures from that device. The
 four-finger overview open and close gesture keeps its fixed direction.
 
@@ -144,14 +170,27 @@ four-finger overview open and close gesture keeps its fixed direction.
 including custom curves. Both remain unset by default, which uses each
 touchpad's libinput default profile and speed. Removing either setting on reload
 restores the corresponding default. `sensitivity` alone adjusts pointer speed
-under the device's default profile.
+under the device's default profile. Both also change how far three-finger
+gestures travel, because libinput accelerates gesture movement the same way it
+accelerates the pointer. Two-finger scrolling is not accelerated.
+
+`click_method` decides how a physical press becomes a button. `button_areas`
+splits the bottom of the pad into left, middle, and right zones, while
+`clickfinger` reads the finger count instead: one finger is a left click, two a
+right click, three a middle click, anywhere on the pad. It is unset by default,
+which keeps each device's libinput default, and removing it on reload restores
+that default. Clickpads that only expose software buttons support just
+`button_areas`; asking for `clickfinger` there is reported in the log and leaves
+the device alone.
 
 `scroll_factor` multiplies the smooth two-finger scroll a touchpad sends to the
 focused window, so `2.0` scrolls twice as fast and `0.5` half as fast. It
 remains unset by default (identity, `1.0`) and takes the next scroll event on
 reload. It applies only to the continuous scroll delta: discrete notches,
 overview wheel stepping, and three-finger-swipe strip travel keep their own
-counting semantics.
+counting semantics. Inside the overview, both two- and three-finger navigation
+use [`overview.scroll_factor_horizontal` and
+`overview.scroll_factor_vertical`](workspaces-overview.md) instead.
 
 Set `disable_on_external_mouse = true` to disable the touchpad while an
 external mouse is connected. Libinput re-enables it automatically once the
@@ -170,6 +209,8 @@ natural_scroll = false
 # accel_profile = "flat"  # "flat", "adaptive", or a custom curve
 sensitivity = 0.0        # -1.0 to 1.0
 scroll_wheel_step = 60  # 1-1000, pixels per step for layout-scroll-left/right
+# scroll_button = "MouseBack"       # Hold this button and move the mouse to scroll
+# scroll_button_lock = false        # One press latches scrolling instead of holding
 ```
 
 Omitting `accel_profile` preserves each device's libinput default, which is
@@ -190,6 +231,24 @@ libinput default. `layout-scroll-left` and `layout-scroll-right` clamp to the
 strip bounds, so the columns never park
 past either edge. Wheel-triggered scrolling uses twice `scroll_wheel_step`
 during an active tiled window drag.
+
+`scroll_button` hands one button to libinput as a scroll modifier: while it is
+held, pointer motion scrolls the surface under the cursor instead of moving the
+cursor, and that motion consumes the button rather than clicking. Pressing and
+releasing it without moving the pointer still clicks, so the button keeps
+working for plain clicks and a bind on it still fires in that case, which is
+what the load-time log line means. It takes the same names as a mouse keybind,
+`MouseLeft`, `MouseRight`, `MouseMiddle`, `MouseBack`, or `MouseForward`.
+`scroll_button_lock = true` latches instead: one press starts scrolling, the
+next stops it, which suits a side button that is awkward to hold. Both keys are
+unset by default and removing them restores the device's libinput default. A
+device that cannot do button scrolling, or that has no such button, is reported
+in the log and left alone.
+
+`[input.mouse]` reaches every pointer that is not a touchpad. A touchpad takes
+a scroll button only from its own `[[input.device]]` rule, because a touchpad
+can run one scroll method at a time and button scrolling would cost it
+two-finger scrolling.
 
 ### Per-device overrides
 
@@ -212,24 +271,29 @@ natural_scroll = false
 accel_profile = "flat"
 sensitivity = 0.0
 disable_while_typing = false
+click_method = "clickfinger"
 
 [[input.device]]
 name = "Acme Gaming Mouse"
 accel_profile = "flat"
 sensitivity = 0.0
+scroll_button = "MouseBack"
+scroll_button_lock = false
 ```
 
 Each rule inherits the matching class settings and overrides only the keys it
 contains. `layout`, `variant`, `options`, `repeat_rate`, and `repeat_delay`
-apply to keyboards. `tap` and `disable_while_typing` apply to touchpads.
-`natural_scroll` applies to touchpads and mice. `accel_profile` and
-`sensitivity` apply to mice and touchpads; for a touchpad the rule overrides
-`[input.touchpad]` rather than `[input.mouse]`. Unsupported libinput settings
-are reported in the log.
+apply to keyboards. `tap`, `disable_while_typing`, and `click_method` apply to
+touchpads. `natural_scroll` applies to touchpads and mice. `scroll_button` and
+`scroll_button_lock` apply to any pointer, including a touchpad, which reads
+them nowhere else. `accel_profile` and `sensitivity` apply to mice and
+touchpads; for a touchpad the rule overrides `[input.touchpad]` rather than
+`[input.mouse]`. Unsupported libinput settings are reported in the log.
 
 Rules match every attached device with the exact name. Device overrides also
 apply when a device is connected after startup and when the configuration is
-reloaded. Duplicate rules for the same name are rejected.
+reloaded. Rules from included files are collected alongside the ones in the
+file that includes them, and duplicate rules for the same name are rejected.
 
 `scroll_wheel_step`, cursor settings, tablet settings, and focus settings remain
 compositor-wide because they are not properties of one physical input device.
@@ -295,13 +359,24 @@ that many milliseconds without pointer activity. Motion, clicks, scrolling,
 and tablet input reveal the cursor and restart the timeout. The two hiding
 options can be enabled together.
 
+While any pointer button is held, pointer focus stays with the window that
+received the press, and the compositor's own cursor changes, such as the
+`Mod`-held move and resize affordance, do not move it. That keeps clicks,
+drags, and held game actions intact: the window always receives the matching
+release.
+
 Set `follows_focus = true` to warp the cursor to the visible center of a window
 selected by directional window focus, next-window focus, floating-state focus,
-or first/last-column focus navigation. This applies whether the action comes
-from a keybind, wheel bind, or IPC. Pointer-driven focus, automatic focus after
-a window closes, gestures, and overview selection do not warp the cursor.
-`window-focus:<id>` remains focus-only; use `window-focus-warp:<id>` when an
-individual id-based request must always move the cursor.
+or first/last-column focus navigation. It also follows the focused window after
+an in-workspace `window-move-or-output-*` move, an output focus action, a window
+or column move to another workspace or output, and a foreign-toplevel
+activation request from a dock or taskbar. This applies whether the matching
+action comes from a keybind, wheel bind, or IPC. Pointer-driven focus, automatic
+focus after a window closes, gestures, and overview selection do not warp the
+cursor. `window-focus:<id>` remains focus-only; use
+`window-focus-warp:<id>` when an individual id-based request must always move
+the cursor. Either action summons a target that is hidden in a scratchpad to
+the output under the pointer before focusing it.
 
 ### Focus
 
@@ -313,8 +388,21 @@ follows_mouse_max_scroll = 0.5  # optional, measured in viewport widths
 
 | Key                        | Type  | Default    | Description                                                                                                                                                                     |
 | -------------------------- | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `follows_mouse`            | bool  | `false`    | Focus a window when the pointer enters it, then scroll it into view.                                                                                                            |
+| `follows_mouse`            | bool  | `false`    | Focus the pointer target during motion, when a Dwindle or master tile replaces the focused tile beneath it, and after client drag completion.                                   |
 | `follows_mouse_max_scroll` | float | (no limit) | Do not change focus when revealing the window would scroll farther than this many viewport widths. `0.0` allows only windows that are already fully visible. Omit for no limit. |
+
+Mapping windows and switching workspaces can change which window is under a
+stationary pointer. The existing focus remains until the next pointer motion,
+which selects the window under the pointer without requiring a border crossing.
+Finishing a client data drag performs the same refresh at the unchanged cursor
+position, so dropping over another window selects it immediately.
+
+Closing a focused Dwindle or master tile is handled immediately when the pointer
+belongs to that tile. After the layout reflows, focus follows the survivor that
+takes over the same pointer position. If the pointer rests over a different
+window, the layout's normal close replacement keeps focus. Scrolling workspaces
+also keep their normal close replacement because the strip can animate several
+windows beneath a stationary pointer.
 
 For example, a window three screens away requires a limit of at least `3.0`.
 Values outside `0.0` to `100.0` are clamped and reported.

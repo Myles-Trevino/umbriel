@@ -30,6 +30,7 @@
 #include <limits>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace umbriel {
 
@@ -74,6 +75,20 @@ namespace umbriel {
       }
       if (value == "window") {
         return TrackLayout::Window;
+      }
+      return std::nullopt;
+    }
+
+    std::optional<WindowDragToggle> readWindowDragToggle(const toml::node& node) {
+      const auto value = node.value<std::string>();
+      if (value == "none") {
+        return WindowDragToggle::None;
+      }
+      if (value == "floating") {
+        return WindowDragToggle::Floating;
+      }
+      if (value == "pinned") {
+        return WindowDragToggle::Pinned;
       }
       return std::nullopt;
     }
@@ -144,6 +159,90 @@ namespace umbriel {
       emitDiag(ConfigDiagnostic::Severity::Error, &src, std::format(fmt, std::forward<A>(args)...));
     }
 
+    std::optional<std::string> normalizePciAddress(std::string_view value) {
+      constexpr std::array<size_t, 3> separators{4, 7, 10};
+      if (value.size() != 12
+          || value[separators[0]] != ':'
+          || value[separators[1]] != ':'
+          || value[separators[2]] != '.'
+          || (value[8] != '0' && value[8] != '1')
+          || value.back() < '0'
+          || value.back() > '7') {
+        return std::nullopt;
+      }
+      for (size_t index = 0; index < value.size(); ++index) {
+        if (std::ranges::find(separators, index) != separators.end()) {
+          continue;
+        }
+        if (std::isxdigit(static_cast<unsigned char>(value[index])) == 0) {
+          return std::nullopt;
+        }
+      }
+      return lowercase(value);
+    }
+
+    std::optional<std::string> readDrmPath(const toml::node& node, std::string_view context) {
+      const auto value = node.value<std::string>();
+      if (!value) {
+        errorAt(node.source(), "{} must be a string", context);
+        return std::nullopt;
+      }
+      if (value->empty()) {
+        errorAt(node.source(), "{} cannot be empty", context);
+        return std::nullopt;
+      }
+      if (value->contains('\0')) {
+        errorAt(node.source(), "{} cannot contain NUL", context);
+        return std::nullopt;
+      }
+      const std::filesystem::path path(*value);
+      if (!path.is_absolute()) {
+        errorAt(node.source(), R"({} must be an absolute path (got "{}"))", context, *value);
+        return std::nullopt;
+      }
+      // Keep the exact spelling: lexical normalization changes the meaning of
+      // `..` when an earlier path component is a symlink.
+      return value;
+    }
+
+    std::optional<std::string> readDrmPciAddress(const toml::node& node, std::string_view context) {
+      const auto value = node.value<std::string>();
+      if (!value) {
+        errorAt(node.source(), "{} entries must be strings", context);
+        return std::nullopt;
+      }
+      const auto address = normalizePciAddress(*value);
+      if (!address) {
+        errorAt(
+            node.source(), R"(invalid {} entry "{}" (expected domain:bus:slot.function, for example 0000:01:00.0))",
+            context, *value
+        );
+      }
+      return address;
+    }
+
+    template <typename Parse>
+    void readDrmSelectorList(
+        const toml::node& node, std::string_view context, std::vector<std::string>& target, Parse parse
+    ) {
+      const toml::array* values = node.as_array();
+      if (values == nullptr) {
+        errorAt(node.source(), "{} must be an array of strings", context);
+        return;
+      }
+      for (const toml::node& entry : *values) {
+        auto value = parse(entry, context);
+        if (!value) {
+          continue;
+        }
+        if (std::ranges::find(target, *value) != target.end()) {
+          warnAt(entry.source(), R"(ignoring duplicate {} entry "{}")", context, *value);
+          continue;
+        }
+        target.push_back(std::move(*value));
+      }
+    }
+
     std::filesystem::path userConfigPath() {
       if (const char* xdgConfigHome = std::getenv("XDG_CONFIG_HOME");
           xdgConfigHome != nullptr && xdgConfigHome[0] != '\0') {
@@ -155,17 +254,37 @@ namespace umbriel {
       return std::filesystem::path(".config/umbriel/config.toml");
     }
 
-    bool configPathExists(const std::filesystem::path& path) {
+    enum class ConfigPathKind {
+      Missing,
+      RegularFile,
+      Unavailable,
+    };
+
+    struct ConfigPathProbe {
+      ConfigPathKind kind = ConfigPathKind::Missing;
       std::error_code error;
-      return std::filesystem::exists(path, error) && !error;
+    };
+
+    ConfigPathProbe probeConfigPath(const std::filesystem::path& path) {
+      std::error_code error;
+      const std::filesystem::file_status status = std::filesystem::status(path, error);
+      if (error) {
+        if (error == std::errc::no_such_file_or_directory || error == std::errc::not_a_directory) {
+          return {};
+        }
+        return {.kind = ConfigPathKind::Unavailable, .error = error};
+      }
+      if (status.type() == std::filesystem::file_type::not_found) {
+        return {};
+      }
+      return {
+          .kind = std::filesystem::is_regular_file(status) ? ConfigPathKind::RegularFile : ConfigPathKind::Unavailable,
+          .error = {},
+      };
     }
 
-    std::filesystem::path defaultConfigPath() {
-      const std::filesystem::path userPath = userConfigPath();
-      if (configPathExists(userPath)) {
-        return userPath;
-      }
-
+    std::vector<std::filesystem::path> defaultConfigCandidates() {
+      std::vector<std::filesystem::path> candidates{userConfigPath()};
       const char* configuredDirs = std::getenv("XDG_CONFIG_DIRS");
       const std::string_view configDirs = configuredDirs != nullptr && configuredDirs[0] != '\0'
           ? std::string_view(configuredDirs)
@@ -175,10 +294,7 @@ namespace umbriel {
         const size_t separator = configDirs.find(':', offset);
         const std::string_view directory = configDirs.substr(offset, separator - offset);
         if (!directory.empty()) {
-          const std::filesystem::path candidate = std::filesystem::path(directory) / "umbriel/config.toml";
-          if (configPathExists(candidate)) {
-            return candidate;
-          }
+          candidates.push_back(std::filesystem::path(directory) / "umbriel/config.toml");
         }
         if (separator == std::string_view::npos) {
           break;
@@ -186,8 +302,31 @@ namespace umbriel {
         offset = separator + 1;
       }
 
-      const std::filesystem::path packaged = std::filesystem::path(kDataDir) / "umbriel/config.toml";
-      return configPathExists(packaged) ? packaged : userPath;
+      candidates.push_back(std::filesystem::path(kDataDir) / "umbriel/config.toml");
+      return candidates;
+    }
+
+    struct ConfigSelection {
+      std::filesystem::path root;
+      std::vector<std::filesystem::path> watchPaths;
+      bool found = false;
+    };
+
+    ConfigSelection selectDefaultConfig(const std::vector<std::filesystem::path>& candidates) {
+      ConfigSelection selection{};
+      selection.watchPaths = candidates;
+      for (const std::filesystem::path& candidate : candidates) {
+        if (probeConfigPath(candidate).kind != ConfigPathKind::Missing) {
+          selection.root = candidate;
+          selection.found = true;
+          return selection;
+        }
+      }
+      selection.root = candidates.empty() ? userConfigPath() : candidates.front();
+      if (selection.watchPaths.empty()) {
+        selection.watchPaths.push_back(selection.root);
+      }
+      return selection;
     }
 
     std::optional<LayoutMode> readLayoutMode(Section& section, std::string_view context) {
@@ -214,27 +353,6 @@ namespace umbriel {
       return std::nullopt;
     }
 
-    std::optional<ScrollingDirection> readScrollingDirection(Section& section, std::string_view context) {
-      const toml::node* node = section.take("direction");
-      if (node == nullptr) {
-        return std::nullopt;
-      }
-      const auto* value = node->as_string();
-      if (value == nullptr) {
-        warnAt(node->source(), R"({}.direction must be a string ("horizontal" or "vertical"))", context);
-        return std::nullopt;
-      }
-      const std::string_view direction = value->get();
-      if (direction == "horizontal") {
-        return ScrollingDirection::Horizontal;
-      }
-      if (direction == "vertical") {
-        return ScrollingDirection::Vertical;
-      }
-      warnAt(node->source(), R"(unknown {}.direction "{}" (expected "horizontal" or "vertical"))", context, direction);
-      return std::nullopt;
-    }
-
     std::optional<MasterPosition> readMasterPosition(Section& section, std::string_view context) {
       const toml::node* node = section.take("position");
       if (node == nullptr) {
@@ -242,7 +360,7 @@ namespace umbriel {
       }
       const auto* value = node->as_string();
       if (value == nullptr) {
-        warnAt(node->source(), R"({}.position must be a string ("left" or "right"))", context);
+        warnAt(node->source(), R"({}.position must be a string ("left", "right", or "center"))", context);
         return std::nullopt;
       }
       const std::string_view position = value->get();
@@ -252,7 +370,37 @@ namespace umbriel {
       if (position == "right") {
         return MasterPosition::Right;
       }
-      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left" or "right"))", context, position);
+      if (position == "center") {
+        return MasterPosition::Center;
+      }
+      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left", "right", or "center"))", context, position);
+      return std::nullopt;
+    }
+
+    std::optional<CenterFocusedColumn> readCenterFocused(Section& section, std::string_view context) {
+      const toml::node* node = section.take("center_focused");
+      if (node == nullptr) {
+        return std::nullopt;
+      }
+      const auto* value = node->as_string();
+      if (value == nullptr) {
+        warnAt(node->source(), R"({}.center_focused must be a string ("never", "always", or "on_overflow"))", context);
+        return std::nullopt;
+      }
+      const std::string_view mode = value->get();
+      if (mode == "never") {
+        return CenterFocusedColumn::Never;
+      }
+      if (mode == "always") {
+        return CenterFocusedColumn::Always;
+      }
+      if (mode == "on_overflow") {
+        return CenterFocusedColumn::OnOverflow;
+      }
+      warnAt(
+          node->source(), R"(unknown {}.center_focused "{}" (expected "never", "always", or "on_overflow"))", context,
+          mode
+      );
       return std::nullopt;
     }
 
@@ -332,6 +480,51 @@ namespace umbriel {
       };
     }
 
+    std::optional<ClickMethod> readClickMethod(Section& section, std::string_view context) {
+      const toml::node* node = section.take("click_method");
+      if (node == nullptr) {
+        return std::nullopt;
+      }
+      const auto* value = node->as_string();
+      if (value == nullptr) {
+        warnAt(node->source(), "{}.click_method must be a string", context);
+        return std::nullopt;
+      }
+      const std::string method = lowercase(value->get());
+      if (method == "button_areas") {
+        return ClickMethod::ButtonAreas;
+      }
+      if (method == "clickfinger") {
+        return ClickMethod::ClickFinger;
+      }
+      warnAt(
+          node->source(), R"(invalid {}.click_method "{}" (expected "button_areas" or "clickfinger"))", context,
+          value->get()
+      );
+      return std::nullopt;
+    }
+
+    std::optional<uint32_t> readScrollButton(Section& section, std::string_view context) {
+      const toml::node* node = section.take("scroll_button");
+      if (node == nullptr) {
+        return std::nullopt;
+      }
+      const auto* value = node->as_string();
+      if (value == nullptr) {
+        warnAt(node->source(), "{}.scroll_button must be a string", context);
+        return std::nullopt;
+      }
+      if (const uint32_t button = mouseButtonFromName(value->get()); button != 0) {
+        return button;
+      }
+      warnAt(
+          node->source(),
+          R"(invalid {}.scroll_button "{}" (expected "MouseLeft", "MouseRight", "MouseMiddle", "MouseBack", or "MouseForward"))",
+          context, value->get()
+      );
+      return std::nullopt;
+    }
+
     std::optional<std::array<float, 6>> readCalibrationMatrix(Section& section, std::string_view context) {
       const toml::node* node = section.take("calibration_matrix");
       if (node == nullptr) {
@@ -406,13 +599,11 @@ namespace umbriel {
               overrides.widthPresets = std::move(*presets);
             }
             s.sub("scrolling", [&](Section& sc) {
-              if (const auto direction = readScrollingDirection(sc, layoutContext + ".scrolling")) {
-                overrides.scrolling.direction = direction;
-              }
-              sc.boolean("expand_single_column", overrides.scrolling.expandSingleColumn);
               sc.real("default_width_fraction", 0.1, 1.0, overrides.scrolling.defaultWidthFraction)
-                  .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip)
-                  .boolean("center_focused", overrides.scrolling.centerFocused);
+                  .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip);
+              if (const auto centerFocused = readCenterFocused(sc, layoutContext + ".scrolling")) {
+                overrides.scrolling.centerFocused = centerFocused;
+              }
             });
             s.sub("dwindle", [&](Section& sd) { sd.boolean("preserve_split", overrides.dwindle.preserveSplit); });
             s.sub("master", [&](Section& sm) {
@@ -420,20 +611,104 @@ namespace umbriel {
                 overrides.master.position = position;
               }
               sm.real("default_width_fraction", 0.1, 0.9, overrides.master.defaultWidthFraction)
-                  .boolean("new_on_top", overrides.master.newOnTop);
+                  .boolean("new_on_top", overrides.master.newOnTop)
+                  .boolean("new_becomes_master", overrides.master.newBecomesMaster);
             });
           },
           layoutContext
       );
     }
 
-    std::vector<std::string> numericWorkspaceNames(size_t count) {
-      std::vector<std::string> names;
-      names.reserve(count);
-      for (size_t i = 0; i < count; ++i) {
-        names.push_back(std::to_string(i + 1));
+    void readScratchpads(Section& root, Config& loaded) {
+      const toml::node* node = root.take("scratchpad");
+      if (node == nullptr) {
+        return;
       }
-      return names;
+      const auto* scratchpads = node->as_array();
+      if (scratchpads == nullptr) {
+        errorAt(node->source(), "scratchpad must be a [[scratchpad]] array of tables");
+        return;
+      }
+
+      int entryIndex = 0;
+      for (const auto& entry : *scratchpads) {
+        const auto* table = entry.as_table();
+        if (table == nullptr) {
+          errorAt(entry.source(), "scratchpad[{}] must be a table", entryIndex);
+          ++entryIndex;
+          continue;
+        }
+
+        const std::string context = std::format("scratchpad[{}]", entryIndex);
+        Section keys(*table, context, configStore().mutableDiagnostics());
+        const toml::node* nameNode = keys.take("name");
+        if (nameNode == nullptr) {
+          errorAt(entry.source(), "{} must set name", context);
+          ++entryIndex;
+          continue;
+        }
+        const auto name = nameNode->value<std::string>();
+        if (!name) {
+          errorAt(nameNode->source(), "{}.name must be a string", context);
+          ++entryIndex;
+          continue;
+        }
+        if (name->empty()) {
+          errorAt(nameNode->source(), "{}.name must not be empty", context);
+          ++entryIndex;
+          continue;
+        }
+        if (*name == "default") {
+          errorAt(nameNode->source(), "{}.name 'default' is reserved for the implicit scratchpad", context);
+          ++entryIndex;
+          continue;
+        }
+
+        const auto duplicate = std::ranges::find_if(loaded.scratchpads, [&](const ScratchpadConfig& scratchpad) {
+          return scratchpad.name == *name;
+        });
+        if (duplicate != loaded.scratchpads.end()) {
+          errorAt(nameNode->source(), "{}.name duplicates scratchpad name '{}'", context, *name);
+          ++entryIndex;
+          continue;
+        }
+
+        loaded.scratchpads.push_back({.name = *name});
+        ++entryIndex;
+      }
+    }
+
+    std::optional<std::string> scratchpadSelectorError(const Config& loaded, const Keybind& binding) {
+      const auto* scratchpad = payloadIf<ScratchpadArg>(binding);
+      if (scratchpad == nullptr) {
+        return std::nullopt;
+      }
+      if (loaded.scratchpads.empty()) {
+        if (!scratchpad->name.empty() && scratchpad->name != "default") {
+          return std::format("unknown scratchpad '{}'", scratchpad->name);
+        }
+        return std::nullopt;
+      }
+      if (scratchpad->name.empty()) {
+        return std::string{"scratchpad name required"};
+      }
+      const bool configured = std::ranges::any_of(loaded.scratchpads, [&](const ScratchpadConfig& candidate) {
+        return candidate.name == scratchpad->name;
+      });
+      if (configured) {
+        return std::nullopt;
+      }
+      return std::format("unknown scratchpad '{}'", scratchpad->name);
+    }
+
+    std::optional<std::string> scratchpadTargetError(const Config& loaded, std::string_view name) {
+      if (loaded.scratchpads.empty()) {
+        return name == "default" ? std::nullopt : std::optional{std::format("unknown scratchpad '{}'", name)};
+      }
+      const bool configured = std::ranges::any_of(loaded.scratchpads, [name](const ScratchpadConfig& candidate) {
+        return candidate.name == name;
+      });
+      return configured ? std::nullopt : std::optional{std::format("unknown scratchpad '{}'", name)};
     }
 
     WorkspaceConfig parseWorkspaceEntry(const toml::table& section, std::string_view context) {
@@ -519,7 +794,7 @@ namespace umbriel {
       }
 
       const auto sameSelector = [](const WorkspaceConfig& left, const WorkspaceConfig& right) {
-        if (left.output != right.output || left.index.has_value() != right.index.has_value()) {
+        if (!outputNamesEqual(left.output, right.output) || left.index.has_value() != right.index.has_value()) {
           return false;
         }
         return left.index ? left.index == right.index : left.name == right.name;
@@ -552,6 +827,60 @@ namespace umbriel {
         }
       }
 
+      const size_t sentinelCount = loaded.workspaces.emptyAbove ? 2 : 1;
+      const size_t namedCapacity = kMaxWorkspaces - sentinelCount;
+      const auto reportDynamicNameOverflow = [&](std::string_view output) {
+        std::vector<std::string> names;
+        for (const ParsedEntry& entry : entries) {
+          const WorkspaceConfig& ws = entry.ws;
+          if (ws.name.empty() || ws.index) {
+            continue;
+          }
+          const bool applies =
+              output.empty() ? ws.output.empty() : ws.output.empty() || outputNamesEqual(ws.output, output);
+          if (!applies || std::ranges::find(names, ws.name) != names.end()) {
+            continue;
+          }
+          names.push_back(ws.name);
+          if (names.size() <= namedCapacity) {
+            continue;
+          }
+          const std::string context = std::format("workspace[{}]", entry.arrayIndex);
+          const std::string target =
+              output.empty() ? "unscoped dynamic outputs" : std::format("dynamic output '{}'", output);
+          const std::string_view reservation = sentinelCount == 1
+              ? "one workspace slot is reserved for the empty sentinel"
+              : "two workspace slots are reserved for empty sentinels";
+          errorAt(
+              entry.source, "{} exceeds the limit of {} named workspaces for {} because {}", context, namedCapacity,
+              target, reservation
+          );
+          return true;
+        }
+        return false;
+      };
+
+      const bool globalOverflow = reportDynamicNameOverflow({});
+      if (!globalOverflow) {
+        std::vector<std::string> checkedOutputs;
+        for (const ParsedEntry& entry : entries) {
+          if (entry.ws.name.empty()
+              || entry.ws.output.empty()
+              || std::ranges::any_of(checkedOutputs, [&](const std::string& output) {
+                   return outputNamesEqual(output, entry.ws.output);
+                 })) {
+            continue;
+          }
+          checkedOutputs.push_back(entry.ws.output);
+          const auto configured = std::ranges::find_if(loaded.outputs, [&](const OutputRule& output) {
+            return outputNamesEqual(output.name, entry.ws.output);
+          });
+          if (configured == loaded.outputs.end() || !configured->workspaces) {
+            reportDynamicNameOverflow(entry.ws.output);
+          }
+        }
+      }
+
       for (auto& entry : entries) {
         loaded.workspaceRules.push_back(std::move(entry.ws));
       }
@@ -566,7 +895,24 @@ namespace umbriel {
             .color("accent_primary", colors.accentPrimary)
             .color("accent_secondary", colors.accentSecondary)
             .color("warning", colors.warning)
-            .color("error", colors.error);
+            .color("error", colors.error)
+            .color("insert_hint", colors.insertHint)
+            .color("backdrop", colors.backdrop)
+            .color("shadow", colors.shadow);
+
+        s.sub("border", [&](Section& border) {
+          border.color("focused", colors.border.focused)
+              .color("unfocused", colors.border.unfocused)
+              .color("scratchpad_focused", colors.border.scratchpadFocused)
+              .color("scratchpad_unfocused", colors.border.scratchpadUnfocused)
+              .color("outer", colors.border.outer);
+        });
+
+        s.sub("overview", [&](Section& overview) {
+          overview.color("background_tint", colors.overview.backgroundTint)
+              .color("workspace_background", colors.overview.workspaceBackground)
+              .color("badge", colors.overview.badge);
+        });
       });
     }
 
@@ -721,12 +1067,23 @@ namespace umbriel {
         }
       }
 
-      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
-        if (const toml::node* node = section.take("curve")) {
+      const auto readShader = [&](Section& section, auto& event) {
+        auto result = readAnimationShader(section, configStore().mutableDiagnostics());
+        event.shader = std::move(result.source);
+        for (auto& path : result.watchPaths) {
+          configStore().addWatchPath(std::move(path));
+        }
+      };
+      const auto readCurveKey = [&](Section& section, std::string_view key, std::string_view context,
+                                    AnimationCurve& target) {
+        if (const toml::node* node = section.take(key)) {
           if (auto curve = readCurveNode(node, context, animation.beziers, animation.springs)) {
             target = *curve;
           }
         }
+      };
+      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
+        readCurveKey(section, "curve", context, target);
       };
       const auto readStyle = [](Section& section, std::string& target,
                                 std::initializer_list<std::string_view> allowed) {
@@ -744,6 +1101,7 @@ namespace umbriel {
       };
 
       s.sub("windows_in", [&](Section& section) {
+        readShader(section, animation.windowsIn);
         section.boolean("enabled", animation.windowsIn.enabled)
             .integer("duration_ms", 1, 10000, animation.windowsIn.durationMs)
             .real("scale", 0.1, 1.0, animation.windowsIn.scale);
@@ -751,27 +1109,35 @@ namespace umbriel {
         readCurve(section, "animation.windows_in", animation.windowsIn.curve);
       });
       s.sub("windows_out", [&](Section& section) {
+        readShader(section, animation.windowsOut);
         section.boolean("enabled", animation.windowsOut.enabled)
             .integer("duration_ms", 1, 10000, animation.windowsOut.durationMs);
         readStyle(section, animation.windowsOut.style, {"fade", "slide"});
         readCurve(section, "animation.windows_out", animation.windowsOut.curve);
       });
       s.sub("windows_move", [&](Section& section) {
+        readShader(section, animation.windowsMove);
         section.boolean("enabled", animation.windowsMove.enabled)
             .integer("duration_ms", 1, 10000, animation.windowsMove.durationMs);
         readCurve(section, "animation.windows_move", animation.windowsMove.curve);
       });
       s.sub("workspaces", [&](Section& section) {
+        readShader(section, animation.workspaces);
         section.boolean("enabled", animation.workspaces.enabled)
             .integer("duration_ms", 1, 10000, animation.workspaces.durationMs);
         readCurve(section, "animation.workspaces", animation.workspaces.curve);
       });
       s.sub("overview", [&](Section& section) {
+        readShader(section, animation.overview);
         section.boolean("enabled", animation.overview.enabled)
             .integer("duration_ms", 1, 10000, animation.overview.durationMs);
         readCurve(section, "animation.overview", animation.overview.curve);
+        readCurveKey(
+            section, "workspace_curve", "animation.overview.workspace_curve", animation.overview.workspaceCurve
+        );
       });
       s.sub("scratchpad", [&](Section& section) {
+        readShader(section, animation.scratchpad);
         section.boolean("enabled", animation.scratchpad.enabled)
             .integer("duration_ms", 1, 10000, animation.scratchpad.durationMs)
             .real("dim", 0.0, 1.0, animation.scratchpad.dim)
@@ -782,17 +1148,20 @@ namespace umbriel {
         readCurve(section, "animation.scratchpad", animation.scratchpad.curve);
       });
       s.sub("border", [&](Section& section) {
+        readShader(section, animation.border);
         section.boolean("enabled", animation.border.enabled)
             .integer("duration_ms", 1, 10000, animation.border.durationMs);
         readCurve(section, "animation.border", animation.border.curve);
       });
       s.sub("dim_unfocused", [&](Section& section) {
+        readShader(section, animation.dimUnfocused);
         section.boolean("enabled", animation.dimUnfocused.enabled)
             .integer("duration_ms", 1, 10000, animation.dimUnfocused.durationMs)
             .real("dim", 0.0, 1.0, animation.dimUnfocused.dim);
         readCurve(section, "animation.dim_unfocused", animation.dimUnfocused.curve);
       });
       s.sub("layers", [&](Section& section) {
+        readShader(section, animation.layers);
         section.boolean("enabled", animation.layers.enabled)
             .integer("duration_ms", 1, 10000, animation.layers.durationMs);
         readCurve(section, "animation.layers", animation.layers.curve);
@@ -809,13 +1178,6 @@ namespace umbriel {
         s.integer("border_width", 0, 100, appearance.borderWidth)
             .integer("outer_border_width", 0, 100, appearance.outerBorderWidth)
             .integer("corner_radius", 0, 100, appearance.cornerRadius)
-            .color("border_focused", appearance.borderFocused)
-            .color("border_unfocused", appearance.borderUnfocused)
-            .color("scratchpad_border_focused", appearance.scratchpadBorderFocused)
-            .color("scratchpad_border_unfocused", appearance.scratchpadBorderUnfocused)
-            .color("outer_border_color", appearance.outerBorderColor)
-            .color("insert_hint_color", appearance.insertHintColor)
-            .color("backdrop_color", appearance.backdropColor)
             .real("drag_opacity", 0.0, 1.0, appearance.dragOpacity)
             .boolean("prefer_no_csd", appearance.preferNoCsd);
 
@@ -833,8 +1195,7 @@ namespace umbriel {
           shadow.boolean("enabled", appearance.shadow.enabled)
               .integer("softness", 0, 200, appearance.shadow.softness)
               .integer("offset_x", -200, 200, appearance.shadow.offsetX)
-              .integer("offset_y", -200, 200, appearance.shadow.offsetY)
-              .color("color", appearance.shadow.color);
+              .integer("offset_y", -200, 200, appearance.shadow.offsetY);
         });
       });
     }
@@ -842,22 +1203,11 @@ namespace umbriel {
     void readOverview(Section& root, Config& loaded) {
       root.sub("overview", [&](Section& s) {
         s.real("zoom", 0.1, 0.75, loaded.overview.zoom)
+            .real("scroll_factor_horizontal", 0.1, 10.0, loaded.overview.scrollFactorHorizontal)
+            .real("scroll_factor_vertical", 0.1, 10.0, loaded.overview.scrollFactorVertical)
             .boolean("background_blur", loaded.overview.backgroundBlur)
-            .color("background_tint", loaded.overview.backgroundTint)
-            .color("workspace_background", loaded.overview.workspaceBackground)
+            .boolean("workspace_wallpaper", loaded.overview.workspaceWallpaper)
             .boolean("shortcuts", loaded.overview.shortcuts);
-
-        if (const toml::node* badgeNode = s.take("badge_color")) {
-          const auto value = badgeNode->value<std::string>();
-          std::array<float, 4> parsed{};
-          if (!value) {
-            warnAt(badgeNode->source(), "ignoring overview.badge_color (expected color string)");
-          } else if (!parseColor(*value, parsed)) {
-            warnAt(badgeNode->source(), "ignoring overview.badge_color (invalid color '{}')", *value);
-          } else {
-            loaded.overview.badgeColor = parsed;
-          }
-        }
 
         const toml::node* node = s.take("shortcut_keys");
         if (node == nullptr) {
@@ -916,6 +1266,10 @@ namespace umbriel {
             warnAt(node->source(), R"(invalid hot_corners.{}.action "{}")", name, *value);
             return;
           }
+          if (const auto invalid = scratchpadSelectorError(loaded, bind)) {
+            warnAt(node->source(), "ignoring hot_corners.{}.action ({})", name, *invalid);
+            return;
+          }
           corner.action = std::move(bind);
         };
 
@@ -939,13 +1293,11 @@ namespace umbriel {
           loaded.layout.widthPresets = std::move(*presets);
         }
         s.sub("scrolling", [&](Section& sc) {
-          if (const auto direction = readScrollingDirection(sc, "layout.scrolling")) {
-            loaded.layout.scrolling.direction = *direction;
-          }
-          sc.boolean("expand_single_column", loaded.layout.scrolling.expandSingleColumn);
           sc.real("default_width_fraction", 0.1, 1.0, loaded.layout.scrolling.defaultWidthFraction)
-              .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip)
-              .boolean("center_focused", loaded.layout.scrolling.centerFocused);
+              .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip);
+          if (const auto centerFocused = readCenterFocused(sc, "layout.scrolling")) {
+            loaded.layout.scrolling.centerFocused = *centerFocused;
+          }
         });
         s.sub("dwindle", [&](Section& sd) { sd.boolean("preserve_split", loaded.layout.dwindle.preserveSplit); });
         s.sub("master", [&](Section& sm) {
@@ -953,7 +1305,8 @@ namespace umbriel {
             loaded.layout.master.position = *position;
           }
           sm.real("default_width_fraction", 0.1, 0.9, loaded.layout.master.defaultWidthFraction)
-              .boolean("new_on_top", loaded.layout.master.newOnTop);
+              .boolean("new_on_top", loaded.layout.master.newOnTop)
+              .boolean("new_becomes_master", loaded.layout.master.newBecomesMaster);
         });
       });
     }
@@ -995,6 +1348,28 @@ namespace umbriel {
             .boolean("honor_restored_maximize", loaded.general.honorRestoredMaximize)
             .strings("autostart", loaded.general.autostart);
       });
+    }
+
+    void readDrm(Section& root, Config& loaded) {
+      const toml::node* node = root.take("drm");
+      if (node == nullptr) {
+        return;
+      }
+      const toml::table* table = node->as_table();
+      if (table == nullptr) {
+        errorAt(node->source(), "drm must be a table");
+        return;
+      }
+
+      for (const auto& [key, value] : *table) {
+        if (key == "ignored_devices") {
+          readDrmSelectorList(value, "drm.ignored_devices", loaded.drm.ignoredDevices, readDrmPath);
+        } else if (key == "ignored_pci_addresses") {
+          readDrmSelectorList(value, "drm.ignored_pci_addresses", loaded.drm.ignoredPciAddresses, readDrmPciAddress);
+        } else {
+          errorAt(value.source(), "unknown key drm.{}", key.str());
+        }
+      }
     }
 
     void readEnvironment(Section& root, Config& loaded) {
@@ -1120,8 +1495,11 @@ namespace umbriel {
             .boolean("tap", device.tap)
             .boolean("natural_scroll", device.naturalScroll)
             .real("sensitivity", -1.0, 1.0, device.sensitivity)
-            .boolean("disable_while_typing", device.disableWhileTyping);
+            .boolean("disable_while_typing", device.disableWhileTyping)
+            .boolean("scroll_button_lock", device.scrollButtonLock);
         device.accelProfile = readAccelProfile(keys, "accel_profile", "input.device");
+        device.clickMethod = readClickMethod(keys, "input.device");
+        device.scrollButton = readScrollButton(keys, "input.device");
 
         if (!validName) {
           continue;
@@ -1158,6 +1536,13 @@ namespace umbriel {
       auto& in = loaded.input;
       root.sub("input", [&](Section& s) {
         s.boolean("middle_click_paste", in.middleClickPaste);
+        if (const toml::node* node = s.take("window_drag_toggle")) {
+          if (const auto value = readWindowDragToggle(*node)) {
+            in.windowDragToggle = *value;
+          } else {
+            warnAt(node->source(), R"(ignoring input.window_drag_toggle (expected "none", "floating", or "pinned"))");
+          }
+        }
         s.sub("keyboard", [&](Section& k) {
           k.text("layout", in.keyboard.layout)
               .text("variant", in.keyboard.variant)
@@ -1187,14 +1572,17 @@ namespace umbriel {
               .boolean("disable_while_typing", in.touchpad.disableWhileTyping)
               .boolean("disable_on_external_mouse", in.touchpad.disableOnExternalMouse);
           in.touchpad.accelProfile = readAccelProfile(t, "accel_profile", "input.touchpad");
+          in.touchpad.clickMethod = readClickMethod(t, "input.touchpad");
         });
         s.sub("mouse", [&](Section& m) {
           m.boolean("natural_scroll", in.mouse.naturalScroll)
               .real("sensitivity", -1.0, 1.0, in.mouse.sensitivity)
-              .integer("scroll_wheel_step", 1, 1000, in.mouse.scrollWheelStep);
+              .integer("scroll_wheel_step", 1, 1000, in.mouse.scrollWheelStep)
+              .boolean("scroll_button_lock", in.mouse.scrollButtonLock);
           if (const auto profile = readAccelProfile(m, "accel_profile", "input.mouse")) {
             in.mouse.accelProfile = *profile;
           }
+          in.mouse.scrollButton = readScrollButton(m, "input.mouse");
         });
         s.sub("tablet", [&](Section& t) {
           t.boolean("enabled", in.tablet.enabled)
@@ -1255,6 +1643,22 @@ namespace umbriel {
         keys.boolean("enabled", rule.enabled)
             .boolean("tearing", rule.allowTearing)
             .boolean("direct_scanout", rule.directScanout);
+        keys.sub("layout", [&](Section& layout) {
+          layout.sub("scrolling", [&](Section& scrolling) {
+            scrolling.real("default_width_fraction", 0.1, 1.0, rule.layout.scrolling.defaultWidthFraction);
+          });
+        });
+        keys.integer("min_workspaces", 1, static_cast<int>(kMaxWorkspaces), rule.minWorkspaces);
+        if (const toml::node* axisNode = keys.take("workspace_axis")) {
+          const auto value = axisNode->value<std::string>();
+          if (value == "vertical") {
+            rule.workspaceAxis = WorkspaceAxis::Vertical;
+          } else if (value == "horizontal") {
+            rule.workspaceAxis = WorkspaceAxis::Horizontal;
+          } else {
+            warnAt(axisNode->source(), "ignoring output.{}.workspace_axis (expected vertical|horizontal)", name);
+          }
+        }
         if (const toml::node* workspacesNode = keys.take("workspaces")) {
           if (const auto count = workspacesNode->value<std::int64_t>()) {
             if (*count < 1 || *count > static_cast<std::int64_t>(kMaxWorkspaces)) {
@@ -1262,7 +1666,7 @@ namespace umbriel {
                   workspacesNode->source(), "output.{}.workspaces must be an integer from 1 to {}", name, kMaxWorkspaces
               );
             } else {
-              rule.workspaces = numericWorkspaceNames(static_cast<size_t>(*count));
+              rule.workspaces = static_cast<size_t>(*count);
             }
           } else if (const auto* names = workspacesNode->as_array()) {
             bool valid = true;
@@ -1303,6 +1707,9 @@ namespace umbriel {
                 workspacesNode->source(), R"(output.{}.workspaces must be a count, a name array, or "dynamic")", name
             );
           }
+        }
+        if (const toml::node* minNode = keys.node("min_workspaces"); minNode != nullptr && rule.workspaces) {
+          errorAt(minNode->source(), "output.{}.min_workspaces requires dynamic workspaces", name);
         }
 
         if (const toml::node* modeNode = keys.take("mode")) {
@@ -1414,6 +1821,7 @@ namespace umbriel {
         bool hasSubmapAfter = false;
         bool repeatBind = true;
         bool allowWhenLocked = false;
+        int cooldownMs = 0;
 
         if (const auto* tbl = entry.as_table()) {
           Section bind(*tbl, "keybinds." + chord, configStore().mutableDiagnostics());
@@ -1421,6 +1829,7 @@ namespace umbriel {
           // bad action must not also be told its `repeat` key is unknown.
           bind.boolean("repeat", repeatBind);
           bind.boolean("allow_when_locked", allowWhenLocked);
+          bind.integer("cooldown_ms", 0, 3600000, cooldownMs);
           const toml::node* submapNode = bind.node("submap");
           hasSubmapAfter = submapNode != nullptr && submapNode->is_string();
           bind.text("submap", submapAfter);
@@ -1466,8 +1875,14 @@ namespace umbriel {
         }
         binding.repeat = repeatBind && !binding.modifierOnly && !binding.submapAfter.has_value();
         binding.allowWhenLocked = allowWhenLocked;
+        binding.cooldownMs = cooldownMs;
         if (!parseAction(actionStr, binding)) {
           warnAt(key.source(), "ignoring keybind '{}' (unknown action '{}')", chord, actionStr);
+          continue;
+        }
+
+        if (const auto invalid = scratchpadSelectorError(loaded, binding)) {
+          warnAt(key.source(), "ignoring keybind '{}' ({})", chord, *invalid);
           continue;
         }
 
@@ -1478,6 +1893,28 @@ namespace umbriel {
         configured.push_back(binding);
         std::erase_if(loaded.keybinds, [&](const Keybind& existing) { return sameChord(existing, binding); });
         loaded.keybinds.push_back(std::move(binding));
+      }
+    }
+
+    // libinput swallows the scroll button while it turns motion into scrolling, but a press released without any
+    // motion still reaches the compositor as a click, so a bind on that button fires only in that case.
+    void warnScrollButtonBinds(const Config& loaded) {
+      const auto report = [&loaded](std::optional<uint32_t> button, std::string_view context) {
+        if (!button) {
+          return;
+        }
+        if (std::ranges::none_of(loaded.keybinds, [&](const Keybind& bind) { return bind.mouseButton == *button; })) {
+          return;
+        }
+        const char* name = mouseButtonName(*button);
+        warnNoSrc(
+            "{} claims {} for scrolling, so binds on it fire only when it is released without motion", context,
+            name != nullptr ? name : "it"
+        );
+      };
+      report(loaded.input.mouse.scrollButton, "input.mouse.scroll_button");
+      for (const Config::Input::Device& device : loaded.input.devices) {
+        report(device.scrollButton, "input.device.scroll_button");
       }
     }
 
@@ -1564,6 +2001,46 @@ namespace umbriel {
                 rule.matchFocused = focusedNode->value<bool>();
               } else {
                 warnAt(focusedNode->source(), "ignoring window_rule.match.is_focused (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* floatingNode = matchKeys.take("is_floating")) {
+              if (floatingNode->is_boolean()) {
+                rule.matchFloating = floatingNode->value<bool>();
+              } else {
+                warnAt(floatingNode->source(), "ignoring window_rule.match.is_floating (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* pinnedNode = matchKeys.take("is_pinned")) {
+              if (pinnedNode->is_boolean()) {
+                rule.matchPinned = pinnedNode->value<bool>();
+              } else {
+                warnAt(pinnedNode->source(), "ignoring window_rule.match.is_pinned (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* scratchpadNode = matchKeys.take("is_scratchpad")) {
+              if (scratchpadNode->is_boolean()) {
+                rule.matchScratchpad = scratchpadNode->value<bool>();
+              } else {
+                warnAt(scratchpadNode->source(), "ignoring window_rule.match.is_scratchpad (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* aloneNode = matchKeys.take("is_alone")) {
+              if (aloneNode->is_boolean()) {
+                rule.matchAlone = aloneNode->value<bool>();
+              } else {
+                warnAt(aloneNode->source(), "ignoring window_rule.match.is_alone (expected boolean)");
+                valid = false;
+              }
+            }
+            if (const toml::node* atStartupNode = matchKeys.take("at_startup")) {
+              if (atStartupNode->is_boolean()) {
+                rule.matchAtStartup = atStartupNode->value<bool>();
+              } else {
+                warnAt(atStartupNode->source(), "ignoring window_rule.match.at_startup (expected boolean)");
                 valid = false;
               }
             }
@@ -1712,11 +2189,33 @@ namespace umbriel {
         }
 
         if (const toml::node* n = keys.take("default_workspace")) {
-          const auto value = n->value<std::int64_t>();
-          if (!value || *value < 1 || *value > static_cast<std::int64_t>(kMaxWorkspaces)) {
-            warnAt(n->source(), "ignoring window_rule.default_workspace (expected integer 1-{})", kMaxWorkspaces);
+          if (const auto value = n->value<std::int64_t>()) {
+            if (*value < 1 || *value > static_cast<std::int64_t>(kMaxWorkspaces)) {
+              warnAt(
+                  n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",
+                  kMaxWorkspaces
+              );
+            } else {
+              rule.defaultWorkspace = WorkspaceReference{WorkspaceIndex{static_cast<size_t>(*value)}};
+            }
+          } else if (const auto value = n->value<std::string>(); value && !value->empty()) {
+            rule.defaultWorkspace = WorkspaceReference{WorkspaceName{*value}};
           } else {
-            rule.defaultWorkspace = static_cast<int>(*value);
+            warnAt(
+                n->source(), "ignoring window_rule.default_workspace (expected integer 1-{} or non-empty string)",
+                kMaxWorkspaces
+            );
+          }
+        }
+
+        if (const toml::node* n = keys.take("default_scratchpad")) {
+          const auto value = n->value<std::string>();
+          if (!value || value->empty()) {
+            warnAt(n->source(), "ignoring window_rule.default_scratchpad (expected non-empty string)");
+          } else if (const auto invalid = scratchpadTargetError(loaded, *value)) {
+            warnAt(n->source(), "ignoring window_rule.default_scratchpad ({})", *invalid);
+          } else {
+            rule.defaultScratchpad = *value;
           }
         }
 
@@ -1874,17 +2373,45 @@ namespace umbriel {
       }
     }
 
-    bool parseInto(Config& out) {
-      ConfigStore& store = configStore();
-      store.beginLoad();
+    enum class ConfigParseOutcome : uint8_t {
+      Loaded,
+      Missing,
+      DefaultsAllowed,
+      Fatal,
+    };
 
-      std::error_code error;
-      if (!std::filesystem::is_regular_file(store.rootPath(), error) || error) {
+    bool hasRequestedDrmPolicy(const toml::table& root) {
+      const toml::node* node = root.get("drm");
+      if (node == nullptr) {
         return false;
       }
+      const toml::table* table = node->as_table();
+      return table == nullptr || !table->empty();
+    }
 
+    ConfigParseOutcome parseInto(
+        Config& out, const std::filesystem::path& rootPath, const std::vector<std::filesystem::path>& watchPaths
+    ) {
+      ConfigStore& store = configStore();
+      store.beginLoad(watchPaths);
+
+      const ConfigPathProbe root = probeConfigPath(rootPath);
+      if (root.kind == ConfigPathKind::Missing) {
+        return ConfigParseOutcome::Missing;
+      }
+      if (root.kind == ConfigPathKind::Unavailable) {
+        const std::string reason = root.error ? root.error.message() : "not a regular file";
+        emitDiag(
+            ConfigDiagnostic::Severity::Error, nullptr,
+            std::format("cannot inspect config file {}: {}", rootPath.string(), reason)
+        );
+        return ConfigParseOutcome::Fatal;
+      }
+
+      bool drmPolicyRequested = false;
       try {
-        auto result = configmerge::mergeWithIncludes(store.rootPath());
+        auto result = configmerge::mergeWithIncludes(rootPath);
+        drmPolicyRequested = hasRequestedDrmPolicy(result.merged);
         store.setMissingIncludes(result.missingIncludes);
         for (auto& diagnostic : result.diagnostics) {
           store.addDiagnostic(std::move(diagnostic));
@@ -1892,8 +2419,16 @@ namespace umbriel {
         for (const auto& path : result.loadedFiles) {
           store.addWatchPath(path);
         }
-        if (result.hadParseError) {
-          return false;
+        if ((result.missingIncludes || result.missingOptionalIncludes) && result.merged.contains("drm")) {
+          emitDiag(
+              ConfigDiagnostic::Severity::Error, nullptr, "cannot safely load DRM policy while an include is missing"
+          );
+          return ConfigParseOutcome::Fatal;
+        }
+        if (result.hadError) {
+          // Invalid syntax or include directives can hide DRM policy intent.
+          // Do not silently start with defaults or a partial exclusion list.
+          return ConfigParseOutcome::Fatal;
         }
 
         Config loaded;
@@ -1903,9 +2438,11 @@ namespace umbriel {
           readAnimation(root, loaded);
           readAppearance(root, loaded);
           readOverview(root, loaded);
+          readScratchpads(root, loaded);
           readHotCorners(root, loaded);
           readLayout(root, loaded);
           readGeneral(root, loaded);
+          readDrm(root, loaded);
           readEnvironment(root, loaded);
           readEvents(root, loaded);
           readWorkspaceSettings(root, loaded);
@@ -1916,6 +2453,7 @@ namespace umbriel {
           readLayerRules(root, loaded);
           readSecurityContextRules(root, loaded);
           readWorkspaces(root, loaded);
+          warnScrollButtonBinds(loaded);
         }
 
         // Reject config if any error-level diagnostics were emitted.
@@ -1923,17 +2461,17 @@ namespace umbriel {
           return d.severity == ConfigDiagnostic::Severity::Error;
         });
         if (hasErrors) {
-          return false;
+          return drmPolicyRequested ? ConfigParseOutcome::Fatal : ConfigParseOutcome::DefaultsAllowed;
         }
 
         out = std::move(loaded);
-        return true;
+        return ConfigParseOutcome::Loaded;
       } catch (const std::exception& exception) {
         emitDiag(ConfigDiagnostic::Severity::Error, nullptr, std::format("config load error: {}", exception.what()));
       } catch (...) {
         emitDiag(ConfigDiagnostic::Severity::Error, nullptr, "config load error: unknown error");
       }
-      return false;
+      return drmPolicyRequested ? ConfigParseOutcome::Fatal : ConfigParseOutcome::DefaultsAllowed;
     }
 
   } // namespace
@@ -1957,47 +2495,71 @@ namespace umbriel {
 
   bool configHasMissingIncludes() { return configStore().missingIncludes(); }
 
-  namespace {
-    // Whether the root config actually exists on disk right now, which is not the
-    // same as whether parsing succeeded: defaults are a valid way to run.
-    bool rootFileMissing(const std::filesystem::path& root) {
-      std::error_code ec;
-      return !std::filesystem::is_regular_file(root, ec) || static_cast<bool>(ec);
+  bool ConfigStore::load(const char* explicitPath) {
+    ConfigSelection selection;
+    if (explicitPath != nullptr) {
+      m_implicitCandidates.clear();
+      selection.root = std::filesystem::path(explicitPath);
+      selection.watchPaths.push_back(selection.root);
+    } else {
+      m_implicitCandidates = defaultConfigCandidates();
+      selection = selectDefaultConfig(m_implicitCandidates);
     }
-  } // namespace
-
-  void ConfigStore::load(const char* explicitPath) {
-    setRootPath(
-        explicitPath == nullptr ? defaultConfigPath() : std::filesystem::path(explicitPath), explicitPath != nullptr
-    );
+    setRootPath(selection.root, explicitPath != nullptr);
 
     Config loaded;
     loaded.keybinds = defaultKeybinds();
-    if (!parseInto(loaded) && rootFileMissing(m_rootPath)) {
+    const ConfigParseOutcome outcome = parseInto(loaded, selection.root, selection.watchPaths);
+    const bool missing = outcome == ConfigParseOutcome::Missing;
+    if (missing) {
       if (m_explicitPath) {
         emitDiag(
-            ConfigDiagnostic::Severity::Error, nullptr, std::format("config file not found: {}", m_rootPath.string())
+            ConfigDiagnostic::Severity::Error, nullptr,
+            std::format("config file not found: {}", selection.root.string())
         );
       } else {
-        kLog.info("no config file found: {}, using defaults", m_rootPath.string());
+        kLog.info("no config file found: {}, using defaults", selection.root.string());
       }
     }
     sortDiagnostics();
-    (void)commit(std::move(loaded), rootFileMissing(m_rootPath));
+    if (outcome == ConfigParseOutcome::Fatal || (missing && m_explicitPath)) {
+      return false;
+    }
+    (void)commit(std::move(loaded), selection.root, missing);
+    return true;
   }
 
   ConfigReloadResult ConfigStore::reload() {
+    ConfigSelection selection;
+    if (m_explicitPath) {
+      selection.root = m_rootPath;
+      selection.watchPaths.push_back(selection.root);
+    } else {
+      selection = selectDefaultConfig(m_implicitCandidates);
+    }
+
     Config loaded;
-    const bool ok = parseInto(loaded);
+    loaded.keybinds = defaultKeybinds();
+    const ConfigParseOutcome outcome = parseInto(loaded, selection.root, selection.watchPaths);
+    const bool missing = outcome == ConfigParseOutcome::Missing;
+    if (m_explicitPath && missing) {
+      emitDiag(
+          ConfigDiagnostic::Severity::Error, nullptr, std::format("config file not found: {}", selection.root.string())
+      );
+    }
     sortDiagnostics();
-    if (!ok) {
+    if (outcome != ConfigParseOutcome::Loaded) {
+      if (!m_explicitPath && !selection.found && missing) {
+        kLog.info("no config file found: {}, using defaults", selection.root.string());
+        return commit(std::move(loaded), selection.root, true);
+      }
       kLog.warn("config reload failed; keeping previous configuration");
       return {};
     }
-    return commit(std::move(loaded), rootFileMissing(m_rootPath));
+    return commit(std::move(loaded), selection.root, false);
   }
 
-  void loadConfig(const char* explicitPath) { configStore().load(explicitPath); }
+  bool loadConfig(const char* explicitPath) { return configStore().load(explicitPath); }
 
   ConfigReloadResult reloadConfig() { return configStore().reload(); }
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # A modified middle-button bind pans the scrolling layout continuously and settles it through the same path as a
-# three-finger gesture. In overview, an unmodified middle drag steps workspace rows while a stationary middle click
-# remains the close gesture; delaying close until release lets motion disambiguate the two without swallowing ordinary
-# middle clicks outside the overview.
+# three-finger gesture, on the active workspace or on the overview row under the pointer. In overview, an unmodified
+# middle drag locks to the dominant axis: along the workspace axis it steps rows, across it it pans that row's strip.
+# A stationary middle click remains the close gesture; delaying close until release lets motion disambiguate the two
+# without swallowing ordinary middle clicks outside the overview.
 set -euo pipefail
 
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
 readonly BTN_MIDDLE=274
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
 
@@ -17,8 +18,10 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 enabled = false
 
 [layout.scrolling]
-direction = "horizontal"
 default_width_fraction = 0.5
+
+[output.HEADLESS-1]
+workspace_axis = "vertical"
 
 [keybinds]
 "Mod+MouseMiddle" = "layout-scroll-drag"
@@ -45,7 +48,7 @@ wait_for_count() {
 wait_for_a_visible() {
   local field=$1
   local value=-1
-  for _ in $(seq 20); do
+  for _ in $(seq 40); do
     value=$("$UMBRIEL" windows --json | jq -r --arg field "$field" '.[] | select(.title == "A") | .[$field]')
     ((value >= 0)) && {
       echo "$value"
@@ -70,7 +73,7 @@ before_x=$(wait_for_a_visible x)
 
 pointer move 900 360 mod logo press "$BTN_MIDDLE" move 850 360 move 350 360 release "$BTN_MIDDLE" mod none
 after_x=$before_x
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   after_x=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "A") | .x')
   ((after_x < before_x)) && break
   sleep 0.1
@@ -80,11 +83,11 @@ if ((after_x >= before_x)); then
   exit 1
 fi
 
-# Reload the same workspace vertically and verify that the drag follows the configured strip axis.
-sed -i 's/^direction = "horizontal"$/direction = "vertical"/' "$UMBRIEL_CONFIG"
+# Arrange the workspaces horizontally: the strip turns vertical, and the drag must follow it.
+sed -i 's/^workspace_axis = "vertical"$/workspace_axis = "horizontal"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 vertical_rows=0
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   vertical_rows=$("$UMBRIEL" windows --json | jq '[.[].y] | unique | length')
   ((vertical_rows > 1)) && break
   sleep 0.1
@@ -97,7 +100,7 @@ fi
 before_y=$(wait_for_a_visible y)
 pointer move 640 650 mod logo press "$BTN_MIDDLE" move 640 600 move 640 100 release "$BTN_MIDDLE" mod none
 after_y=$before_y
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   after_y=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "A") | .y')
   ((after_y < before_y)) && break
   sleep 0.1
@@ -107,11 +110,40 @@ if ((after_y >= before_y)); then
   exit 1
 fi
 
+# With the workspaces on X, the overview middle drag steps rows on X and pans the strip on Y. Both start from a known
+# press point: the axis is locked from the travel of the first motion.
+pointer move 640 360
+"$UMBRIEL" msg overview-open > /dev/null
+strip_before_y=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "A") | .y')
+pointer press "$BTN_MIDDLE" move 640 400 move 640 620 release "$BTN_MIDDLE"
+strip_after_y=$strip_before_y
+for _ in $(seq 20); do
+  strip_after_y=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "A") | .y')
+  ((strip_after_y > strip_before_y)) && break
+  sleep 0.1
+done
+if ((strip_after_y <= strip_before_y)); then
+  echo "bare middle drag across the workspace axis did not pan the overview strip: A y $strip_before_y -> $strip_after_y"
+  exit 1
+fi
+pointer move 640 360
+pointer press "$BTN_MIDDLE" move 610 360 move 430 360 release "$BTN_MIDDLE"
+for _ in $(seq 40); do
+  [[ $("$WORKSPACE") == 2 ]] && break
+  sleep 0.1
+done
+if [[ $("$WORKSPACE") != 2 ]]; then
+  echo "horizontal overview middle drag did not step to the next workspace: $("$WORKSPACE")"
+  exit 1
+fi
+"$UMBRIEL" msg overview-close > /dev/null
+"$UMBRIEL" msg workspace-switch:1 > /dev/null
+
 # Restore the horizontal presentation and first column so a known card sits under the overview test point.
-sed -i 's/^direction = "vertical"$/direction = "horizontal"/' "$UMBRIEL_CONFIG"
+sed -i 's/^workspace_axis = "horizontal"$/workspace_axis = "vertical"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 horizontal_rows=0
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   horizontal_rows=$("$UMBRIEL" windows --json | jq '[.[].y] | unique | length')
   ((horizontal_rows == 1)) && break
   sleep 0.1
@@ -159,7 +191,7 @@ fi
 pointer move 560 360
 pointer press "$BTN_MIDDLE" move 560 330 move 560 150 release "$BTN_MIDDLE"
 
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   [[ $("$WORKSPACE") == 2 ]] && break
   sleep 0.1
 done
@@ -176,7 +208,7 @@ fi
 # deferred: the press alone leaves the card mapped and the matching release
 # sends exactly one close request.
 pointer press "$BTN_MIDDLE" move 560 180 move 560 360 release "$BTN_MIDDLE"
-for _ in $(seq 20); do
+for _ in $(seq 40); do
   [[ $("$WORKSPACE") == 1 ]] && break
   sleep 0.1
 done

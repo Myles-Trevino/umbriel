@@ -3,7 +3,7 @@
 # workspace becomes inactive while its process and protocol objects stay alive.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_IDLE_INHIBIT_CLIENT:-./build-debug/idle-inhibit-client}"
+readonly CLIENT="${UMBRIEL_IDLE_INHIBIT_CLIENT:-./build-debug/tests/idle-inhibit-client}"
 CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/idle-inhibit-client.log"
 
 "$CLIENT" > "$CLIENT_LOG" 2>&1 &

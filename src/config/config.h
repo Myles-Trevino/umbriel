@@ -1,5 +1,5 @@
 #pragma once
-
+#include "config/animation_shader.h"
 #include "config/config_diag.h"
 #include "config/keybind_parse.h"
 #include "config/value_parse.h"
@@ -15,12 +15,19 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace umbriel {
 
-  inline constexpr size_t kMaxWorkspaces = 64;
   struct ConfigReloadResult;
+
+  // Direction along which an output's workspaces are arranged. Scrolling layouts
+  // always scroll perpendicular to it.
+  enum class WorkspaceAxis {
+    Vertical,
+    Horizontal,
+  };
 
   enum class ModifierKey {
     Super,
@@ -49,9 +56,7 @@ namespace umbriel {
     struct Scrolling {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> centerUnderfullStrip;
-      std::optional<bool> centerFocused;
-      std::optional<ScrollingDirection> direction;
-      std::optional<bool> expandSingleColumn;
+      std::optional<CenterFocusedColumn> centerFocused;
       bool operator==(const Scrolling&) const = default;
     } scrolling;
     struct Dwindle {
@@ -61,6 +66,7 @@ namespace umbriel {
     struct Master {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> newOnTop;
+      std::optional<bool> newBecomesMaster;
       std::optional<MasterPosition> position;
       bool operator==(const Master&) const = default;
     } master;
@@ -68,13 +74,21 @@ namespace umbriel {
     bool operator==(const WorkspaceLayoutOverrides&) const = default;
   };
 
-  // Layout rule parsed from a [[workspace]] entry. Exactly one selector is set.
+  // Rule parsed from a [[workspace]] entry. Exactly one selector is set. A
+  // name also declares a persistent member of matching dynamic inventories.
   struct WorkspaceConfig {
     std::string name;
     std::string output;       // optional output selector
     std::optional<int> index; // optional 1-based position selector
     WorkspaceLayoutOverrides layout;
     bool operator==(const WorkspaceConfig&) const = default;
+  };
+
+  // A user-defined scratchpad. An empty list means that Umbriel provides the
+  // implicit scratchpad named "default" instead.
+  struct ScratchpadConfig {
+    std::string name;
+    bool operator==(const ScratchpadConfig&) const = default;
   };
 
   // Fully resolved layout config. Owned by each Workspace.
@@ -86,10 +100,9 @@ namespace umbriel {
     struct Scrolling {
       std::optional<double> defaultWidthFraction;
       bool centerUnderfullStrip = true;
-      bool centerFocused = false;
+      CenterFocusedColumn centerFocused = CenterFocusedColumn::Never;
       // Axis-agnostic layout state is preserved when config reload changes direction.
       ScrollingDirection direction = ScrollingDirection::Horizontal;
-      bool expandSingleColumn = false;
       bool operator==(const Scrolling&) const = default;
     } scrolling;
     struct Dwindle {
@@ -99,6 +112,7 @@ namespace umbriel {
     struct Master {
       double defaultWidthFraction = 0.55;
       bool newOnTop = true;
+      bool newBecomesMaster = false;
       MasterPosition position = MasterPosition::Left;
       bool operator==(const Master&) const = default;
     } master;
@@ -108,14 +122,18 @@ namespace umbriel {
     bool operator==(const ResolvedLayoutConfig&) const = default;
   };
 
-  // Resolved workspace entry for a specific output (name + layout config).
+  // Resolved workspace entry for a specific output. Anonymous entries use
+  // their current one-based position as the protocol label; `named` keeps an
+  // explicit configured name stable across inventory reconciliation.
   struct ResolvedWorkspace {
     std::string name;
+    bool named = false;
     ResolvedLayoutConfig layout;
     bool operator==(const ResolvedWorkspace&) const = default;
   };
   struct ResolvedWorkspaceSet {
     bool dynamic = false;
+    size_t omittedNamed = 0;
     std::vector<ResolvedWorkspace> workspaces;
     bool operator==(const ResolvedWorkspaceSet&) const = default;
   };
@@ -131,6 +149,20 @@ namespace umbriel {
     Global,
     Window,
   };
+
+  // How a touchpad turns a physical press into a button: soft button areas along
+  // the bottom edge, or the finger count at press time.
+  enum class ClickMethod : uint8_t {
+    ButtonAreas,
+    ClickFinger,
+  };
+
+  enum class WindowDragToggle : uint8_t {
+    None,
+    Floating,
+    Pinned,
+  };
+
   enum class HdrMode {
     Off,
     On,
@@ -184,8 +216,24 @@ namespace umbriel {
     bool directScanout = true;
     HdrMode hdr = HdrMode::Off;
     float sdrWhite = 203.0F;
-    // Explicit workspace inventory. Omitted means dynamic workspaces.
-    std::optional<std::vector<std::string>> workspaces;
+    // Explicit workspace inventory. A count creates anonymous positional
+    // members, while a string list creates named members. Omitted is dynamic.
+    using WorkspaceInventory = std::variant<size_t, std::vector<std::string>>;
+    std::optional<WorkspaceInventory> workspaces;
+    // Smallest workspace count a dynamic output keeps. Rejected alongside an
+    // explicit inventory, which already states an exact count.
+    int minWorkspaces = 1;
+    // Direction this output's workspaces are arranged along. Scrolling layouts on
+    // it scroll perpendicular to this.
+    WorkspaceAxis workspaceAxis = WorkspaceAxis::Vertical;
+    struct Layout {
+      struct Scrolling {
+        // Initial strip-axis extent inherited by workspaces on this output.
+        std::optional<double> defaultWidthFraction;
+        bool operator==(const Scrolling&) const = default;
+      } scrolling;
+      bool operator==(const Layout&) const = default;
+    } layout;
     bool operator==(const OutputRule&) const = default;
   };
 
@@ -229,6 +277,18 @@ namespace umbriel {
     return "none";
   }
 
+  // Window state the `match.is_*` selectors test. Every field is a live
+  // property, so a change to any of them re-selects a window's rules.
+  struct WindowRuleState {
+    bool focused = false;
+    bool floating = false;
+    bool pinned = false;
+    bool scratchpad = false;
+    bool alone = false;
+
+    [[nodiscard]] bool operator==(const WindowRuleState& other) const = default;
+  };
+
   struct WindowRule {
     std::string appIdPattern;
     std::string titlePattern;
@@ -238,13 +298,19 @@ namespace umbriel {
     std::regex xdgTagRegex;
     std::optional<ContentType> matchContentType;
     std::optional<bool> matchFocused;
+    std::optional<bool> matchFloating;
+    std::optional<bool> matchPinned;
+    std::optional<bool> matchScratchpad;
+    std::optional<bool> matchAlone;
+    std::optional<bool> matchAtStartup;
     std::optional<std::string> defaultOutput;
     std::optional<bool> defaultFloating;
     std::optional<std::array<int, 2>> defaultSize; // [width, height]
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;  // column width fraction override
     std::optional<double> defaultHeight; // floating height fraction of the usable area
-    std::optional<int> defaultWorkspace; // 1-64
+    std::optional<WorkspaceReference> defaultWorkspace;
+    std::optional<std::string> defaultScratchpad;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
@@ -272,6 +338,11 @@ namespace umbriel {
           && xdgTagPattern == other.xdgTagPattern
           && matchContentType == other.matchContentType
           && matchFocused == other.matchFocused
+          && matchFloating == other.matchFloating
+          && matchPinned == other.matchPinned
+          && matchScratchpad == other.matchScratchpad
+          && matchAlone == other.matchAlone
+          && matchAtStartup == other.matchAtStartup
           && defaultOutput == other.defaultOutput
           && defaultFloating == other.defaultFloating
           && defaultSize == other.defaultSize
@@ -279,6 +350,7 @@ namespace umbriel {
           && defaultWidth == other.defaultWidth
           && defaultHeight == other.defaultHeight
           && defaultWorkspace == other.defaultWorkspace
+          && defaultScratchpad == other.defaultScratchpad
           && defaultScrollingColumn == other.defaultScrollingColumn
           && defaultScrollingColumnOrder == other.defaultScrollingColumnOrder
           && defaultFullscreen == other.defaultFullscreen
@@ -306,7 +378,8 @@ namespace umbriel {
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;
     std::optional<double> defaultHeight;
-    std::optional<int> defaultWorkspace;
+    std::optional<WorkspaceReference> defaultWorkspace;
+    std::optional<std::string> defaultScratchpad;
     std::optional<std::string> defaultScrollingColumn;
     std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
@@ -370,6 +443,10 @@ namespace umbriel {
   };
 
   struct Config {
+    // Every color Umbriel draws, each an independent literal. `background`
+    // through `error` are the palette Umbriel's own panels paint with: the
+    // cheatsheet, the diagnostics banner, the quit confirmation, and overview
+    // badge text.
     struct Colors {
       std::array<float, 4> background{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
       std::array<float, 4> textPrimary{0.9098039F, 0.9098039F, 0.9176471F, 1.0F};
@@ -378,6 +455,31 @@ namespace umbriel {
       std::array<float, 4> accentSecondary{0.9607843F, 0.7882353F, 0.4196078F, 1.0F};
       std::array<float, 4> warning{0.9607843F, 0.7882353F, 0.4196078F, 1.0F};
       std::array<float, 4> error{1.0F, 0.4196078F, 0.4196078F, 1.0F};
+      // Drop-target preview during a drag.
+      std::array<float, 4> insertHint{0.4980392F, 0.7843137F, 1.0F, 0.5019608F};
+      // Fullscreen gaps and the lock screen.
+      std::array<float, 4> backdrop{0.0F, 0.0F, 0.0F, 1.0F};
+      std::array<float, 4> shadow{0.0F, 0.0F, 0.0F, 0.4980392F};
+
+      struct Border {
+        std::array<float, 4> focused{0.4784314F, 0.6392157F, 1.0F, 1.0F};
+        std::array<float, 4> unfocused{0.1607843F, 0.1607843F, 0.2F, 1.0F};
+        std::array<float, 4> scratchpadFocused{0.8980392F, 0.7529412F, 0.4823529F, 1.0F};
+        std::array<float, 4> scratchpadUnfocused{0.3607843F, 0.2901961F, 0.1647059F, 1.0F};
+        // No focus variant.
+        std::array<float, 4> outer{0.1019608F, 0.1019608F, 0.1215686F, 1.0F};
+        bool operator==(const Border&) const = default;
+      } border;
+
+      struct Overview {
+        // Composited over the desktop background while the overview is visible.
+        std::array<float, 4> backgroundTint{0.0627451F, 0.0627451F, 0.0784314F, 0.1882353F};
+        // Rounded background behind each workspace; alpha controls opacity.
+        std::array<float, 4> workspaceBackground{0.0F, 0.0F, 0.0F, 0.2666667F};
+        std::array<float, 4> badge{0.4784314F, 0.6392157F, 1.0F, 1.0F};
+        bool operator==(const Overview&) const = default;
+      } overview;
+
       bool operator==(const Colors&) const = default;
     } colors;
 
@@ -385,13 +487,6 @@ namespace umbriel {
       int borderWidth = 2;
       int outerBorderWidth = 0;
       int cornerRadius = 10;
-      std::array<float, 4> borderFocused{0.48F, 0.64F, 1.0F, 1.0F};
-      std::array<float, 4> borderUnfocused{0.16F, 0.16F, 0.20F, 1.0F};
-      std::array<float, 4> scratchpadBorderFocused{0.90F, 0.75F, 0.48F, 1.0F};
-      std::array<float, 4> scratchpadBorderUnfocused{0.36F, 0.29F, 0.16F, 1.0F};
-      std::array<float, 4> outerBorderColor{0.10F, 0.10F, 0.12F, 1.0F};
-      std::array<float, 4> insertHintColor{0.50F, 0.78F, 1.0F, 0.50F};
-      std::array<float, 4> backdropColor{0.0F, 0.0F, 0.0F, 1.0F};
       double dragOpacity = 0.75;
       struct Blur {
         bool enabled = true;
@@ -409,7 +504,6 @@ namespace umbriel {
         int softness = 10;
         int offsetX = 2;
         int offsetY = 2;
-        std::array<float, 4> color{0.0F, 0.0F, 0.0F, 0.50F};
         bool operator==(const Shadow&) const = default;
       } shadow;
       bool preferNoCsd = true;
@@ -426,6 +520,7 @@ namespace umbriel {
       std::map<std::string, SpringConfig> springs;
 
       struct WindowsIn {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = true;
         int durationMs = 150;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -435,6 +530,7 @@ namespace umbriel {
       } windowsIn;
 
       struct WindowsOut {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = true;
         int durationMs = 150;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -443,6 +539,7 @@ namespace umbriel {
       } windowsOut;
 
       struct WindowsMove {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = true;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::Snappy};
@@ -450,6 +547,7 @@ namespace umbriel {
       } windowsMove;
 
       struct Workspaces {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = true;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -457,13 +555,19 @@ namespace umbriel {
       } workspaces;
 
       struct Overview {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = true;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
+        // Filmstrip movement between workspace previews, for the wheel, the keyboard and touchpad releases alike. A
+        // spring curve settles from the current position and carries the release velocity of a gesture; any other
+        // curve runs over duration_ms and ignores it.
+        AnimationCurve workspaceCurve{.easing = Easing::Spring, .spring = {.damping = 1.0, .stiffness = 1000.0}};
         bool operator==(const Overview&) const = default;
       } overview;
 
       struct Scratchpad {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = false;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -476,6 +580,7 @@ namespace umbriel {
       } scratchpad;
 
       struct Border {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = false;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -483,6 +588,7 @@ namespace umbriel {
       } border;
 
       struct DimUnfocused {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = false;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -491,6 +597,7 @@ namespace umbriel {
       } dimUnfocused;
 
       struct Layers {
+        std::optional<AnimationShaderSource> shader;
         bool enabled = false;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
@@ -503,20 +610,22 @@ namespace umbriel {
     struct Overview {
       // Workspace scale when fully zoomed out.
       double zoom = 0.5;
+      // Touchpad travel per workspace or viewport in the overview, by the physical direction of the movement rather
+      // than the output's workspace axis. Independent of an input device's own scroll_factor.
+      double scrollFactorHorizontal = 1.0;
+      double scrollFactorVertical = 1.0;
       // Blur the wallpaper behind the filmstrip while the overview is visible. Uses [appearance.blur] parameters;
       // inert when appearance blur is disabled.
       bool backgroundBlur = true;
-      // Tint composited over the desktop background while overview is visible.
-      std::array<float, 4> backgroundTint{0.0627451F, 0.0627451F, 0.0784314F, 0.1882353F};
-      // Rounded background behind each workspace; alpha controls opacity.
-      std::array<float, 4> workspaceBackground{0.0F, 0.0F, 0.0F, 0.2666667F};
+      // Mirror the output's background- and bottom-layer surfaces inside every workspace preview instead of the flat
+      // colors.overview.workspace_background fill. The real bottom layer is hidden while the overview is open, so a
+      // surface there appears once per workspace rather than twice at two scales.
+      bool workspaceWallpaper = true;
       // Keyboard shortcut badges on overview cards. Pressing a badge key focuses
       // that window and closes the overview.
       bool shortcuts = true;
       // Favorite badge keys in preference order, one ASCII character each.
       std::string shortcutKeys = "1234567890";
-      // Badge accent override. Unset follows colors.accent_primary.
-      std::optional<std::array<float, 4>> badgeColor;
       bool operator==(const Overview&) const = default;
     } overview;
 
@@ -541,9 +650,7 @@ namespace umbriel {
       struct Scrolling {
         std::optional<double> defaultWidthFraction;
         bool centerUnderfullStrip = true;
-        bool centerFocused = false;
-        ScrollingDirection direction = ScrollingDirection::Horizontal;
-        bool expandSingleColumn = false;
+        CenterFocusedColumn centerFocused = CenterFocusedColumn::Never;
         bool operator==(const Scrolling&) const = default;
       } scrolling;
       struct Dwindle {
@@ -553,6 +660,7 @@ namespace umbriel {
       struct Master {
         double defaultWidthFraction = 0.55;
         bool newOnTop = true;
+        bool newBecomesMaster = false;
         MasterPosition position = MasterPosition::Left;
         bool operator==(const Master&) const = default;
       } master;
@@ -587,6 +695,16 @@ namespace umbriel {
       bool operator==(const General&) const = default;
     } general;
 
+    struct Drm {
+      // Absolute card or render-node paths. Either node excludes the whole GPU.
+      std::vector<std::string> ignoredDevices;
+      // Canonical PCI domain:bus:slot.function addresses.
+      std::vector<std::string> ignoredPciAddresses;
+
+      [[nodiscard]] bool configured() const { return !ignoredDevices.empty() || !ignoredPciAddresses.empty(); }
+      bool operator==(const Drm&) const = default;
+    } drm;
+
     struct Environment {
       // Ordered NAME=value pairs exported to the compositor and the native session's systemd user manager.
       std::vector<std::pair<std::string, std::string>> variables;
@@ -603,6 +721,9 @@ namespace umbriel {
       // Advertise and accept the primary-selection clipboard used for
       // middle-click paste.
       bool middleClickPaste = true;
+      // Retarget an interactive window drag with the free mouse button: float
+      // it, pin it, or leave the drag alone.
+      WindowDragToggle windowDragToggle = WindowDragToggle::None;
 
       struct Keyboard {
         // Comma-separated XKB layout list ("us,de"); the first entry is active at startup. `options` carries XKB option
@@ -628,12 +749,18 @@ namespace umbriel {
         std::optional<double> scrollFactor;
         std::optional<bool> disableWhileTyping;
         std::optional<bool> disableOnExternalMouse;
+        std::optional<ClickMethod> clickMethod;
         bool operator==(const Touchpad&) const = default;
       } touchpad;
 
       struct Mouse {
         std::optional<bool> naturalScroll;
         std::optional<AccelProfile> accelProfile;
+        // Evdev BTN_* code libinput turns into a scroll modifier: holding it makes pointer motion scroll instead of
+        // clicking. Unset leaves the device's libinput default alone.
+        std::optional<uint32_t> scrollButton;
+        // One press latches scrolling on, the next releases it, instead of requiring a hold.
+        std::optional<bool> scrollButtonLock;
         double sensitivity = 0.0;
         int scrollWheelStep = 60;
         bool operator==(const Mouse&) const = default;
@@ -681,6 +808,9 @@ namespace umbriel {
         std::optional<AccelProfile> accelProfile;
         std::optional<double> sensitivity;
         std::optional<bool> disableWhileTyping;
+        std::optional<ClickMethod> clickMethod;
+        std::optional<uint32_t> scrollButton;
+        std::optional<bool> scrollButtonLock;
         bool operator==(const Device&) const = default;
       };
 
@@ -694,13 +824,33 @@ namespace umbriel {
     std::vector<WindowRule> windowRules;
     std::vector<LayerRule> layerRules;
     std::vector<SecurityContextRule> securityContextRules;
-    std::vector<WorkspaceConfig> workspaceRules; // [[workspace]] layout rules
+    std::vector<ScratchpadConfig> scratchpads;   // [[scratchpad]] definitions
+    std::vector<WorkspaceConfig> workspaceRules; // [[workspace]] declarations and layout rules
+
+    // True when any surface may sample the cached background blur, so every
+    // output has to keep its optimized blur node alive.
+    [[nodiscard]] bool optimizedBlurNeeded() const {
+      if (appearance.blur.optimized) {
+        return true;
+      }
+      for (const WindowRule& rule : windowRules) {
+        if (rule.blurOptimized.value_or(false)) {
+          return true;
+        }
+      }
+      for (const LayerRule& rule : layerRules) {
+        if (rule.optimized.value_or(false)) {
+          return true;
+        }
+      }
+      return false;
+    }
 
     bool operator==(const Config&) const = default;
   };
 
   [[nodiscard]] const Config& config();
-  void loadConfig(const char* explicitPath);
+  [[nodiscard]] bool loadConfig(const char* explicitPath);
   [[nodiscard]] ConfigReloadResult reloadConfig();
   [[nodiscard]] const std::vector<std::filesystem::path>& configWatchPaths();
   [[nodiscard]] const std::vector<ConfigDiagnostic>& configDiagnostics();

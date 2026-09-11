@@ -6,8 +6,8 @@ set -euo pipefail
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
 readonly LEFT_BUTTON=272
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly POPUP_CLIENT="${UMBRIEL_POPUP_CLIENT:-./build-debug/popup-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly POPUP_CLIENT="${UMBRIEL_POPUP_CLIENT:-./build-debug/tests/popup-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/popup-client.log"
 readonly POINTER_LOG="$UMBRIEL_RUNTIME_DIR/popup-pointer.log"
 

@@ -1,7 +1,6 @@
 #include "config/config_merge.h"
 
 #include "config/config_diag.h"
-#include "config/section.h"
 #include "core/log.h"
 
 #include <algorithm>
@@ -35,6 +34,7 @@ namespace umbriel::configmerge {
       }
       const std::string loc = diag.location();
       if (severity == ConfigDiagnostic::Severity::Error) {
+        result.hadError = true;
         kLog.error("{}{}", loc.empty() ? "" : loc + ": ", msg);
       } else {
         kLog.warn("{}{}", loc.empty() ? "" : loc + ": ", msg);
@@ -189,8 +189,47 @@ namespace umbriel::configmerge {
         std::string path;
         toml::source_region source;
       };
-      std::vector<Entry> entries;
+      std::vector<Entry> files;
+      std::vector<Entry> optionalFiles;
     };
+
+    void readIncludeFiles(
+        const toml::node* node, std::string_view name, std::vector<IncludeDirective::Entry>& entries,
+        MergeResult& result
+    ) {
+      if (node == nullptr) {
+        return;
+      }
+      const auto* files = node->as_array();
+      if (files == nullptr) {
+        emit(
+            result, ConfigDiagnostic::Severity::Error, &node->source(),
+            std::format("{} must be an array of strings", name)
+        );
+        return;
+      }
+      for (const auto& entry : *files) {
+        const auto path = entry.value<std::string>();
+        if (!path) {
+          emit(
+              result, ConfigDiagnostic::Severity::Error, &entry.source(),
+              std::format("{} entries must be strings", name)
+          );
+          continue;
+        }
+        if (path->contains('\0')) {
+          emit(
+              result, ConfigDiagnostic::Severity::Error, &entry.source(),
+              std::format("{} entries cannot contain NUL", name)
+          );
+          continue;
+        }
+        entries.push_back({
+            .path = *path,
+            .source = entry.source(),
+        });
+      }
+    }
 
     IncludeDirective readInclude(const toml::table& table, MergeResult& result) {
       IncludeDirective directive;
@@ -200,37 +239,36 @@ namespace umbriel::configmerge {
       }
       const auto* include = node->as_table();
       if (include == nullptr) {
-        emit(result, ConfigDiagnostic::Severity::Warning, &node->source(), "ignoring include (expected table)");
+        emit(result, ConfigDiagnostic::Severity::Error, &node->source(), "include must be a table");
         return directive;
       }
-      // `include` is erased from the table before the config readers run, so the root section never sees it and never
-      // reports its unknown keys. This reader owns that report for the section's fixed vocabulary.
-      Section keys(*include, "include", result.diagnostics);
-      const toml::node* filesNode = keys.take("files");
-      if (filesNode == nullptr) {
-        return directive;
-      }
-      const auto* files = filesNode->as_array();
-      if (files == nullptr) {
-        emit(
-            result, ConfigDiagnostic::Severity::Warning, &filesNode->source(),
-            "ignoring include.files (expected array of strings)"
-        );
-        return directive;
-      }
-      for (const auto& entry : *files) {
-        if (!entry.is_string()) {
+      // A malformed directive can hide the only file containing DRM exclusions.
+      // Reject it even when the successfully loaded files have no [drm] section.
+      for (const auto& [key, value] : *include) {
+        if (key.str() != "files" && key.str() != "optional") {
           emit(
-              result, ConfigDiagnostic::Severity::Warning, &entry.source(),
-              "ignoring include.files (expected array of strings)"
+              result, ConfigDiagnostic::Severity::Error, &value.source(),
+              std::format("unknown key include.{}", key.str())
           );
-          directive.entries.clear();
-          return directive;
         }
-        directive.entries.push_back({
-            .path = *entry.value<std::string>(),
-            .source = entry.source(),
-        });
+      }
+      readIncludeFiles(include->get("files"), "include.files", directive.files, result);
+      const toml::node* optionalNode = include->get("optional");
+      if (optionalNode != nullptr) {
+        const auto* optional = optionalNode->as_table();
+        if (optional == nullptr) {
+          emit(result, ConfigDiagnostic::Severity::Error, &optionalNode->source(), "include.optional must be a table");
+        } else {
+          for (const auto& [key, value] : *optional) {
+            if (key.str() != "files") {
+              emit(
+                  result, ConfigDiagnostic::Severity::Error, &value.source(),
+                  std::format("unknown key include.optional.{}", key.str())
+              );
+            }
+          }
+          readIncludeFiles(optional->get("files"), "include.optional.files", directive.optionalFiles, result);
+        }
       }
       return directive;
     }
@@ -256,27 +294,48 @@ namespace umbriel::configmerge {
       IncludeDirective directive = readInclude(parsed, result);
       parsed.erase("include");
 
-      if (directive.entries.empty()) {
+      if (directive.files.empty() && directive.optionalFiles.empty()) {
         // No includes: return parsed directly, preserving toml++ source regions
         // (copies lose them; only moves keep line/column/path).
         return parsed;
       }
 
       toml::table base;
-      for (const auto& entry : directive.entries) {
-        const auto target = expandPath(entry.path, path.parent_path());
-        std::error_code error;
-        if (std::filesystem::is_regular_file(target, error) && !error) {
-          deepMerge(base, loadAndExpand(target, visited, result));
-          continue;
+      const auto mergeEntries = [&](const std::vector<IncludeDirective::Entry>& entries, bool optional) {
+        for (const auto& entry : entries) {
+          const auto target = expandPath(entry.path, path.parent_path());
+          std::error_code error;
+          const std::filesystem::file_status status = std::filesystem::status(target, error);
+          if (!error && std::filesystem::is_regular_file(status)) {
+            deepMerge(base, loadAndExpand(target, visited, result));
+            continue;
+          }
+          result.loadedFiles.push_back(canonicalKey(target));
+          const bool missing = error == std::errc::no_such_file_or_directory
+              || error == std::errc::not_a_directory
+              || (!error && status.type() == std::filesystem::file_type::not_found);
+          if (missing) {
+            if (optional) {
+              result.missingOptionalIncludes = true;
+              continue;
+            }
+            result.missingIncludes = true;
+            emit(
+                result, ConfigDiagnostic::Severity::Warning, &entry.source,
+                std::format("include not found: {} (from {})", target.string(), path.string())
+            );
+            continue;
+          }
+
+          const std::string reason = error ? error.message() : "not a regular file";
+          emit(
+              result, ConfigDiagnostic::Severity::Error, &entry.source,
+              std::format("cannot inspect included config file {}: {}", target.string(), reason)
+          );
         }
-        result.missingIncludes = true;
-        emit(
-            result, ConfigDiagnostic::Severity::Warning, &entry.source,
-            std::format("include not found: {} (from {})", target.string(), path.string())
-        );
-        result.loadedFiles.push_back(canonicalKey(target));
-      }
+      };
+      mergeEntries(directive.files, false);
+      mergeEntries(directive.optionalFiles, true);
       deepMerge(base, std::move(parsed));
       return base;
     }
@@ -287,7 +346,6 @@ namespace umbriel::configmerge {
       try {
         parsed = toml::parse_file(path.string());
       } catch (const toml::parse_error& error) {
-        result.hadParseError = true;
         const auto key = canonicalKey(path);
         if (std::ranges::find(result.loadedFiles, key) == result.loadedFiles.end()) {
           result.loadedFiles.push_back(key);
@@ -302,21 +360,19 @@ namespace umbriel::configmerge {
       return expandFile(path, std::move(parsed), visited, result);
     }
 
-  } // namespace
-
-  void deepMerge(toml::table& base, const toml::table& overlay) {
-    for (const auto& [key, value] : overlay) {
-      if (const auto* overlayTable = value.as_table()) {
-        if (auto* baseNode = base.get(key)) {
-          if (auto* baseTable = baseNode->as_table()) {
-            deepMerge(*baseTable, *overlayTable);
-            continue;
-          }
+    // Whether every element is a table. That shape is exactly the rule collections (`[[window_rule]]`,
+    // `[[layer_rule]]`, `[[security_context_rule]]`, `[[workspace]]`, `[[input.device]]`); nothing else in the
+    // vocabulary holds tables in an array, so the merge cannot drift away from the readers.
+    bool holdsOnlyTables(const toml::array& array) {
+      for (const toml::node& element : array) {
+        if (!element.is_table()) {
+          return false;
         }
       }
-      base.insert_or_assign(key, value);
+      return true;
     }
-  }
+
+  } // namespace
 
   void deepMerge(toml::table& base, toml::table&& overlay) {
     for (auto&& [key, value] : overlay) {
@@ -324,6 +380,20 @@ namespace umbriel::configmerge {
         if (auto* baseNode = base.get(key)) {
           if (auto* baseTable = baseNode->as_table()) {
             deepMerge(*baseTable, std::move(*overlayTable));
+            continue;
+          }
+        }
+      } else if (auto* overlayArray = value.as_array(); overlayArray != nullptr && !overlayArray->empty()) {
+        // Rule collections accumulate, so a rule in an include and a rule in the including file both apply, in merge
+        // order. Anything else is replaced, including an empty array: that is how a later file drops what earlier
+        // files contributed, and it keeps a fixed-arity array such as `output.<name>.position` from outgrowing it.
+        if (auto* baseNode = base.get(key)) {
+          auto* baseArray = baseNode->as_array();
+          if (baseArray != nullptr && holdsOnlyTables(*baseArray) && holdsOnlyTables(*overlayArray)) {
+            baseArray->reserve(baseArray->size() + overlayArray->size());
+            for (toml::node& element : *overlayArray) {
+              baseArray->push_back(std::move(*element.as_table()));
+            }
             continue;
           }
         }

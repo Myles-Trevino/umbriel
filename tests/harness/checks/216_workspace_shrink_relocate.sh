@@ -7,7 +7,7 @@
 # count alone cannot: the double visit keeps the tally at three.
 set -euo pipefail
 
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
 window_count() { "$UMBRIEL" windows --json | jq 'length'; }
 

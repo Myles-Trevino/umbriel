@@ -7,7 +7,11 @@ reference.
 ```toml
 [keybinds]
 "Mod+T" = "spawn:kitty"
-"Mod+Shift+Q" = "window-close"
+"Mod+Q" = "window-close"
+"Mod+Left" = "window-focus-left"
+"Mod+Right" = "window-focus-right"
+"Mod+Up" = "window-focus-up"
+"Mod+Down" = "window-focus-down"
 "Mod+I" = "overview-toggle"
 ```
 
@@ -37,6 +41,9 @@ left and right key for the logical modifier are accepted, and modifier-only
 binds never repeat. Combinations containing only multiple modifiers, such as
 `Ctrl+Alt`, are invalid.
 
+Physical and virtual keyboards support modifier-only binds. Input-method key
+echoes do not arm or cancel a pending tap.
+
 ## Special keys
 
 **Scroll wheel:** `WheelUp`, `WheelDown`, `WheelLeft`, `WheelRight` (require
@@ -61,13 +68,23 @@ the newly exposed columns without requiring additional pointer motion.
 Bind `layout-scroll-drag` to a modified mouse button to pan a scrolling
 workspace directly. The strip follows the pointer along its configured axis,
 including overscroll and the same release settling used by the three-finger
-gesture. In the overview, the same bind pans the scrolling workspace row under
-the pointer. Bare middle-button horizontal dragging provides the same overview
-pan, while bare vertical dragging changes workspace rows:
+gesture. In the overview it pans the row under the pointer instead of the
+active one, and a bare middle-button drag across the output's workspace axis
+does the same:
 
 ```toml
 "Mod+MouseMiddle" = "layout-scroll-drag"
 ```
+
+## Consumed input
+
+A matched bind consumes both halves of its input: neither the press nor the
+release reaches a window. A bind that changes focus also does not hand its key
+to the newly focused window as held, so a chord like `Mod+D` never leaves `D`
+stuck down in a game or an XWayland client. Unbound keys and chords that match
+nothing are delivered normally. Switching VT drops that bookkeeping, because
+the releases land on the other VT.
+
 ## Repeat
 
 Binds repeat while held, using `input.keyboard.repeat_rate` and
@@ -87,6 +104,15 @@ with the table form:
 
 ```toml
 "XF86MonBrightnessDown" = { action = "spawn:noctalia msg brightness-down 10", allow_when_locked = true }
+```
+
+## Cooldown
+
+Set `cooldown_ms` to suppress repeated bind actions for the configured duration. Matching input remains consumed while the cooldown is active, and suppressed events do not extend it.
+
+```toml
+"Mod+WheelUp" = { action = "workspace-previous", cooldown_ms = 150 }
+"Mod+WheelDown" = { action = "workspace-next", cooldown_ms = 150 }
 ```
 
 ## Submaps
@@ -127,6 +153,9 @@ $ umbriel submap --json
 $ umbriel msg submap:reset
 $ umbriel submap
 ```
+
+Use `umbriel subscribe submap` to receive the current value immediately and a
+new JSON event whenever the active value changes.
 
 An empty name cannot be created through configuration or `umbriel msg`. If an
 internal caller supplies one, human output uses `unnamed` and JSON preserves the
@@ -189,7 +218,8 @@ action = "spawn:notify-send 'Bottom right'"
 Each corner has its own enabled state, delay, and action. Omitted corners do
 nothing, and `enabled = false` disables a corner without removing its action. A
 delay of `0` activates immediately. Hot corners are inactive on an output while
-a window is fullscreen there.
+its keyboard-focused window is fullscreen. An unfocused fullscreen window does
+not block them.
 
 Available subsections are `hot_corners.top_left`, `hot_corners.top_right`,
 `hot_corners.bottom_left`, and `hot_corners.bottom_right`.
@@ -225,6 +255,8 @@ and widgets via `noctalia msg`. Typical bindings:
 "Mod+X" = "spawn:noctalia msg bar-toggle"
 "Mod+P" = "spawn:noctalia msg screenshot-region"
 "Mod+Shift+P" = "spawn:noctalia msg screenshot-fullscreen"
+"Mod+Shift+A" = "spawn:noctalia msg screenshot-annotate"
+"Mod+Ctrl+A" = "spawn:noctalia msg annotate"
 "Mod+Shift+W" = "spawn:noctalia msg desktop-widgets-toggle-edit"
 "Mod+Escape" = "spawn:noctalia msg panel-toggle session"
 ```

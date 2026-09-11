@@ -17,6 +17,7 @@ namespace umbriel {
     bool layout = false;
     bool workspaces = false;
     bool general = false;
+    bool drm = false;
     bool environment = false;
     bool events = false;
     bool input = false;
@@ -25,6 +26,7 @@ namespace umbriel {
     bool windowRules = false;
     bool layerRules = false;
     bool securityContextRules = false;
+    bool scratchpads = false;
     bool workspaceRules = false;
 
     [[nodiscard]] bool any() const {
@@ -36,6 +38,7 @@ namespace umbriel {
           || layout
           || workspaces
           || general
+          || drm
           || environment
           || events
           || input
@@ -44,6 +47,7 @@ namespace umbriel {
           || windowRules
           || layerRules
           || securityContextRules
+          || scratchpads
           || workspaceRules;
     }
 

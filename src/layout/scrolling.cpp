@@ -103,13 +103,30 @@ namespace umbriel {
       return false;
     }
 
+    // Fullscreen and maximize-to-edges views are presented against the wider
+    // usable area, so they bleed one strut past each end of the strut-inset
+    // strip. The strip reserves that overhang, otherwise the neighboring column
+    // lands underneath the window. Fullscreen is presented against the whole
+    // output, so only its strut share is reserved and it still bleeds over a
+    // layer-shell exclusive zone.
+    struct ColumnBleed {
+      int before = 0;
+      int after = 0;
+    };
+
+    ColumnBleed columnBleed(const Column& column, const Layout& layout) {
+      if (!columnFillsViewport(column, layout)) {
+        return {};
+      }
+      const LayoutStruts& struts = layout.layoutConfig()->struts;
+      const bool vertical = layout.layoutConfig()->scrolling.direction == ScrollingDirection::Vertical;
+      return vertical ? ColumnBleed{.before = struts.top, .after = struts.bottom}
+                      : ColumnBleed{.before = struts.left, .after = struts.right};
+    }
+
   } // namespace
 
   bool ScrollingLayout::vertical() const { return m_config->scrolling.direction == ScrollingDirection::Vertical; }
-
-  bool ScrollingLayout::expandSingleColumn() const {
-    return m_config != nullptr && m_config->scrolling.expandSingleColumn;
-  }
 
   void ScrollingLayout::syncHeightWeights(Column& column) { ensureWeightCount(column); }
 
@@ -227,6 +244,7 @@ namespace umbriel {
       m_scroll = 0.0;
       m_centeredRest = false;
     }
+    m_lastFocusedColumn = -1;
     m_lastAvailableCross = 0;
     return true;
   }
@@ -287,16 +305,14 @@ namespace umbriel {
       const int edgePad = m_config->edgePad;
       return std::max(1, viewportPrimary + 2 * edgePad);
     }
-    int width = 0;
-    if (m_columns.size() == 1 && expandSingleColumn()) {
-      // Fill the viewport without touching the stored fraction. Client size hints still apply to tiled columns.
-      width = viewportPrimary;
-    } else {
-      // Gap-aware: reserve one inter-lane gap per lane so fractions summing to 1
-      // tile exactly across the viewport primary extent.
-      const int gap = m_config->totalGap;
-      width = static_cast<int>(std::lround(column.widthFrac * (viewportPrimary + gap) - gap));
+    const int gap = m_config->totalGap;
+    const auto slotExtent = static_cast<double>(viewportPrimary + gap);
+    double slotStart = 0.0;
+    for (int i = 0; i < columnIndex; ++i) {
+      slotStart += m_columns[static_cast<size_t>(i)].widthFrac * slotExtent;
     }
+    const double slotEnd = slotStart + column.widthFrac * slotExtent;
+    int width = static_cast<int>(std::lround(slotEnd) - std::lround(slotStart)) - gap;
     width = std::max(width, columnMinPrimaryPx(column, *this));
     const int maxWidth = columnMaxPrimaryPx(column, *this);
     if (maxWidth > 0) {
@@ -335,7 +351,13 @@ namespace umbriel {
     const int gap = m_config->totalGap;
     int x = centeringOffset(viewportPrimary);
     for (int i = 0; i < end; ++i) {
-      x += columnWidth(i, viewportPrimary) + gap;
+      const ColumnBleed bleed = columnBleed(m_columns[static_cast<size_t>(i)], *this);
+      x += bleed.before + columnWidth(i, viewportPrimary) + gap + bleed.after;
+    }
+    if (columnIndex >= 0 && end < static_cast<int>(m_columns.size())) {
+      // The column's own leading bleed. Presentation subtracts the same strut,
+      // so the window's leading edge lands where the strip band starts.
+      x += columnBleed(m_columns[static_cast<size_t>(end)], *this).before;
     }
     return x;
   }
@@ -347,7 +369,8 @@ namespace umbriel {
     const int gap = m_config->totalGap;
     int total = -gap;
     for (size_t i = 0; i < m_columns.size(); ++i) {
-      total += columnWidth(static_cast<int>(i), viewportPrimary) + gap;
+      const ColumnBleed bleed = columnBleed(m_columns[i], *this);
+      total += bleed.before + columnWidth(static_cast<int>(i), viewportPrimary) + gap + bleed.after;
     }
     return std::max(0, total);
   }
@@ -573,7 +596,7 @@ namespace umbriel {
   }
 
   void ScrollingLayout::reconcileFocusedColumn(int columnIndex, int viewportPrimary) {
-    if (m_config->scrolling.centerFocused) {
+    if (alwaysCentersFocus()) {
       centerColumn(columnIndex, viewportPrimary);
       return;
     }
@@ -581,7 +604,45 @@ namespace umbriel {
     ensureVisible(columnIndex, viewportPrimary);
   }
 
-  double ScrollingLayout::targetScrollForEnsureVisible(int columnIndex, int viewportPrimary, bool force) const {
+  bool ScrollingLayout::alwaysCentersFocus() const {
+    return m_config->scrolling.centerFocused == CenterFocusedColumn::Always;
+  }
+
+  bool ScrollingLayout::shouldCenterFocusedColumn(int columnIndex, int viewportPrimary) const {
+    switch (m_config->scrolling.centerFocused) {
+    case CenterFocusedColumn::Always:
+      return true;
+    case CenterFocusedColumn::OnOverflow:
+      return shouldCenterOnOverflow(columnIndex, viewportPrimary);
+    case CenterFocusedColumn::Never:
+      break;
+    }
+    return false;
+  }
+
+  // Centers the column focus is moving to when it and the column on the side focus came from cannot share the
+  // viewport. The reference is the immediate neighbor, not the previously focused column, so a jump across the strip
+  // is judged by the same pair spacing as a step.
+  bool ScrollingLayout::shouldCenterOnOverflow(int columnIndex, int viewportPrimary) const {
+    const int columnCount = static_cast<int>(m_columns.size());
+    if (columnIndex < 0 || columnIndex >= columnCount) {
+      return false;
+    }
+    if (m_lastFocusedColumn < 0 || m_lastFocusedColumn >= columnCount || m_lastFocusedColumn == columnIndex) {
+      return false;
+    }
+    const int neighbor =
+        m_lastFocusedColumn > columnIndex ? std::min(columnIndex + 1, columnCount - 1) : std::max(columnIndex - 1, 0);
+    // Leading edge of the first column to trailing edge of the second, so the pair's own widths both count.
+    const int first = std::min(columnIndex, neighbor);
+    const int last = std::max(columnIndex, neighbor);
+    const int span =
+        columnX(last, viewportPrimary) - columnX(first, viewportPrimary) + columnWidth(last, viewportPrimary);
+    return span > viewportPrimary;
+  }
+
+  double
+  ScrollingLayout::targetScrollForEnsureVisible(int columnIndex, int viewportPrimary, bool center, bool force) const {
     if (columnIndex < 0 || columnIndex >= static_cast<int>(m_columns.size()) || viewportPrimary <= 0) {
       return m_scroll;
     }
@@ -593,7 +654,7 @@ namespace umbriel {
       const double cover = static_cast<double>(x) + static_cast<double>(width - viewportPrimary) / 2.0;
       return std::clamp(cover, 0.0, max);
     }
-    if (m_config->scrolling.centerFocused) {
+    if (center) {
       return static_cast<double>(x) - (viewportPrimary - width) / 2.0;
     }
     if (force) {
@@ -618,7 +679,8 @@ namespace umbriel {
     if (viewportPrimary <= 0) {
       return 0.0;
     }
-    return std::abs(targetScrollForEnsureVisible(columnIndex, viewportPrimary) - m_scroll)
+    const bool centered = shouldCenterFocusedColumn(columnIndex, viewportPrimary);
+    return std::abs(targetScrollForEnsureVisible(columnIndex, viewportPrimary, centered) - m_scroll)
         / static_cast<double>(viewportPrimary);
   }
 
@@ -628,23 +690,41 @@ namespace umbriel {
     }
     // A stack losing one row leaves the horizontal geometry alone; only the
     // last view out takes the column, and the space, with it.
-    if (m_columns[static_cast<size_t>(columnIndex)].views.size() != 1) {
+    const Column& column = m_columns[static_cast<size_t>(columnIndex)];
+    if (column.views.size() != 1) {
       return 0.0;
     }
-    const double span = static_cast<double>(columnWidth(columnIndex, viewportPrimary)) + m_config->totalGap;
-    const double hidden = m_scroll - static_cast<double>(columnX(columnIndex, viewportPrimary));
+    // The lane frees its bleed on both sides too. columnX() already includes the
+    // leading one, so measure the hidden extent from where that bleed starts.
+    const ColumnBleed bleed = columnBleed(column, *this);
+    const auto span = static_cast<double>(
+        bleed.before + columnWidth(columnIndex, viewportPrimary) + m_config->totalGap + bleed.after
+    );
+    const double hidden = m_scroll - static_cast<double>(columnX(columnIndex, viewportPrimary) - bleed.before);
     return std::clamp(hidden, 0.0, span);
   }
 
-  void ScrollingLayout::ensureVisible(int columnIndex, int viewportPrimary) {
-    const double target = targetScrollForEnsureVisible(columnIndex, viewportPrimary, false);
-    m_centeredRest = m_config->scrolling.centerFocused || (m_centeredRest && target == m_scroll);
+  void ScrollingLayout::revealColumn(int columnIndex, int viewportPrimary, bool center) {
+    const double target = targetScrollForEnsureVisible(columnIndex, viewportPrimary, center, false);
+    m_centeredRest = center || (m_centeredRest && target == m_scroll);
     m_scroll = target;
   }
 
+  void ScrollingLayout::ensureVisible(int columnIndex, int viewportPrimary) {
+    revealColumn(columnIndex, viewportPrimary, alwaysCentersFocus());
+  }
+
+  void ScrollingLayout::activateColumn(int columnIndex, int viewportPrimary) {
+    revealColumn(columnIndex, viewportPrimary, shouldCenterFocusedColumn(columnIndex, viewportPrimary));
+    if (columnIndex >= 0) {
+      m_lastFocusedColumn = columnIndex;
+    }
+  }
+
   void ScrollingLayout::snapVisible(int columnIndex, int viewportPrimary) {
-    m_centeredRest = m_config->scrolling.centerFocused;
-    m_scroll = targetScrollForEnsureVisible(columnIndex, viewportPrimary, true);
+    const bool centered = alwaysCentersFocus();
+    m_centeredRest = centered;
+    m_scroll = targetScrollForEnsureVisible(columnIndex, viewportPrimary, centered, true);
   }
 
   void ScrollingLayout::arrange(const wlr_box& usable) {
@@ -667,15 +747,17 @@ namespace umbriel {
     int runningColumnX = centeringOffset(viewportPrimary);
     for (size_t columnIndex = 0; columnIndex < m_columns.size(); ++columnIndex) {
       Column& column = m_columns[columnIndex];
+      const ColumnBleed bleed = columnBleed(column, *this);
+      runningColumnX += bleed.before;
       const int primarySize = columnWidth(static_cast<int>(columnIndex), viewportPrimary);
       if (column.views.empty()) {
-        runningColumnX += primarySize + gap;
+        runningColumnX += primarySize + gap + bleed.after;
         continue;
       }
       ensureWeightCount(column);
       const int primary =
           (v ? usable.y : usable.x) + edgePad + runningColumnX - static_cast<int>(std::lround(m_scroll));
-      runningColumnX += primarySize + gap;
+      runningColumnX += primarySize + gap + bleed.after;
       const int rowCount = static_cast<int>(column.views.size());
       const int gapsTotal = std::max(0, rowCount - 1) * gap;
       const int stackCross = std::max(rowCount, availableCross - gapsTotal);
@@ -717,10 +799,6 @@ namespace umbriel {
       const wlr_box& usable, std::optional<double> ruleWidthFraction, const View* /*splitAnchor*/
   ) const {
     const wlr_box content = contentArea(usable);
-    // The first window of a lone-column workspace opens full so its first buffer matches what arrange() will assign.
-    if (m_columns.empty() && expandSingleColumn()) {
-      return {.width = content.width, .height = content.height};
-    }
     const std::optional<double> fraction =
         ruleWidthFraction ? ruleWidthFraction : m_config->scrolling.defaultWidthFraction;
     if (!fraction) {
@@ -1012,13 +1090,25 @@ namespace umbriel {
             const int minCur = columnMinPrimary(m_column);
             const int maxPrev = columnMaxPrimary(m_column - 1);
             const int maxCur = columnMaxPrimary(m_column);
-            const int newPrev = std::clamp(
-                m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary)), std::max(minPrev, pair - gap - maxCur),
-                std::min(maxPrev, pair - gap - minCur)
-            );
-            const int newCur = pair - gap - newPrev;
+            const int requestedPrev = m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary));
+            const int minimumPrev = std::max(minPrev, pair - gap - maxCur);
+            const int maximumPrev = std::min(maxPrev, pair - gap - minCur);
+            const int newPrev = std::clamp(requestedPrev, minimumPrev, maximumPrev);
+            int newCur = pair - gap - newPrev;
+            const bool growsPastPreviousMinimum = requestedPrev < minimumPrev && minimumPrev == minPrev;
+            if (growsPastPreviousMinimum) {
+              newCur = std::min(m_startPrimaryPx - static_cast<int>(std::lround(dPrimary)), maxCur);
+            }
             setColumnPrimaryPx(m_column - 1, newPrev);
             setColumnPrimaryPx(m_column, newCur);
+            if (growsPastPreviousMinimum) {
+              layout.setScroll(
+                  m_startScroll
+                      + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
+                      + static_cast<double>(newCur - m_startPrimaryPx),
+                  true
+              );
+            }
           } else {
             const double extentDelta = centerUnderfullStrip ? centeredPrimaryDelta(-dPrimary) : -dPrimary;
             const int newExtent = std::clamp(

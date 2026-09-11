@@ -2,7 +2,8 @@
 
 Choose one of Umbriel's three layout modes for each workspace: Scrolling,
 Dwindle, or Master. Configure a default mode globally, then override it for
-individual workspaces when needed.
+individual workspaces when needed. The initial scrolling width can also have an
+output-specific default.
 
 ## Choose a layout
 
@@ -73,44 +74,43 @@ resize; screen-facing edges propose nothing.
 ## Scrolling layout
 
 Scrolling keeps columns at their configured widths and moves the strip through a
-viewport. A column can contain multiple windows. The `direction` setting changes
-which screen axis is the strip axis.
+viewport. A column can contain multiple windows. The strip axis is always
+perpendicular to the owning output's
+[workspace axis](workspaces.md#workspace-axis): an output whose workspaces are
+arranged vertically scrolls horizontally, and one whose workspaces are arranged
+horizontally scrolls vertically.
 
 ### Settings
 
 ```toml
 [layout.scrolling]
-direction = "horizontal"             # "horizontal" or "vertical"
 default_width_fraction = 0.5         # remove to let clients choose, 0.1-1.0
 center_underfull_strip = true
-center_focused = false
-expand_single_column = true
+center_focused = "never"             # "never", "always", or "on_overflow"
 ```
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `direction` | string | `"horizontal"` | Strip axis: `"horizontal"` places columns left to right, while `"vertical"` places lanes top to bottom. |
-| `default_width_fraction` | float | unset | Initial strip-axis extent for new columns (0.1-1.0). The packaged config sets `0.5`; when omitted, the client chooses its initial extent. |
+| `default_width_fraction` | float | unset | Initial strip-axis extent for new columns (0.1-1.0). The packaged config sets `0.5`; a matching output or workspace rule can override it. When it is unset at every level, the client chooses its initial extent. |
 | `center_underfull_strip` | bool | `true` | Center the complete strip when it is shorter than the viewport. Disable to align it at the start edge. |
-| `center_focused` | bool | `false` | Always center the focused column. |
-| `expand_single_column` | bool | `false` | Fill the viewport for a workspace's lone tiled column. Client size hints and viewport bounds still apply. The packaged config enables this. |
+| `center_focused` | string | `"never"` | When a focus change centers the newly focused column. `"never"` only scrolls far enough to reveal it, `"always"` centers it, and `"on_overflow"` centers it when it cannot share the viewport with the neighboring column on the side focus came from. |
 
 ### Horizontal and vertical scrolling
 
-| Direction | Layout | Width and height actions |
-| --------- | ------ | ------------------------ |
-| `horizontal` | Columns run left to right. Windows within a column stack from top to bottom. | Width actions change a column's strip extent. Height actions change a window's extent within its column. |
-| `vertical` | Horizontal lanes run top to bottom. Windows within a lane sit side by side. | Width actions change a lane's strip extent, which is its height on screen. Height actions change a window's extent within its lane, which is its visual width. |
+| Workspace axis | Layout | Width and height actions |
+| -------------- | ------ | ------------------------ |
+| `vertical` (default) | Columns run left to right. Windows within a column stack from top to bottom. | Width actions change a column's strip extent. Height actions change a window's extent within its column. |
+| `horizontal` | Horizontal lanes run top to bottom. Windows within a lane sit side by side. | Width actions change a lane's strip extent, which is its height on screen. Height actions change a window's extent within its lane, which is its visual width. |
 
-For a vertical workspace, directional actions follow the screen; see
-[Vertical workspaces](#vertical-workspaces). The consume and expel actions use
-the same visual directions: left and right merge or split within the lane, while
-the resulting lane is above or below the focused lane.
+On an output with horizontal workspaces, directional actions follow the screen;
+see [Vertical strips](#vertical-strips). The consume and expel actions use the
+same visual directions: left and right merge or split within the lane, while the
+resulting lane is above or below the focused lane.
 
-The three-finger vertical swipe continues to switch workspaces. A three-finger
-horizontal swipe scrolls a horizontal strip and is inert on a vertical one. Use
-keyboard or wheel bindings to scroll a vertical strip. On a horizontal strip,
-release velocity settles a three-finger swipe against a viewport edge.
+A three-finger swipe along the output's workspace axis switches workspaces. A
+three-finger swipe across it scrolls the strip, and is inert when the workspace
+has no scrolling layout. Release velocity settles the swipe against a viewport
+edge.
 
 ### Scrolling behavior
 
@@ -118,11 +118,40 @@ The packaged config sets `default_width_fraction = 0.5`, so new columns start at
 half the viewport. If the option is omitted, Umbriel leaves the strip-axis
 extent unconstrained during the initial configure and retains the logical size
 chosen by the client. A numeric `default_width` window rule takes precedence.
+For a new horizontal column, the pixel width from a matching `default_size`
+window rule takes precedence over both fractional settings.
 
-`expand_single_column` affects only how a lone tiled column is displayed. It
-does not rewrite the stored fraction, so the configured or client-selected
-width applies again when a second column appears. Explicit
-`default_maximize` and `default_maximize_to_edges` window rules take precedence.
+Fractional widths round cumulative column boundaries to logical pixels. When a
+viewport and its gaps cannot divide evenly, the remaining pixel is assigned to
+one column so the complete span still fits exactly. This applies equally to odd
+and even `gap` values and keeps focus changes from shifting an otherwise fully
+visible strip.
+
+Set a different initial width for every scrolling workspace on one output under
+that output's section:
+
+```toml
+[output.DP-1.layout.scrolling]
+default_width_fraction = 0.4
+
+[output."Microstep MSI G2712F CD6T084401192".layout.scrolling]
+default_width_fraction = 0.6
+```
+
+Connector and monitor names follow the normal [output identity](outputs.md)
+rules. A monitor-named output section wins when both it and a connector section
+match the same display.
+
+The initial width is resolved from the global setting, then the matching output
+setting, then a matching workspace rule without an `output`, and finally a
+matching workspace rule with an `output`. Each later value takes precedence.
+Only `default_width_fraction` has this output-level layout override; the other
+layout settings remain global or per workspace.
+
+Changing any of these defaults on reload affects columns created afterward. It
+does not resize existing columns, and a column moved to another output retains
+its stored fraction. Re-tiling a floating window or expelling a window into a
+new column creates a column using the current default.
 
 When focus moves to a hidden or partially hidden column, Umbriel reveals it by
 the shortest distance needed to show it completely. A column entering from the
@@ -140,20 +169,21 @@ Dropping a window into empty space above or below a vertically resized stack
 consumes that space. Existing windows retain their pixel heights, and the
 dropped window fills the remainder apart from the configured gap.
 
-## Vertical workspaces
+## Vertical strips
 
-On a vertical scrolling workspace, directional actions follow their visual
-directions. `window-focus-left` and `window-focus-right` move within a lane,
-while `window-focus-up` and `window-focus-down` walk lanes. Likewise,
-`column-move-left` and `column-move-right` reorder within a lane, while
-`window-move-up` and `window-move-down` move the lane along the strip.
-`layout-scroll-left` and `layout-scroll-up` both scroll toward strip start;
-their right and down forms scroll toward strip end.
+On an output with horizontal workspaces the strip is vertical, and directional
+actions follow their visual directions. `window-focus-left` and
+`window-focus-right` move within a lane, while `window-focus-up` and
+`window-focus-down` walk lanes. Likewise, `column-move-left` and
+`column-move-right` reorder within a lane, while `window-move-up` and
+`window-move-down` move the lane along the strip. `layout-scroll-left` and
+`layout-scroll-up` both scroll toward strip start; their right and down forms
+scroll toward strip end.
 
 The default Mod+wheel bindings invoke `window-focus-left` and
-`window-focus-right`, so they move within a lane. Vertical-heavy configurations
-should bind wheel chords to `window-focus-up` and `window-focus-down`, or to
-`layout-scroll-up` and `layout-scroll-down`.
+`window-focus-right`, so they move within a lane. Configurations using vertical
+strips should bind wheel chords to `window-focus-up` and `window-focus-down`, or
+to `layout-scroll-up` and `layout-scroll-down`.
 
 ## Dwindle layout
 
@@ -186,36 +216,50 @@ handles a column that enters Dwindle.
 
 Master divides the workspace into a master area and a stack area. The master
 area is on the side selected by `position`; the stack occupies the other side.
-Each area arranges its windows from top to bottom. When only one area has
-windows, that area fills the complete content box.
+With `position = "center"` the master area sits between two stacks, one on each
+side. Each area arranges its windows from top to bottom. When only one area has
+windows, that area fills the complete content box, except in center mode where
+the master area keeps its centered box even with empty sides.
 
 ### Settings
 
 ```toml
 [layout.master]
-position = "left"                   # "left" or "right"
+position = "left"                   # "left", "right", or "center"
 default_width_fraction = 0.55       # 0.1-0.9
-new_on_top = true                    # place new windows at the top of the stack
+new_on_top = true                   # place new windows at the top of the stack
+new_becomes_master = false          # new windows take the master slot
 ```
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `position` | string | `"left"` | Side occupied by the master area: `"left"` or `"right"`. |
+| `position` | string | `"left"` | Side occupied by the master area: `"left"`, `"right"`, or `"center"` between two stacks. |
 | `default_width_fraction` | float | `0.55` | Initial fraction assigned to the master area when both areas exist (0.1-0.9). |
 | `new_on_top` | bool | `true` | Place new windows at the top of the stack. Disable to place them at the bottom. |
+| `new_becomes_master` | bool | `false` | Give the master slot to each new window and move the last master row to the stack top. |
 
 ### Behavior
 
 The first window becomes master. A new window also becomes master when the
-master area is empty. Otherwise it joins the top of the stack when
+master area is empty. With `new_becomes_master = true` every new window takes
+the top master slot and the last master row moves to the stack top, leaving the
+master count unchanged. Otherwise a new window joins the top of the stack when
 `new_on_top = true`, or the bottom when it is false. Removing the final master
 window promotes the top stack window. Moving every window out of master does
 not promote one, so the remaining stack stays full-width until another window
 opens or is moved into master.
 
+In center mode a new stack window goes to the side with fewer windows, the left
+one on a tie, and `new_on_top` places it within that side. A promotion takes the
+top row of the fuller side, and a demotion goes to the top of the emptier side,
+the left one on a tie in both cases. With the master area empty, one remaining
+stack fills the content box and two split it evenly.
+
 Consume actions preserve their visual meanings. With `position = "left"`, left
 moves a stack window into master and right moves a master window into the stack.
 With `position = "right"`, those roles reverse because master is visually right.
+With `position = "center"`, consume and expel move a window one area along the
+visual order left stack, master, right stack, and fail at either end.
 The consume-or-expel variants make the same directional move.
 
 Master workflows use a deterministic layout-order ring: master windows from top
@@ -227,12 +271,14 @@ and `layout-master-count-decrease` demotes the master bottom into the stack. At
 least one window remains in master.
 
 Width actions operate on the master fraction; the stack fraction is its
-complement. `window-modify-width:<delta>` changes the focused area's fraction,
-and the cycle actions walk `width_presets`. Width actions are inert while either
-area is empty because the occupied area already fills the viewport. Height
-actions change a window's row fraction within its area; see
+complement, and in center mode each side reports half of that complement.
+`window-modify-width:<delta>` changes the focused area's fraction, and the cycle
+actions walk `width_presets`. Width actions are inert while either area is
+empty, except in center mode where a nonempty master area always has margins to
+move. Height actions change a window's row fraction within its area; see
 [Sizing behavior](#sizing-behavior). Tiled resizing is available on the boundary
-between master and stack and between rows in either area.
+between master and stack and between rows in either area. A center master
+resizes symmetrically: dragging one margin moves both.
 
 Dragging over a master workspace previews the destination row within the
 nearest area. Hint bands appear at the top, bottom, and between existing rows.
@@ -252,8 +298,8 @@ stacking extent, `window-modify-height:<delta>` changes that fraction by a
 signed amount, and `window-cycle-height` / `window-cycle-height-back` cycle it
 through the same presets in either direction. In scrolling and master layouts
 this sizes a row within its column or area. In dwindle it adjusts the vertical
-splits containing the window. On a vertical scrolling workspace the stacking
-axis is horizontal, so these actions change a window's width within its lane.
+splits containing the window. On a vertical strip the stacking axis is
+horizontal, so these actions change a window's width within its lane.
 
 In the scrolling layout, a window alone in its column is resized from its bottom
 edge, exactly as dragging that edge does: the top edge stays where it is and the
@@ -264,6 +310,23 @@ space above itself instead. In master and dwindle, a window with no neighbor on
 the stacking axis has nothing to trade space with, so the height actions leave
 it unchanged.
 
+### Client minimum sizes
+
+A client can keep a buffer larger than its assigned tile, including when its
+minimum size exceeds the available space. Umbriel clips that content to the
+tile at rest. Interactive resize may temporarily scale the buffer; releasing
+the grab restores unscaled content for the window and its resized neighbors,
+without waiting for another client commit.
+
+Vesktop enforces a 940×500 logical-pixel minimum by default. To allow smaller
+tiles, open **User Settings**, select **Vesktop** in the left sidebar under
+**Vencord Settings** (below **Backup & Restore**), then enable
+**Behaviour → Disable minimum window size** (`disableMinSize`). Open this page
+directly: the settings search does not find this option.
+
+This removes Vesktop's minimum-size constraint, but does not guarantee that
+all of its interface adapts to very narrow or short tiles.
+
 ### Floating windows
 
 All of the width and height actions resize a focused floating window directly,
@@ -273,17 +336,36 @@ that changes the window's pixel size on that axis: a float's size is pixels, so
 a preset that rounds to the size the window already has is skipped rather than
 applied as a step that does nothing. Resizing a maximized float leaves
 maximization behind and keeps the new size, so a later toggle maximizes rather
-than reverting to the pre-maximize box. Fullscreen owns the size outright, so
-the actions do nothing while a float is fullscreen.
+than reverting to the pre-maximize box. Both axes use the
+`animation.windows_move` transition, and a float that hangs off an edge travels
+with the resize so the same part of it stays on screen at the new size.
+Fullscreen owns the size outright, so the actions do nothing while a float is
+fullscreen.
+
+Parented XDG dialogs are stacked with their ancestor chain. Raising any member
+raises the family while keeping each dialog above its parent, including when an
+ancestor is floating, pinned, or fullscreen. A dialog without a
+`default_position` rule opens centered over the visible part of its parent,
+kept inside the usable area: over the output for a fullscreen parent and over
+the usable area for one maximized to edges. A parent scrolled out of view leaves
+it centered on the area.
 
 ### Maximize and fullscreen
 
 `window-toggle-fullscreen` ignores layout struts and layer-shell exclusive zones
-and fills the entire output. `window-toggle-maximize` toggles the focused
-column's full-width state, and a tiled column stays inside configured struts and
-gaps. A floating window has no column, so it fills the output's usable area and
-restores its exact previous box, including its last dropped position. Both
-directions use the `animation.windows_move` transition.
+and fills the entire output. It normally targets the focused window. If another
+fullscreen window completely covers that focus on the active output, the action
+exits the covering fullscreen window first and leaves focus in place.
+Leaving fullscreen sends the restored tiled or floating size with the windowed
+configure, including for XWayland windows, so the action has no timer-delayed
+fallback.
+`window-toggle-maximize` toggles the focused column's full-width state, and a
+tiled column stays inside configured struts and gaps. A floating window has no
+column, so it fills the output's usable area and restores its exact previous
+box, including its last dropped position. Both directions use the
+`animation.windows_move` transition.
 `window-toggle-maximize-to-edges` drops layout struts, gaps, and borders, while
 layer-shell exclusive zones remain visible. A column's full-width restore state
-survives that toggle and a fullscreen round trip.
+survives that toggle and a fullscreen round trip. In the scrolling layout the
+strip reserves the strut band such a column reaches past, so neighboring
+columns keep their gap instead of sitting underneath the window.

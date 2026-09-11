@@ -2,7 +2,7 @@
 # Closing the focused window while the overview is open focuses its nearest predecessor. The overview keeps the focus chrome while it owns the seat, so an unmap must move the workspace's focused view immediately: the card border is what shows where each row will land, and a dead focused view leaves no card highlighted until zoom-out happens to refocus. The closed window is closed through unmap-client, which unmaps on the close request without destroying the surface, so Server::removeView's destroy-time refocus can never mask a missing unmap-time reassignment.
 set -euo pipefail
 
-readonly UNMAP_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly UNMAP_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 
 spawn_survivor() {
   local title=$1

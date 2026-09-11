@@ -3,7 +3,7 @@
 # Overlay only unmaps (View stays alive) so we can catch missing unmap-time refocus.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 
 wait_for_window_count() {
   local want=$1
@@ -29,8 +29,8 @@ wait_for_focus() {
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
 
-[appearance]
-animation_ms = 1
+[animation]
+duration_ms = 1
 
 [layout]
 mode = "scrolling"

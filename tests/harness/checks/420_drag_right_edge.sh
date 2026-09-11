@@ -10,7 +10,7 @@ readonly OVERVIEW_ZOOM=0.5
 readonly OVERVIEW_X=320
 readonly OVERVIEW_Y=180
 readonly OVERVIEW_RIGHT=959
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 pointer() {
   "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"
@@ -23,8 +23,14 @@ spawn_client() {
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
 
+[colors]
+insert_hint = "#FF0000FF"
+
+[colors.overview]
+background_tint = "#000000FF"
+workspace_background = "#000000FF"
+
 [appearance]
-insert_hint_color = "#FF0000FF"
 drag_opacity = 0.0
 
 [layout.scrolling]
@@ -32,8 +38,6 @@ default_width_fraction = 0.5
 
 [overview]
 zoom = 0.5
-background_tint = "#000000FF"
-workspace_background = "#000000FF"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 

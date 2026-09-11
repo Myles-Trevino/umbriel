@@ -1,7 +1,7 @@
 #pragma once
 
 extern "C" {
-#include <scenefx/types/fx/clipped_region.h>
+#include <umbrielfx/types/fx/clipped_region.h>
 #include <wlr/util/box.h>
 }
 

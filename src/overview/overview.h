@@ -1,7 +1,9 @@
 #pragma once
 
+#include "config/config.h"
 #include "core/animation.h"
 #include "layout/drop_target.h"
+#include "overview/navigation.h"
 #include "scene/hint_rect.h"
 #include "scene/surface_blur.h"
 
@@ -23,9 +25,12 @@ struct wlr_scene_blur;
 struct wlr_scene_rect;
 struct wlr_scene_tree;
 struct wlr_surface;
+struct wlr_pointer;
 
 namespace umbriel {
 
+  enum class KeybindAction;
+  class LayerSurface;
   class Output;
   class Server;
   class View;
@@ -65,7 +70,7 @@ namespace umbriel {
     void gestureEnd(bool commitOpen);
 
     [[nodiscard]] AnimationPhase animationPhase() const override { return AnimationPhase::Overlays; }
-    // Advances the zoom animation; returns true while it is still running.
+    // Advances the zoom and workspace-row animations; returns true while either is still running.
     bool tickAnimations(uint64_t nowMsec) override;
     [[nodiscard]] bool hasActiveAnimations() const override;
     // The overview zooms every output at once.
@@ -84,28 +89,60 @@ namespace umbriel {
     // size once per frame regardless of how many views resized together.
     void onViewPresentationChanged(View* view);
     void onOutputRemoved(Output* output);
+    // A background- or bottom-layer surface on `output` mapped, unmapped, or changed layer: the mirrored stack has
+    // to catch up while the real bottom layer is hidden.
+    void onDesktopLayerChanged(Output* output);
 
     // Input entry points; called from Cursor/Keyboard while active.
     bool handleButton(uint32_t button, bool pressed, double lx, double ly, uint32_t timeMsec);
     void handleMotion(double lx, double ly, uint32_t timeMsec);
     bool handleAxisNotch(bool vertical, double direction, double lx, double ly);
+    // Swipe and finger-scroll input both arrive as content-direction deltas and share one navigation lifetime; the
+    // source only selects the travel distances and decides who may end the gesture. Scroll samples are combined at
+    // the pointer frame.
+    void beginNavigation(wlr_pointer* pointer, NavigationSource source, double lx, double ly);
+    void updateNavigation(double dx, double dy, uint32_t timeMsec);
+    void endNavigation(bool cancelled, uint32_t timeMsec, NavigationSource source);
+    // Drop an unfinished gesture whatever its source, leaving the filmstrip to settle on the active workspace.
+    void cancelNavigation();
+    void handleTouchpadAxis(wlr_pointer* pointer, bool vertical, double delta, uint32_t timeMsec, double lx, double ly);
+    void handleTouchpadFrame();
     bool handleFallbackKey(uint32_t keysym);
-    // Focus a neighboring column while keeping the overview card strip in
-    // sync with the regular horizontal window animation.
-    bool focusAdjacent(int direction);
+    // Clear pending badge input for directional focus while interactive. Configured
+    // actions retain their regular handlers throughout the closing animation.
+    bool handleKeybindAction(KeybindAction action);
     // Step the active workspace `delta` rows down the filmstrip on `output` (null: wherever the pointer is). Returns
-    // false at either end. The wheel, the arrow keys and the three-finger swipe all arrive here: while the overview is
-    // up the real trees are hidden, so there is nothing to slide and switching is a discrete step rather than the
-    // animated transition it is outside.
+    // false at either end. The wheel and middle-button drag use discrete steps;
+    // touchpad navigation moves the rows continuously and selects on release.
     bool selectRelativeWorkspace(int delta, Output* output);
-    // Resolve the visible workspace row under a pointer drag. Horizontal
-    // scrolling rows extend across the output because their cards may overhang
-    // the centered workspace preview.
+    // The workspace row a pointer drag at this point pans. The row extends along its scrolling axis across the
+    // whole output, because its cards may overhang the centered workspace preview.
     [[nodiscard]] Workspace* pointerScrollWorkspace(double lx, double ly);
-    [[nodiscard]] double contentScale() const { return zoom(); }
+    // The scale previews rest at once open. Gesture travel maps onto the settled layout, so it must not depend on
+    // how far the zoom has come.
+    [[nodiscard]] static double settledZoom();
     [[nodiscard]] bool dragging() const { return m_dragCard != nullptr || m_middlePressed; }
 
   private:
+    static void onNavigationDeviceDestroyed(wl_listener* listener, void* data);
+    [[nodiscard]] Workspace* navigationWorkspace() const;
+    OverviewNavigation m_navigation;
+    Output* m_navigationOutput = nullptr;
+    Workspace* m_navigationWorkspace = nullptr;
+    wlr_pointer* m_navigationPointer = nullptr;
+    wl_listener m_navigationDeviceDestroy{};
+    NavigationSource m_navigationSource = NavigationSource::Scroll;
+    bool m_navigationHorizontalWorkspaces = false;
+    bool m_navigationStarted = false;
+    double m_navigationStart = 0;
+    double m_navigationScale = 1;
+    bool m_navigationCentered = false;
+    // Finger-scroll deltas accumulated since the last pointer frame, and whether that axis reported a stop.
+    double m_scrollDx = 0;
+    double m_scrollDy = 0;
+    bool m_scrollStopX = false;
+    bool m_scrollStopY = false;
+    uint32_t m_scrollTime = 0;
     struct Card;
     struct OutputState;
 
@@ -127,7 +164,7 @@ namespace umbriel {
       Overview* overview = nullptr;
       OutputState* owner = nullptr;
       View* view = nullptr;
-      size_t row = 0; // workspace index inside the output's group
+      size_t workspaceIndex = 0; // workspace index inside the output's group
       wlr_scene_tree* tree = nullptr;
       wlr_scene_border* border = nullptr;
       SurfaceBlur blur;
@@ -148,25 +185,68 @@ namespace umbriel {
       std::string label;
     };
 
+    // One surface of the output's mirrored stack: a background- or bottom-layer surface copied into every workspace
+    // preview. `tree` is the layer surface's own scene tree, re-resolved every layout, and the source of both the
+    // mirror geometry and its color state.
+    struct DesktopSurface {
+      Overview* overview = nullptr;
+      OutputState* state = nullptr;
+      wlr_surface* surface = nullptr;
+      wlr_scene_tree* tree = nullptr;
+      wl_listener commit{};
+      wl_listener destroy{};
+    };
+
+    // One mirrored surface inside one row. Every copy paces its client: the real bottom layer is hidden while the
+    // overview is open, so these buffers are the only place its surfaces are sampled.
+    struct DesktopMirror {
+      DesktopSurface* source = nullptr;
+      wlr_scene_buffer* buffer = nullptr;
+      wl_listener outputSample{};
+      wl_listener frameDone{};
+    };
+
+    // Resolved stack entry, ordered bottom to top.
+    struct DesktopEntry {
+      wlr_surface* surface = nullptr;
+      wlr_scene_tree* tree = nullptr;
+    };
+
+    // One workspace row's backdrop: the flat fill, plus one mirror per stack surface drawn over it when
+    // `[overview] workspace_wallpaper` is on. The fill is what an output with an empty stack shows.
+    struct WorkspaceBackground {
+      wlr_scene_tree* tree = nullptr;
+      wlr_scene_rect* fill = nullptr;
+      std::vector<std::unique_ptr<DesktopMirror>> mirrors;
+    };
+
     struct OutputState {
       Output* output = nullptr;
       wlr_scene_tree* tree = nullptr;
       wlr_scene_blur* backgroundBlur = nullptr;
       wlr_scene_rect* backgroundTint = nullptr;
-      std::vector<wlr_scene_rect*> workspaceBackgrounds;
+      std::vector<WorkspaceBackground> workspaceBackgrounds;
       std::vector<std::unique_ptr<Card>> cards;
-      double rowScroll = 0;
-      double rowFrom = 0;
-      double rowTo = 0;
+      std::vector<std::unique_ptr<DesktopSurface>> desktop;
+      // Filmstrip position in workspace rows: 1.5 sits halfway between rows 1 and 2. Wheel steps, keyboard moves and
+      // touchpad releases all animate this one value; a gesture in flight snaps it to follow the fingers.
+      AnimatedValue rowScroll;
+      size_t activeWorkspaceIndex = 0;
     };
 
-    // Row placement for one output at the current progress.
-    struct RowMetrics {
+    // Workspace preview placement for one output at the current progress. Previews
+    // step along the output's workspace axis; the other axis stays centered.
+    struct PreviewMetrics {
       wlr_box outputBox{};
+      // Output box minus the layer-shell exclusive zones. Panels of the top and
+      // overlay layers draw over the overview, so on-output is not the same as
+      // on-screen for anything the overview wants readable.
+      wlr_box usableBox{};
       double zoom = 1.0;
-      int rowX = 0;
-      int rowW = 0;
-      int rowH = 0;
+      WorkspaceAxis axis = WorkspaceAxis::Vertical;
+      int previewW = 0;
+      int previewH = 0;
+      double baseX = 0;
       double baseY = 0;
       double gap = 0;
     };
@@ -177,15 +257,23 @@ namespace umbriel {
     static void onCardBufferFrameDone(wl_listener* listener, void* data);
     static void addCardSurface(wlr_surface* surface, int sx, int sy, void* data);
     static void syncCardSurface(wlr_surface* surface, int sx, int sy, void* data);
+    static void onDesktopSurfaceCommit(wl_listener* listener, void* data);
+    static void onDesktopSurfaceDestroy(wl_listener* listener, void* data);
+    static void onDesktopMirrorOutputSample(wl_listener* listener, void* data);
+    static void onDesktopMirrorFrameDone(wl_listener* listener, void* data);
 
+    // Preview scale for the current open or close progress.
     [[nodiscard]] double zoom() const;
-    [[nodiscard]] static bool rowMetrics(const OutputState& state, const Server& server, double zoom, RowMetrics& out);
-    [[nodiscard]] static int rowTop(const RowMetrics& metrics, double rowScroll, size_t row);
+    [[nodiscard]] static bool
+    previewMetrics(const OutputState& state, const Server& server, double zoom, PreviewMetrics& out);
+    // The workspace preview's box in layout coordinates.
+    [[nodiscard]] static wlr_box
+    previewBox(const PreviewMetrics& metrics, double workspaceScroll, size_t workspaceIndex);
 
     bool beginPresentation();
     void buildState();
     void populateCards(OutputState& state);
-    Card* createCard(OutputState& state, View* view, size_t row);
+    Card* createCard(OutputState& state, View* view, size_t workspaceIndex);
     void snapshotCardForClose(Card& card);
     void destroyCard(Card* card);
     static void syncCardBuffer(CardSurface& entry);
@@ -194,10 +282,24 @@ namespace umbriel {
     [[nodiscard]] OutputState* stateFor(const Output* output);
     [[nodiscard]] OutputState* stateForWorkspace(const Workspace* workspace);
     [[nodiscard]] Card* findCard(const View* view);
+    [[nodiscard]] WorkspaceBackground createWorkspaceBackground(OutputState& state) const;
+    // Mapped background- and bottom-layer surfaces of `output`, in render order.
+    void collectDesktopSurfaces(const Output& output, std::vector<DesktopEntry>& out) const;
+    // Re-resolves the output's mirrored stack, rebuilding every row's mirrors when its surfaces changed.
+    void refreshDesktop(OutputState& state);
+    void clearDesktop(OutputState& state) const;
+    void createRowMirrors(OutputState& state, WorkspaceBackground& background) const;
+    // Points every mirror at its surface's committed buffer and copies its color state.
+    void syncDesktopMirrors(const OutputState& state) const;
+    [[nodiscard]] static bool desktopSourceBox(const DesktopSurface& source, wlr_box& out);
 
     void applyProgress();
     void layoutOutput(OutputState& state);
-    void layoutCard(Card& card, const RowMetrics& metrics, double rowScroll);
+    void layoutCard(Card& card, const PreviewMetrics& metrics, double workspaceScroll, const View* liveTarget);
+    // The window a focus or close action would act on right now: the focused view of the active workspace on the
+    // output holding the cursor. Null when that workspace is empty, which is also when those actions do nothing.
+    [[nodiscard]] View* liveTargetView() const;
+    [[nodiscard]] std::array<float, 4> cardBorderColor(const Card& card, const View* liveTarget) const;
     void assignShortcuts();
     void renderCardShortcut(Card& card);
     bool handleShortcutKey(uint32_t keysym);
@@ -206,13 +308,17 @@ namespace umbriel {
     void updateShortcutAssignments();
 
     void startAnimation(double target, bool closing);
+    // Move one output's filmstrip onto row `target`. `releaseVelocity` is the speed a touchpad gesture left behind,
+    // in rows per second, and is zero for every other caller.
+    void animateRow(OutputState& state, double target, double releaseVelocity = 0);
     void finishAnimation();
     void beginClose(View* focus);
     void teardown();
     void scheduleFrames() const;
 
     [[nodiscard]] Card* cardAt(double lx, double ly);
-    [[nodiscard]] Workspace* rowAt(double lx, double ly, OutputState** outState, size_t* outRow, bool extendHorizontal);
+    [[nodiscard]] Workspace*
+    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis);
     [[nodiscard]] WorkspaceGroup*
     workspaceGapAt(double lx, double ly, OutputState** outState, size_t* outIndex, wlr_box* outHintBox);
     [[nodiscard]] Workspace* preferredWorkspace() const;
@@ -222,7 +328,10 @@ namespace umbriel {
     void updateDrag(double lx, double ly);
     void endDrag(bool drop);
     void syncWorkspaceRows(OutputState& state, WorkspaceGroup& group);
-    void showDropHint(const wlr_box& worldBox, const RowMetrics& metrics, double rowScroll, size_t row, Output* output);
+    void showDropHint(
+        const wlr_box& worldBox, const PreviewMetrics& metrics, double workspaceScroll, size_t workspaceIndex,
+        Output* output
+    );
     void showWorkspaceInsertHint(Output* output, const wlr_box& box);
     void hideDropHint();
 
@@ -236,7 +345,7 @@ namespace umbriel {
     double m_progress = 0;
     double m_targetProgress = 0;
     double m_progressFrom = 0;
-    AnimatedValue m_anim;
+    AnimatedValue m_zoomAnim;
     View* m_pendingFocus = nullptr;
     bool m_cardPresentationDirty = false;
     bool m_gestureOpenedHere = false;
@@ -244,6 +353,8 @@ namespace umbriel {
     std::string m_shortcutInput;
     std::vector<ShortcutAssignment> m_shortcutAssignments;
     size_t m_shortcutLabelCapacity = 0;
+    // Output under the pointer, which is the output the live target resolves against.
+    Output* m_pointerOutput = nullptr;
 
     Card* m_pressCard = nullptr;
     Workspace* m_pressWorkspace = nullptr;
@@ -253,10 +364,12 @@ namespace umbriel {
     Output* m_middleOutput = nullptr;
     double m_middlePressX = 0;
     double m_middlePressY = 0;
-    double m_middleAccumY = 0;
+    // Travel along the pressed output's workspace axis since the last step.
+    double m_middleAccum = 0;
     bool m_middlePressed = false;
     bool m_middleDragging = false;
-    bool m_middleHorizontal = false;
+    // Set once a drag locks across the workspace axis, whether or not a strip was there to pan.
+    bool m_middlePanning = false;
     bool m_middleScrolling = false;
 
     Card* m_dragCard = nullptr;

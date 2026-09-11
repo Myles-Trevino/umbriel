@@ -5,7 +5,7 @@ set -euo pipefail
 readonly BTN_RIGHT=273 # evdev BTN_RIGHT
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 spawn_client() {
   foot sh -c 'sleep 120' > /dev/null 2>&1 &

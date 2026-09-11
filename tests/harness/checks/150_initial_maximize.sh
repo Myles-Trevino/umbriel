@@ -2,7 +2,7 @@
 # Saved client maximization is ignored by default and honored only when configured.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 
 spawn_maximized_client() {
   local title=$1 log=$2

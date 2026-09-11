@@ -18,7 +18,7 @@ mode = "1920x1080@180"
 Both forms are matched case-insensitively, and both work anywhere an output is
 named: output sections, `default_output` on a window rule, `map_to_output` on a
 tablet, `output` on a workspace rule, and the `:OUTPUT` suffix on actions such
-as `dpms-off` and `scratchpad-toggle`.
+as `dpms-off`.
 
 Prefer the monitor form when a rule belongs to a particular display rather than
 to a particular port. A connector is a property of the machine, so a laptop used
@@ -42,15 +42,23 @@ its windows to the active workspace on another enabled output, and moves them
 back to the workspace they came from when it returns. The output also returns
 to its previously active workspace. Floating and pinned windows retain their
 full-output-relative positions even when a panel recreates its exclusive zone
-after the output. Scratchpad windows move with their output assignment and
-return with it too. Tiled windows retain their order, grouping, split ratios,
-and sizes in the scrolling, dwindle, and master layouts. Taskbars and docks
-continue to associate windows on inactive workspaces with the restored output
-without requiring each workspace to be visited. If no enabled output remains,
-windows stay without a workspace until one becomes available.
+after the output. A scratchpad is global, but its window group has a current
+output. If that output disappears, the whole scratchpad moves to another
+enabled output and returns with its group positions when the original output
+returns. Tiled windows retain their order, grouping, split ratios, and sizes in
+the scrolling, dwindle, and master layouts. Taskbars and docks continue to
+associate windows on inactive workspaces with the restored output without
+requiring each workspace to be visited. If no enabled output remains, windows
+stay without a workspace until one becomes available.
 
 Run `umbriel outputs` inside a session to list connector names, copyable monitor
-configuration names, and modes.
+configuration names, and modes. `umbriel outputs --json` prints the same
+information as an array. Each entry has the reported `name`, `description`,
+`make`, `model`, `serial`, `enabled`, `transform`, and `scale`; logical
+`position`; physical `physical_size` in millimetres; nullable `adaptive_sync`;
+and `modes`. Every mode has `width`, `height`, `refresh_mhz`, `preferred`, and
+`current`. `config_name` is the copyable monitor name or `null` when the display
+does not report make, model, or serial.
 
 ```toml
 [output.DP-1]
@@ -63,21 +71,81 @@ direct_scanout = false
 workspaces = 5
 ```
 
+A resolution the display does not advertise is tried as a custom mode. If the configured mode cannot be applied at
+all, which happens when a display reconnects advertising a different set of modes, Umbriel commits the preferred
+advertised mode and logs a warning instead of leaving the output dark. The configured mode is tried again whenever the
+output is reconfigured, so reconnecting the display or reloading the configuration restores it.
+
 ## Settings
 
-| Key              | Type                              | Default      | Description                                                                                                                                         |
-| ---------------- | --------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`        | bool                              | `true`       | Set to `false` to turn the monitor off and remove it from the desktop.                                                                              |
-| `mode`           | string                            | (native)     | Resolution and refresh rate: `"WIDTHxHEIGHT"` or `"WIDTHxHEIGHT@HZ"`. Fractional Hz allowed. Ignored in nested sessions (the parent controls size). |
-| `position`       | `[x, y]`                          | (auto)       | Top-left corner in logical layout coordinates. Omit for automatic placement.                                                                        |
-| `scale`          | float                             | `1.0`        | Output scale (0.25-4.0).                                                                                                                            |
-| `vrr`            | string                            | `"disabled"` | Variable refresh rate policy: `"disabled"`, `"always"`, or `"fullscreen"`.                                                                          |
-| `tearing`        | bool                              | `false`      | Permit asynchronous page flips for eligible fullscreen windows on this output.                                                                      |
-| `direct_scanout` | bool                              | `true`       | Permit eligible client buffers to bypass composition on this output. Set to `false` to always composite.                                            |
-| `hdr`            | string                            | `"off"`      | HDR policy: `"off"`, `"on"`, `"auto"`, or `"fullscreen"`.                                                                                           |
-| `sdr_white`      | float                             | `203`        | SDR reference white in cd/m2 while the output is in HDR mode (80-1000).                                                                             |
-| `workspaces`     | int, string array, or `"dynamic"` | `"dynamic"`  | Dynamic numbered workspaces, a static count from 1 to 64, or a static ordered list of 1 to 64 names.                                                |
-| `transform`      | string                            | `"normal"`   | Output rotation/flip.                                                                                                                               |
+| Key                                          | Type                              | Default     | Description                                                                                                                                         |
+| -------------------------------------------- | --------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                    | bool                              | `true`      | Set to `false` to turn the monitor off and remove it from the desktop.                                                                              |
+| `mode`                                       | string                            | (native)    | Resolution and refresh rate: `"WIDTHxHEIGHT"` or `"WIDTHxHEIGHT@HZ"`. Fractional Hz allowed. Falls back to the preferred advertised mode when it cannot be applied. Ignored in nested sessions (the parent controls size). |
+| `position`                                   | `[x, y]`                          | (auto)      | Top-left corner in logical layout coordinates. Omit for automatic placement.                                                                        |
+| `scale`                                      | float                             | `1.0`       | Output scale (0.25-4.0).                                                                                                                            |
+| `vrr`                                        | string                            | `"disabled"` | Variable refresh rate policy: `"disabled"`, `"always"`, or `"fullscreen"`.                                                                          |
+| `tearing`                                    | bool                              | `false`     | Permit asynchronous page flips for eligible fullscreen windows on this output.                                                                      |
+| `direct_scanout`                             | bool                              | `true`      | Permit eligible client buffers to bypass composition on this output. Set to `false` to always composite.                                            |
+| `hdr`                                        | string                            | `"off"`     | HDR policy: `"off"`, `"on"`, `"auto"`, or `"fullscreen"`.                                                                                           |
+| `sdr_white`                                  | float                             | `203`       | SDR reference white in cd/m2 while the output is in HDR mode (80-1000).                                                                             |
+| `workspaces`                                 | int, string array, or `"dynamic"` | `"dynamic"` | A dynamic inventory, which may include names declared by `[[workspace]]`, 1 to 64 anonymous fixed positions, or a static ordered list of 1 to 64 names. |
+| `min_workspaces`                             | int                               | `1`         | Workspace count a dynamic output never shrinks below (1-64). Rejected together with a static `workspaces` inventory.                                |
+| `workspace_axis`                             | string                            | `"vertical"` | Axis the output's workspaces are arranged along: `"vertical"` or `"horizontal"`. The scrolling strip runs perpendicular to it. See [Workspace axis](workspaces.md#workspace-axis). |
+| `transform`                                  | string                            | `"normal"`  | Output rotation/flip.                                                                                                                               |
+| `layout.scrolling.default_width_fraction`    | float                             | inherited   | Initial scrolling strip-axis extent for new columns on this output (0.1-1.0). Inherits the global value when omitted.                               |
+
+### Workspace count
+
+`workspaces` chooses the model: omitted or `"dynamic"` for dynamic workspaces,
+an integer count for anonymous fixed positions, or an ordered string list for
+named static workspaces.
+
+On a dynamic output, `min_workspaces` is a floor on the count. The output keeps
+that many workspaces while they are empty, still adds a trailing empty one above
+the floor, and prunes back down to it:
+
+```toml
+[output.DP-1]
+min_workspaces = 3
+```
+
+The floor is per output. Setting it alongside a static `workspaces` inventory is
+a configuration error, since that inventory already states an exact count. See
+[Workspaces](workspaces.md#choose-a-workspace-model).
+
+A name-based `[[workspace]]` entry adds a persistent named member to matching
+dynamic outputs. An entry without `output` applies independently to every
+dynamic output. These named members remain empty without being pruned. Below
+the 64-workspace limit, they do not replace the trailing empty anonymous
+workspace or the optional leading one. Static inventories remain exact in the
+configuration: their workspace rules can customize existing members but cannot
+add new ones. See
+[Persistent names in a dynamic inventory](workspaces.md#persistent-names-in-a-dynamic-inventory).
+
+### Initial scrolling width
+
+Override the global initial scrolling width for every workspace on one output:
+
+```toml
+[output.DP-1.layout.scrolling]
+default_width_fraction = 0.4
+```
+
+The output name uses the same connector or monitor identity matching as the
+rest of its section. If connector and monitor sections both match, the monitor
+section wins, including for this value.
+
+A matching workspace rule can override the output value. Resolution proceeds
+from the global value, to the matching output value, to an unscoped workspace
+rule, and finally to an output-scoped workspace rule. See
+[Workspace rules](workspaces.md#workspace-rules).
+
+This setting controls initial width only. Reloading it leaves existing columns
+at their stored widths, while columns created afterward use the new value.
+Moving an existing column onto this output also preserves that column's width.
+See [Scrolling behavior](layout.md#scrolling-behavior) for window-rule and
+column-creation details.
 
 ### Position and scale
 
@@ -194,6 +262,10 @@ not keep HDR enabled. Leaving fullscreen, changing workspace, moving the
 surface to another output, unmapping it, or closing it returns the output to
 SDR.
 
+Normal SDR outputs and implicit surfaces use the sRGB transfer curve. The
+preferred encoding for color-managed SDR clients is gamma 2.2; tagged content
+is converted to the sRGB target, while ordinary sRGB pixels keep their values.
+
 Automatic HDR follows metadata committed by the client, including metadata on
 mapped subsurfaces used by native Wayland Wine. It cannot infer a color space
 from pixel values. Direct XWayland games and other clients that do not attach
@@ -247,6 +319,9 @@ sdr_white = 203
 Switching between SDR and HDR changes the output format, color space, and HDR
 metadata. Many monitors briefly go black while their display link resynchronizes.
 This is expected for each automatic or fullscreen transition.
+PQ HDR output encoding requires fragment `highp` precision to preserve smooth
+gradients in the 10-bit output. OpenGL ES 2 implementations without fragment
+`highp` cannot initialize Umbriel's output shader.
 
 While an HDR output is active, screencopy clients such as `grim` and Noctalia
 receive an SDR Gamma 2.2 view instead of PQ-encoded output pixels. This keeps
@@ -262,8 +337,9 @@ workspaces no longer appear in the overview. The output's workspaces and their
 windows are preserved, so setting `enabled = true` back (or removing the key)
 restores the monitor exactly as it was. Tiled windows retain their order,
 grouping, split ratios, and sizes in the scrolling, dwindle, and master layouts.
-Its active workspace and the positions of floating, pinned, and scratchpad
-windows return too. A disabled output is never picked as a focus, placement, or
+Its active workspace and the positions of floating and pinned windows return
+too. Any scratchpad displaced from the output returns as a group with its
+positions. A disabled output is never picked as a focus, placement, or
 layer-surface target.
 
 ```toml

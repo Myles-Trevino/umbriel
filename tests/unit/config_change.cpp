@@ -12,6 +12,7 @@ using umbriel::ModifierKey;
 using umbriel::OutputRule;
 using umbriel::SecurityContextRule;
 using umbriel::WindowRule;
+using umbriel::WorkspaceConfig;
 
 UMBRIEL_TEST(anIdenticalConfigChangesNothing) {
   const Config before;
@@ -28,13 +29,24 @@ UMBRIEL_TEST(aFirstLoadReportsEverything) {
   CHECK(change.appearance);
   CHECK(change.animation);
   CHECK(change.colors);
+  CHECK(change.drm);
   CHECK(change.events);
   CHECK(change.input);
   CHECK(change.outputs);
+  CHECK(change.scratchpads);
 }
 
 UMBRIEL_TEST(eachSectionIsReportedOnItsOwn) {
   const Config before;
+
+  {
+    Config after;
+    after.drm.ignoredPciAddresses.emplace_back("0000:01:00.0");
+    const ConfigChange change = ConfigChange::between(before, after);
+    CHECK(change.drm);
+    CHECK(!ConfigEffects::between(before, after).any());
+    CHECK_EQ(change.summary(), std::string("drm"));
+  }
 
   {
     Config after;
@@ -143,6 +155,16 @@ UMBRIEL_TEST(eachSectionIsReportedOnItsOwn) {
     const ConfigChange change = ConfigChange::between(before, after);
     CHECK(change.workspaces);
     CHECK(!change.workspaceRules);
+    CHECK(!ConfigEffects::between(before, after).workspaceInventory);
+  }
+  {
+    Config after;
+    after.workspaces.emptyAbove = !after.workspaces.emptyAbove;
+    const ConfigChange change = ConfigChange::between(before, after);
+    CHECK(change.workspaces);
+    const ConfigEffects effects = ConfigEffects::between(before, after);
+    CHECK(effects.workspaceInventory);
+    CHECK(effects.workspaceLayout);
   }
   {
     Config after;
@@ -185,13 +207,20 @@ UMBRIEL_TEST(nestedAppearanceChangesAreCaught) {
   CHECK(ConfigChange::between(before, focused).input);
 }
 
-UMBRIEL_TEST(featureSpecificColorChangesRemainAppearanceChanges) {
+UMBRIEL_TEST(borderColorChangesAreColorChangesThatRefreshChrome) {
   const Config before;
   Config after;
-  after.appearance.borderFocused[0] += 0.1F;
+  after.colors.border.focused[0] += 0.1F;
   const ConfigChange change = ConfigChange::between(before, after);
-  CHECK(change.appearance);
-  CHECK(!change.colors);
+  CHECK(change.colors);
+  CHECK(!change.appearance);
+
+  const ConfigEffects effects = ConfigEffects::between(before, after);
+  CHECK(effects.viewChrome);
+  CHECK(effects.internalUi);
+  CHECK(effects.overviewPresentation);
+  CHECK(!effects.workspaceLayout);
+  CHECK(!effects.sceneBlur);
 }
 
 UMBRIEL_TEST(listSectionsAreCompared) {
@@ -223,6 +252,13 @@ UMBRIEL_TEST(listSectionsAreCompared) {
     Config after;
     after.securityContextRules.push_back(SecurityContextRule{});
     CHECK(ConfigChange::between(before, after).securityContextRules);
+  }
+  {
+    Config after;
+    after.scratchpads.push_back({.name = "term"});
+    const ConfigChange change = ConfigChange::between(before, after);
+    CHECK(change.scratchpads);
+    CHECK_EQ(change.summary(), std::string("scratchpads"));
   }
 }
 
@@ -291,6 +327,19 @@ UMBRIEL_TEST(ruleEqualitySeesAnOptionChangeUnderTheSamePattern) {
   CHECK(ConfigChange::between(before, after).windowRules);
 }
 
+UMBRIEL_TEST(ruleEqualitySeesDefaultScratchpadChange) {
+  Config before;
+  Config after;
+  WindowRule first;
+  first.defaultScratchpad = "terminal";
+  WindowRule second;
+  second.defaultScratchpad = "music";
+  before.windowRules.push_back(std::move(first));
+  after.windowRules.push_back(std::move(second));
+
+  CHECK(ConfigChange::between(before, after).windowRules);
+}
+
 UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
   const Config before;
   const Config after;
@@ -313,18 +362,17 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
   CHECK(effects.internalUi);
 }
 
-UMBRIEL_TEST(semanticColorsRefreshOnlyInternalUi) {
+UMBRIEL_TEST(anyColorChangeRefreshesEveryColorConsumer) {
   const Config before;
   Config after;
   after.colors.textPrimary[0] -= 0.1F;
 
   const ConfigEffects effects = ConfigEffects::between(before, after);
-  CHECK(effects.internalUi);
-  CHECK_EQ(effects.summary(), std::string("internal UI"));
+  CHECK_EQ(effects.summary(), std::string("view chrome, internal UI, overview presentation"));
   CHECK(!effects.outputState);
   CHECK(!effects.workspaceLayout);
-  CHECK(!effects.viewChrome);
-  CHECK(!effects.overviewPresentation);
+  CHECK(!effects.sceneBlur);
+  CHECK(!effects.input);
 }
 
 UMBRIEL_TEST(borderWidthRefreshesChromeAndWorkspaceLayout) {
@@ -384,6 +432,76 @@ UMBRIEL_TEST(workspaceRuleStrutsOnlyRefreshWorkspaceLayout) {
   CHECK(!effects.layerEffects);
 }
 
+UMBRIEL_TEST(namedWorkspaceDeclarationChangesRefreshDynamicInventory) {
+  const Config empty;
+  Config configured;
+  WorkspaceConfig named;
+  named.name = "dev";
+  configured.workspaceRules.push_back(std::move(named));
+
+  const ConfigEffects added = ConfigEffects::between(empty, configured);
+  CHECK(added.workspaceInventory);
+  CHECK(added.workspaceLayout);
+  CHECK(!added.outputState);
+
+  const ConfigEffects removed = ConfigEffects::between(configured, empty);
+  CHECK(removed.workspaceInventory);
+  CHECK(removed.workspaceLayout);
+  CHECK(!removed.outputState);
+
+  Config renamed = configured;
+  renamed.workspaceRules[0].name = "web";
+  const ConfigEffects renameEffects = ConfigEffects::between(configured, renamed);
+  CHECK(renameEffects.workspaceInventory);
+  CHECK(renameEffects.workspaceLayout);
+  CHECK(!renameEffects.outputState);
+
+  Config retargeted = configured;
+  retargeted.workspaceRules[0].output = "DP-1";
+  const ConfigEffects retargetEffects = ConfigEffects::between(configured, retargeted);
+  CHECK(retargetEffects.workspaceInventory);
+  CHECK(retargetEffects.workspaceLayout);
+  CHECK(!retargetEffects.outputState);
+}
+
+UMBRIEL_TEST(workspaceRuleLayoutAndIndexEditsDoNotRefreshDynamicInventory) {
+  Config named;
+  WorkspaceConfig namedRule;
+  namedRule.name = "dev";
+  namedRule.output = "DP-1";
+  namedRule.layout.mode = umbriel::LayoutMode::Scrolling;
+  named.workspaceRules.push_back(std::move(namedRule));
+
+  Config layoutChanged = named;
+  layoutChanged.workspaceRules[0].layout.mode = umbriel::LayoutMode::Master;
+  const ConfigEffects layoutEffects = ConfigEffects::between(named, layoutChanged);
+  CHECK(layoutEffects.workspaceLayout);
+  CHECK(!layoutEffects.workspaceInventory);
+  CHECK(!layoutEffects.outputState);
+  CHECK_EQ(layoutEffects.summary(), std::string{"workspace layout"});
+
+  Config indexAdded = named;
+  WorkspaceConfig indexRule;
+  indexRule.index = 2;
+  indexRule.output = "DP-1";
+  indexRule.layout.mode = umbriel::LayoutMode::Dwindle;
+  indexAdded.workspaceRules.push_back(std::move(indexRule));
+  const ConfigEffects indexAddedEffects = ConfigEffects::between(named, indexAdded);
+  CHECK(indexAddedEffects.workspaceLayout);
+  CHECK(!indexAddedEffects.workspaceInventory);
+  CHECK(!indexAddedEffects.outputState);
+  CHECK_EQ(indexAddedEffects.summary(), std::string{"workspace layout"});
+
+  Config indexRetargeted = indexAdded;
+  indexRetargeted.workspaceRules[1].index = 3;
+  indexRetargeted.workspaceRules[1].output = "DP-2";
+  const ConfigEffects indexRetargetedEffects = ConfigEffects::between(indexAdded, indexRetargeted);
+  CHECK(indexRetargetedEffects.workspaceLayout);
+  CHECK(!indexRetargetedEffects.workspaceInventory);
+  CHECK(!indexRetargetedEffects.outputState);
+  CHECK_EQ(indexRetargetedEffects.summary(), std::string{"workspace layout"});
+}
+
 UMBRIEL_TEST(outputStateAndWorkspaceInventoryAreIndependent) {
   Config before;
   OutputRule original;
@@ -422,6 +540,22 @@ UMBRIEL_TEST(outputStateAndWorkspaceInventoryAreIndependent) {
   CHECK(inventoryEffects.workspaceInventory);
   CHECK(inventoryEffects.workspaceLayout);
 
+  Config countedInventory = before;
+  countedInventory.outputs[0].workspaces = size_t{2};
+  Config namedInventory = countedInventory;
+  namedInventory.outputs[0].workspaces = std::vector<std::string>{"1", "2"};
+  const ConfigEffects inventoryKindEffects = ConfigEffects::between(countedInventory, namedInventory);
+  CHECK(!inventoryKindEffects.outputState);
+  CHECK(inventoryKindEffects.workspaceInventory);
+  CHECK(inventoryKindEffects.workspaceLayout);
+
+  Config minimumChanged = before;
+  minimumChanged.outputs[0].minWorkspaces = 3;
+  const ConfigEffects minimumEffects = ConfigEffects::between(before, minimumChanged);
+  CHECK(!minimumEffects.outputState);
+  CHECK(minimumEffects.workspaceInventory);
+  CHECK(minimumEffects.workspaceLayout);
+
   Config disabled = before;
   disabled.outputs[0].enabled = false;
   const ConfigEffects disableEffects = ConfigEffects::between(before, disabled);
@@ -433,6 +567,54 @@ UMBRIEL_TEST(outputStateAndWorkspaceInventoryAreIndependent) {
   CHECK(reenableEffects.outputState);
   CHECK(!reenableEffects.workspaceInventory);
 }
+
+UMBRIEL_TEST(outputScrollingDefaultOnlyRefreshesWorkspaceLayout) {
+  Config before;
+  OutputRule output;
+  output.name = "HEADLESS-1";
+  before.outputs.push_back(output);
+
+  Config after = before;
+  after.outputs[0].layout.scrolling.defaultWidthFraction = 0.75;
+
+  const ConfigChange change = ConfigChange::between(before, after);
+  CHECK(change.outputs);
+  CHECK(!change.layout);
+
+  const ConfigEffects effects = ConfigEffects::between(before, after);
+  CHECK(effects.workspaceLayout);
+  CHECK(!effects.outputState);
+  CHECK(!effects.tearingPolicy);
+  CHECK(!effects.directScanoutPolicy);
+  CHECK(!effects.workspaceInventory);
+  CHECK(!effects.sceneBlur);
+  CHECK(!effects.viewChrome);
+  CHECK(!effects.layerEffects);
+  CHECK(!effects.animation);
+  CHECK(!effects.input);
+  CHECK(!effects.overviewPresentation);
+  CHECK(!effects.internalUi);
+  CHECK(effects.invalidatesOverview());
+  CHECK_EQ(effects.summary(), std::string("workspace layout"));
+}
+
+UMBRIEL_TEST(outputWorkspaceAxisOnlyRefreshesWorkspaceLayout) {
+  Config before;
+  OutputRule output;
+  output.name = "HEADLESS-1";
+  before.outputs.push_back(output);
+
+  Config after = before;
+  after.outputs[0].workspaceAxis = umbriel::WorkspaceAxis::Horizontal;
+
+  const ConfigEffects effects = ConfigEffects::between(before, after);
+  CHECK(effects.workspaceLayout);
+  CHECK(effects.invalidatesOverview());
+  CHECK(!effects.outputState);
+  CHECK(!effects.workspaceInventory);
+  CHECK_EQ(effects.summary(), std::string("workspace layout"));
+}
+
 UMBRIEL_TEST(outputRuleNameSetChangesRefreshIdentityDependentEffects) {
   Config before;
   OutputRule connector;
@@ -498,6 +680,22 @@ UMBRIEL_TEST(tearingPolicyDoesNotReapplyOutputStateOrInvalidateOverview) {
   Config changedContentMatcher = forcedByRule;
   changedContentMatcher.windowRules[0].matchContentType = ContentType::Video;
   CHECK(ConfigEffects::between(forcedByRule, changedContentMatcher).tearingPolicy);
+
+  Config changedFloatingMatcher = forcedByRule;
+  changedFloatingMatcher.windowRules[0].matchFloating = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedFloatingMatcher).tearingPolicy);
+
+  Config changedPinnedMatcher = forcedByRule;
+  changedPinnedMatcher.windowRules[0].matchPinned = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedPinnedMatcher).tearingPolicy);
+
+  Config changedScratchpadMatcher = forcedByRule;
+  changedScratchpadMatcher.windowRules[0].matchScratchpad = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedScratchpadMatcher).tearingPolicy);
+
+  Config changedAloneMatcher = forcedByRule;
+  changedAloneMatcher.windowRules[0].matchAlone = true;
+  CHECK(ConfigEffects::between(forcedByRule, changedAloneMatcher).tearingPolicy);
 
   Config changedTagMatcher = forcedByRule;
   changedTagMatcher.windowRules[0].xdgTagPattern = "^game-launcher$";
@@ -603,6 +801,35 @@ UMBRIEL_TEST(blurRulesAndInputReachOnlyTheirConsumers) {
   Config cursorChanged;
   cursorChanged.input.cursor.hardwareCursor = false;
   CHECK(ConfigEffects::between(before, cursorChanged).input);
+}
+
+UMBRIEL_TEST(ruleRequestingOptimizedBlurReachesTheOutputs) {
+  Config before;
+  before.appearance.blur.optimized = false;
+  CHECK(!before.optimizedBlurNeeded());
+
+  // Adding a window rule normally only touches view chrome, but a rule that
+  // asks for the cached background blur has to create it on every output.
+  Config windowed = before;
+  WindowRule rule;
+  rule.blurOptimized = true;
+  windowed.windowRules.push_back(rule);
+  CHECK(windowed.optimizedBlurNeeded());
+  CHECK(ConfigEffects::between(before, windowed).sceneBlur);
+
+  Config layered = before;
+  LayerRule layerRule;
+  layerRule.optimized = true;
+  layered.layerRules.push_back(layerRule);
+  CHECK(layered.optimizedBlurNeeded());
+  CHECK(ConfigEffects::between(before, layered).sceneBlur);
+
+  Config optedOut = before;
+  WindowRule plain;
+  plain.blurOptimized = false;
+  optedOut.windowRules.push_back(plain);
+  CHECK(!optedOut.optimizedBlurNeeded());
+  CHECK(!ConfigEffects::between(before, optedOut).sceneBlur);
 }
 
 UMBRIEL_TEST(overviewInvalidationExcludesIrrelevantRuntimeEffects) {

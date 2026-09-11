@@ -3,7 +3,7 @@
 # no-focus rule, so applications cannot gain focus merely by attaching a serialless activation request.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/client-activation.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/client-activation-control"
 

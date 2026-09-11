@@ -13,8 +13,9 @@
 #include "workspace/scratchpad.h"
 #include "workspace/workspace.h"
 
+#include <algorithm>
+#include <string>
 #include <string_view>
-#include <utility>
 
 namespace umbriel {
   namespace {
@@ -64,11 +65,56 @@ namespace umbriel {
     return true;
   }
 
-  bool Server::executeKeybindAction(const Keybind& bind, std::string* error) {
+  bool Server::cooldownAllows(const Keybind& bind) {
+    if (bind.cooldownMs <= 0) {
+      return true;
+    }
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point now = Clock::now();
+    const auto it = std::ranges::find_if(m_bindCooldowns, [&bind](const BindCooldown& cooldown) {
+      return cooldown.submap == bind.submap
+          && cooldown.modifiers == bind.modifiers
+          && cooldown.useMod == bind.useMod
+          && cooldown.modifierOnly == bind.modifierOnly
+          && cooldown.keysym == bind.keysym
+          && cooldown.wheel == bind.wheel
+          && cooldown.mouseButton == bind.mouseButton;
+    });
+    if (it != m_bindCooldowns.end()) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->lastTriggered).count();
+      if (elapsed < bind.cooldownMs) {
+        return false;
+      }
+      it->lastTriggered = now;
+      return true;
+    }
+    m_bindCooldowns.push_back({
+        .submap = bind.submap,
+        .modifiers = bind.modifiers,
+        .useMod = bind.useMod,
+        .modifierOnly = bind.modifierOnly,
+        .keysym = bind.keysym,
+        .wheel = bind.wheel,
+        .mouseButton = bind.mouseButton,
+        .lastTriggered = now,
+    });
+    return true;
+  }
+
+  bool Server::executeKeybindAction(const Keybind& bind, std::string* error, bool* cooldownBlocked) {
     if (error != nullptr) {
       error->clear();
     }
+    if (cooldownBlocked != nullptr) {
+      *cooldownBlocked = false;
+    }
     if (bind.action == KeybindAction::None) {
+      return false;
+    }
+    if (bind.cooldownMs > 0 && !cooldownAllows(bind)) {
+      if (cooldownBlocked != nullptr) {
+        *cooldownBlocked = true;
+      }
       return false;
     }
     const ActionHandlerFn handler = actionHandlerFor(bind.action);
@@ -81,7 +127,11 @@ namespace umbriel {
     // Config reload may replace the keybind storage while its action runs, so
     // retain the transition before dispatching the primary action.
     const std::optional<SubmapArg> submapAfter = bind.submapAfter;
-    const bool handled = handler(*this, bind, error);
+    Overview* overview = this->overview();
+    bool handled = overview != nullptr && overview->handleKeybindAction(bind.action);
+    if (!handled) {
+      handled = handler(*this, bind, error);
+    }
     if (!submapAfter.has_value()) {
       return handled;
     }
@@ -188,7 +238,9 @@ namespace umbriel {
       return std::nullopt;
     }
     const Keybind matched = *bind;
-    return executeKeybindAction(matched) ? std::optional<Keybind>{matched} : std::nullopt;
+    bool cooldownBlocked = false;
+    const bool handled = executeKeybindAction(matched, nullptr, &cooldownBlocked);
+    return handled || cooldownBlocked ? std::optional<Keybind>{matched} : std::nullopt;
   }
 
   bool Server::handleWheelBind(WheelDirection direction, uint32_t modifiers) {
@@ -215,7 +267,10 @@ namespace umbriel {
     return false;
   }
 
-  std::optional<Keybind> Server::handleMouseBind(uint32_t button, uint32_t modifiers) {
+  std::optional<Keybind> Server::handleMouseBind(uint32_t button, uint32_t modifiers, bool* actionExecuted) {
+    if (actionExecuted != nullptr) {
+      *actionExecuted = false;
+    }
     const uint32_t effective = modifiers & ~(WLR_MODIFIER_CAPS | WLR_MODIFIER_MOD2);
     const std::string_view currentSubmap = m_activeSubmaps.empty() ? std::string_view{} : m_activeSubmaps.back();
 
@@ -234,9 +289,15 @@ namespace umbriel {
       if (effective != expected) {
         continue;
       }
-      std::optional<Keybind> matched{bind};
-      const bool handled = executeKeybindAction(*matched);
-      return handled ? std::move(matched) : std::nullopt;
+      bool cooldownBlocked = false;
+      const bool handled = executeKeybindAction(bind, nullptr, &cooldownBlocked);
+      if (!handled && !cooldownBlocked) {
+        return std::nullopt;
+      }
+      if (actionExecuted != nullptr) {
+        *actionExecuted = handled;
+      }
+      return bind;
     }
 
     return std::nullopt;
@@ -245,12 +306,14 @@ namespace umbriel {
   void Server::pushSubmap(const std::string& name) {
     cancelModifierTap();
     m_activeSubmaps.push_back(name);
+    notifySubmapChanged();
   }
 
   void Server::popSubmap() {
     cancelModifierTap();
     if (!m_activeSubmaps.empty()) {
       m_activeSubmaps.pop_back();
+      notifySubmapChanged();
     }
   }
 

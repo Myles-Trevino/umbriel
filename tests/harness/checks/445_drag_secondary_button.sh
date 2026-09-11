@@ -8,7 +8,7 @@ readonly BTN_LEFT=272
 readonly BTN_RIGHT=273
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 pointer() {
   "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"
@@ -28,6 +28,11 @@ wait_for_count() {
 }
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
+
+[input]
+# The secondary button is free to retarget a drag; this check is about the
+# initiating button owning the move, so nothing may be bound to it here.
+window_drag_toggle = "none"
 
 [layout.scrolling]
 default_width_fraction = 0.5

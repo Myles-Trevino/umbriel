@@ -4,7 +4,7 @@
 # Positive inner contours stay rounded, while zero preserves a square corner.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/small-border-client.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/small-border.png"
 readonly TOTAL_WIDTH=9
@@ -14,13 +14,15 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 duration_ms = 1
 
+[colors.border]
+focused = "#00FF00"
+unfocused = "#00FF00"
+outer = "#FF0000"
+
 [appearance]
 border_width = 1
 outer_border_width = 8
 corner_radius = 1
-border_focused = "#00FF00"
-border_unfocused = "#00FF00"
-outer_border_color = "#FF0000"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 

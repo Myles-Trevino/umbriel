@@ -18,16 +18,18 @@ namespace umbriel {
   // which is cheaper and less error-prone than every consumer being individually re-notified from Server::applyConfig.
   class ConfigStore {
   public:
-    // Resolve the user, system, or packaged config and load it. Falls back to
-    // built-in defaults when no file exists.
-    void load(const char* explicitPath);
+    // Resolve the user, system, or packaged config and load it. Missing explicit
+    // paths, invalid includes, syntax errors, and DRM policy errors fail closed;
+    // other parsed errors retain the compatibility fallback to defaults.
+    [[nodiscard]] bool load(const char* explicitPath);
     // Re-parse. On failure the previous configuration is kept and the generation
     // does not move: a config with a syntax error must not take the session down.
     [[nodiscard]] ConfigReloadResult reload();
 
     [[nodiscard]] const Config& config() const { return m_config; }
     [[nodiscard]] const std::vector<ConfigDiagnostic>& diagnostics() const { return m_diagnostics; }
-    // Every file that feeds this config, root plus includes.
+    // Every path whose change can affect the next reload: implicit lookup
+    // candidates, the attempted root, and its includes.
     [[nodiscard]] const std::vector<std::filesystem::path>& watchPaths() const { return m_watchPaths; }
     [[nodiscard]] const std::filesystem::path& rootPath() const { return m_rootPath; }
     // True when the session is running on built-in defaults because no file was
@@ -38,7 +40,7 @@ namespace umbriel {
 
     // Loader-only writers follow. The read-only API remains above.
     // Keep the active config when a reload fails.
-    void beginLoad();
+    void beginLoad(const std::vector<std::filesystem::path>& watchPaths);
     void addDiagnostic(ConfigDiagnostic diagnostic);
     // The sink the section readers append to directly.
     [[nodiscard]] std::vector<ConfigDiagnostic>& mutableDiagnostics() { return m_diagnostics; }
@@ -48,7 +50,7 @@ namespace umbriel {
     // last (after a section has finished), so without this the list jumps around the file.
     void sortDiagnostics();
     // Adopt a successfully parsed config and bump the generation.
-    [[nodiscard]] ConfigReloadResult commit(Config&& config, bool fileMissing);
+    [[nodiscard]] ConfigReloadResult commit(Config&& config, std::filesystem::path rootPath, bool fileMissing);
     void setMissingIncludes(bool missing) { m_missingIncludes = missing; }
     void setRootPath(std::filesystem::path path, bool explicitPath);
 
@@ -56,6 +58,10 @@ namespace umbriel {
     Config m_config;
     std::vector<ConfigDiagnostic> m_diagnostics;
     std::vector<std::filesystem::path> m_watchPaths;
+    // Captured before configured environment variables are applied. Reloads
+    // recheck this fixed search order instead of letting the config redirect
+    // its own source through HOME or the XDG variables.
+    std::vector<std::filesystem::path> m_implicitCandidates;
     std::filesystem::path m_rootPath;
     bool m_explicitPath = false;
     bool m_fileMissing = false;

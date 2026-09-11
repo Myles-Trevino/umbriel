@@ -11,9 +11,12 @@
 // clang-format on
 
 #include <algorithm>
+#include <cstddef>
+#include <string>
 #include <variant>
 
 using umbriel::ActionArgKind;
+using umbriel::ActionSpec;
 using umbriel::Keybind;
 using umbriel::KeybindAction;
 using umbriel::parseAction;
@@ -439,31 +442,48 @@ UMBRIEL_TEST(parsesArgumentFreeNewActions) {
 }
 
 UMBRIEL_TEST(parsesWorkspaceSelectors) {
-  const auto selector = [](const Keybind& bind) {
-    static const umbriel::WorkspaceArg empty;
-    const auto* arg = umbriel::payloadIf<umbriel::WorkspaceArg>(bind);
-    return arg != nullptr ? *arg : empty;
-  };
+  const auto selector = [](const Keybind& bind) { return umbriel::payloadIf<umbriel::WorkspaceArg>(bind); };
 
   Keybind bind;
   CHECK(parseAction("workspace-switch:3", bind));
   CHECK(bind.action == KeybindAction::WorkspaceSwitch);
-  CHECK_EQ(selector(bind).name, std::string{"3"});
-  CHECK(selector(bind).output.empty());
+  const auto* position = selector(bind);
+  CHECK(position != nullptr);
+  const auto* positionValue =
+      position != nullptr ? std::get_if<umbriel::WorkspaceIndex>(&position->reference) : nullptr;
+  CHECK(positionValue != nullptr);
+  CHECK(positionValue != nullptr && positionValue->value == 3);
+  CHECK(position != nullptr && position->output.empty());
 
   CHECK(parseAction("workspace-switch:web/DP-1", bind));
-  CHECK_EQ(selector(bind).name, std::string{"web"});
-  CHECK_EQ(selector(bind).output, std::string{"DP-1"});
+  const auto* named = selector(bind);
+  CHECK(named != nullptr);
+  const auto* nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "web");
+  CHECK(named != nullptr && named->output == "DP-1");
 
   CHECK(parseAction("window-move-to-workspace:2/HDMI-A-1", bind));
   CHECK(bind.action == KeybindAction::WindowMoveToWorkspace);
-  CHECK_EQ(selector(bind).name, std::string{"2"});
-  CHECK_EQ(selector(bind).output, std::string{"HDMI-A-1"});
+  position = selector(bind);
+  positionValue = position != nullptr ? std::get_if<umbriel::WorkspaceIndex>(&position->reference) : nullptr;
+  CHECK(positionValue != nullptr);
+  CHECK(positionValue != nullptr && positionValue->value == 2);
+  CHECK(position != nullptr && position->output == "HDMI-A-1");
 
-  CHECK(parseAction("column-move-to-workspace:chat/DP-1", bind));
+  CHECK(parseAction("column-move-to-workspace:\"2\"/DP-1", bind));
   CHECK(bind.action == KeybindAction::ColumnMoveToWorkspace);
-  CHECK_EQ(selector(bind).name, std::string{"chat"});
-  CHECK_EQ(selector(bind).output, std::string{"DP-1"});
+  named = selector(bind);
+  nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "2");
+  CHECK(named != nullptr && named->output == "DP-1");
+
+  CHECK(parseAction("workspace-switch:name:2", bind));
+  named = selector(bind);
+  nameValue = named != nullptr ? std::get_if<umbriel::WorkspaceName>(&named->reference) : nullptr;
+  CHECK(nameValue != nullptr);
+  CHECK(nameValue != nullptr && nameValue->value == "name:2");
 }
 
 UMBRIEL_TEST(rejectsMalformedWorkspaceSelectors) {
@@ -472,6 +492,11 @@ UMBRIEL_TEST(rejectsMalformedWorkspaceSelectors) {
   CHECK(!parseAction("workspace-switch:/DP-1", bind)); // empty workspace
   CHECK(!parseAction("workspace-switch:web/", bind));  // empty output
   CHECK(!parseAction("workspace-switch:a/b/c", bind)); // two separators
+  CHECK(!parseAction("workspace-switch:0", bind));
+  CHECK(!parseAction("workspace-switch:65", bind));
+  CHECK(!parseAction("workspace-switch:\"\"", bind));
+  CHECK(!parseAction("workspace-switch:\"2", bind));
+  CHECK(!parseAction("workspace-switch:2\"", bind));
   CHECK(!parseAction("column-move-to-workspace:", bind));
   CHECK(!parseAction("column-move-to-workspace:/DP-1", bind));
 }
@@ -483,24 +508,6 @@ UMBRIEL_TEST(parsesOptionalOutputActions) {
   };
 
   Keybind bind;
-  CHECK(parseAction("scratchpad-toggle", bind));
-  CHECK(bind.action == KeybindAction::ScratchpadToggle);
-  // The alternative is present even with no output, so the payload still says
-  // which action shape it belongs to.
-  CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) != nullptr);
-  CHECK(outputOf(bind).empty());
-
-  CHECK(parseAction("scratchpad-toggle:DP-2", bind));
-  CHECK_EQ(outputOf(bind), std::string{"DP-2"});
-
-  CHECK(parseAction("window-move-to-scratchpad", bind));
-  CHECK(bind.action == KeybindAction::WindowMoveToScratchpad);
-  CHECK(parseAction("window-restore-from-scratchpad:eDP-1", bind));
-  CHECK_EQ(outputOf(bind), std::string{"eDP-1"});
-  CHECK(parseAction("window-toggle-scratchpad", bind));
-  CHECK(bind.action == KeybindAction::WindowToggleScratchpad);
-  CHECK(parseAction("scratchpad-focus-next", bind));
-
   CHECK(parseAction("dpms-off", bind));
   CHECK(bind.action == KeybindAction::DpmsOff);
   CHECK(outputOf(bind).empty());
@@ -510,6 +517,40 @@ UMBRIEL_TEST(parsesOptionalOutputActions) {
   CHECK(bind.action == KeybindAction::DpmsOn);
   CHECK(parseAction("dpms-on:eDP-1", bind));
   CHECK_EQ(outputOf(bind), std::string{"eDP-1"});
+}
+
+UMBRIEL_TEST(parsesOptionalScratchpadActions) {
+  const auto scratchpadOf = [](const Keybind& bind) {
+    const auto* arg = umbriel::payloadIf<umbriel::ScratchpadArg>(bind);
+    return arg != nullptr ? arg->name : std::string{};
+  };
+
+  Keybind bind;
+  CHECK(parseAction("scratchpad-toggle", bind));
+  CHECK(bind.action == KeybindAction::ScratchpadToggle);
+  // The alternative is present even with no name, so the payload still says
+  // which action shape it belongs to.
+  CHECK(umbriel::payloadIf<umbriel::ScratchpadArg>(bind) != nullptr);
+  CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) == nullptr);
+  CHECK(scratchpadOf(bind).empty());
+
+  CHECK(parseAction("scratchpad-toggle:terminal", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"terminal"});
+
+  CHECK(parseAction("window-move-to-scratchpad:notes", bind));
+  CHECK(bind.action == KeybindAction::WindowMoveToScratchpad);
+  CHECK_EQ(scratchpadOf(bind), std::string{"notes"});
+  CHECK(parseAction("window-restore-from-scratchpad:music", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"music"});
+  CHECK(parseAction("window-toggle-scratchpad:chat", bind));
+  CHECK(bind.action == KeybindAction::WindowToggleScratchpad);
+  CHECK_EQ(scratchpadOf(bind), std::string{"chat"});
+  CHECK(parseAction("scratchpad-focus-next:terminal", bind));
+  CHECK_EQ(scratchpadOf(bind), std::string{"terminal"});
+
+  CHECK(parseAction("window-move-to-scratchpad", bind));
+  CHECK(scratchpadOf(bind).empty());
+  CHECK(!parseAction("scratchpad-toggle:", bind));
 }
 
 UMBRIEL_TEST(parsesWindowIdActions) {
@@ -536,6 +577,7 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
     switch (spec.argKind) {
     case ActionArgKind::None:
     case ActionArgKind::OptionalOutput:
+    case ActionArgKind::OptionalScratchpad:
     case ActionArgKind::OptionalWindowId:
     case ActionArgKind::SkipConfirmation:
       break;
@@ -583,6 +625,9 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
     case ActionArgKind::OptionalOutput:
       CHECK(umbriel::payloadIf<umbriel::OutputArg>(bind) != nullptr);
       break;
+    case ActionArgKind::OptionalScratchpad:
+      CHECK(umbriel::payloadIf<umbriel::ScratchpadArg>(bind) != nullptr);
+      break;
     case ActionArgKind::WindowId:
     case ActionArgKind::OptionalWindowId:
       CHECK(umbriel::payloadIf<umbriel::WindowIdArg>(bind) != nullptr);
@@ -617,6 +662,7 @@ UMBRIEL_TEST(everyActionSpecRoundTripsThroughParseAction) {
     switch (spec.argKind) {
     case ActionArgKind::None:
     case ActionArgKind::OptionalOutput:
+    case ActionArgKind::OptionalScratchpad:
     case ActionArgKind::OptionalWindowId:
     case ActionArgKind::SkipConfirmation:
       break;
@@ -693,8 +739,8 @@ UMBRIEL_TEST(everySpecHasAOneLineSummary) {
     CHECK(!spec.summary.empty());
     CHECK(spec.summary.size() <= 60);
     CHECK(!spec.summary.ends_with('.'));
-    CHECK(spec.summary.find('\n') == std::string_view::npos);
-    CHECK(spec.summary.find('|') == std::string_view::npos); // would break the markdown table cell
+    CHECK(!spec.summary.contains('\n'));
+    CHECK(!spec.summary.contains('|')); // would break the markdown table cell
     CHECK(!spec.summary.empty() && std::isupper(static_cast<unsigned char>(spec.summary.front())) != 0);
   }
 }
@@ -709,6 +755,12 @@ UMBRIEL_TEST(defaultKeybindsAreUsable) {
 
   // No default may carry an unset action.
   CHECK(std::ranges::none_of(binds, [](const Keybind& bind) { return bind.action == KeybindAction::None; }));
+  const auto close =
+      std::ranges::find_if(binds, [](const Keybind& bind) { return bind.action == KeybindAction::WindowClose; });
+  CHECK(close != binds.end());
+  CHECK(close->useMod);
+  CHECK_EQ(close->modifiers, uint32_t{0});
+  CHECK_EQ(close->keysym, xkb_keysym_to_lower(XKB_KEY_q));
 
   // Overview toggle must not key-repeat: holding it would thrash open/close.
   const auto overview =
@@ -720,6 +772,92 @@ UMBRIEL_TEST(defaultKeybindsAreUsable) {
   const auto switches =
       std::ranges::count_if(binds, [](const Keybind& bind) { return bind.action == KeybindAction::WorkspaceSwitch; });
   CHECK_EQ(switches, 18);
+}
+
+// Every name `umbriel msg --help` and the keybind reader advertise must round-trip through parseAction with an
+// argument of the kind its spec declares, and the help text beside it must describe that same argument. The action
+// list is spread across the KeybindAction enum, the kActionSpecs table, and parseAction's switch, so a spec whose
+// name, argument kind, or advertised parameter stops agreeing with the others is otherwise only discovered by a user
+// typing it.
+UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
+  const auto sampleFor = [](ActionArgKind kind) -> std::string {
+    switch (kind) {
+    case ActionArgKind::None:
+      return {};
+    case ActionArgKind::Command:
+      return ":true";
+    case ActionArgKind::WidthFraction:
+      return ":0.5";
+    case ActionArgKind::Workspace:
+      return ":1";
+    case ActionArgKind::OptionalOutput:
+      return ":DP-1";
+    case ActionArgKind::OptionalScratchpad:
+      return ":terminal";
+    case ActionArgKind::WindowId:
+    case ActionArgKind::OptionalWindowId:
+      return ":window-1";
+    case ActionArgKind::WidthDelta:
+      return ":0.1";
+    case ActionArgKind::LayoutMode:
+      return ":scrolling";
+    case ActionArgKind::SkipConfirmation:
+      return ":skip-confirmation";
+    }
+    return {};
+  };
+
+  const auto paramFor = [](ActionArgKind kind) -> std::string_view {
+    switch (kind) {
+    case ActionArgKind::None:
+      return "";
+    case ActionArgKind::Command:
+      return "<cmd>";
+    case ActionArgKind::WidthFraction:
+      return "<fraction>";
+    case ActionArgKind::Workspace:
+      return "<workspace>[/<output>]";
+    case ActionArgKind::OptionalOutput:
+      return "[<output>]";
+    case ActionArgKind::OptionalScratchpad:
+      return "[<scratchpad>]";
+    case ActionArgKind::WindowId:
+      return "<window-id>";
+    case ActionArgKind::OptionalWindowId:
+      return "[<window-id>]";
+    case ActionArgKind::WidthDelta:
+      return "<delta>";
+    case ActionArgKind::LayoutMode:
+      return "<scrolling|dwindle|master|toggle>";
+    case ActionArgKind::SkipConfirmation:
+      return "[skip-confirmation]";
+    }
+    return "";
+  };
+
+  size_t swept = 0;
+  for (const ActionSpec& spec : umbriel::actionSpecs()) {
+    Keybind bind;
+    const std::string text = std::string(spec.name) + sampleFor(spec.argKind);
+    CHECK(parseAction(text, bind));
+    CHECK(bind.action == spec.action);
+    // An optional argument must also parse without one.
+    if (spec.argKind == ActionArgKind::OptionalOutput
+        || spec.argKind == ActionArgKind::OptionalScratchpad
+        || spec.argKind == ActionArgKind::OptionalWindowId
+        || spec.argKind == ActionArgKind::SkipConfirmation) {
+      Keybind bare;
+      CHECK(parseAction(spec.name, bare));
+      CHECK(bare.action == spec.action);
+    }
+    // `msg --help` and docs/user/actions.md render `param` verbatim, so it is what the user types against. "submap"
+    // shares the name:<text> syntax with "spawn" while naming a submap rather than a shell command.
+    const std::string_view expectedParam =
+        spec.action == KeybindAction::Submap ? std::string_view{"<name>"} : paramFor(spec.argKind);
+    CHECK_EQ(std::string(spec.param), std::string(expectedParam));
+    ++swept;
+  }
+  CHECK(swept > 100);
 }
 
 int main() { return RUN_TESTS(); }

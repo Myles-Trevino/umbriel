@@ -4,8 +4,8 @@
 # manager itself stays blocked even when a rule lists it, and a reload leaves connected clients as they were.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
-readonly SECURITY_CONTEXT_CLIENT="${UMBRIEL_SECURITY_CONTEXT_CLIENT:-./build-debug/security-context-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
+readonly SECURITY_CONTEXT_CLIENT="${UMBRIEL_SECURITY_CONTEXT_CLIENT:-./build-debug/tests/security-context-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/security-context-rule-client.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/security-context-rule-control"
 

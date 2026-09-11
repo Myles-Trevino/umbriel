@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Real clients map into the scrolling layout and land on the geometry the layout math predicts. This is the regression net for the layout sizing path. The size a
-# view is first configured with and the size the layout arranges it to must agree, or windows visibly resize on first paint.
+# view is first configured with and the size the layout arranges it to must agree, or windows visibly resize on first paint. Reloading the focus policy re-applies
+# it to the focused column, and the floating toggle round trips.
 set -euo pipefail
 
 spawn_client() {
@@ -38,7 +39,7 @@ readonly EXPECT_W=624
 readonly EXPECT_H=700
 readonly EXPECT_CENTER_X=$(( (1280 - EXPECT_W) / 2 ))
 
-printf '\n[layout.scrolling]\ndefault_width_fraction = 0.5\ncenter_focused = false\n' >> "$UMBRIEL_CONFIG"
+printf '\n[layout.scrolling]\ndefault_width_fraction = 0.5\ncenter_focused = "never"\n' >> "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 
 spawn_client a
@@ -79,40 +80,13 @@ if ! jq -e '[.[].x] | unique | length == 2' <<< "$windows" > /dev/null; then
   exit 1
 fi
 
-# The focused last column can rest beyond max scroll so its content is centered.
-"$UMBRIEL" msg column-center > /dev/null
-center_x=0
-for _ in $(seq 40); do
-  center_x=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "harness-b") | .x')
-  [[ $center_x -eq $EXPECT_CENTER_X ]] && break
-  sleep 0.1
-done
-if [[ $center_x -ne $EXPECT_CENTER_X ]]; then
-  echo "expected last column centered at x=$EXPECT_CENTER_X, got x=$center_x"
-  exit 1
-fi
-
-# The first column uses the corresponding negative resting offset.
-"$UMBRIEL" msg window-focus-left > /dev/null
-"$UMBRIEL" msg column-center > /dev/null
-center_x=0
-for _ in $(seq 40); do
-  center_x=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "harness-a") | .x')
-  [[ $center_x -eq $EXPECT_CENTER_X ]] && break
-  sleep 0.1
-done
-if [[ $center_x -ne $EXPECT_CENTER_X ]]; then
-  echo "expected first column centered at x=$EXPECT_CENTER_X, got x=$center_x"
-  exit 1
-fi
-
 # Reloading the focus policy applies it to the currently focused column.
 "$UMBRIEL" msg window-focus-right > /dev/null
 wait_for_x harness-b 646 "expected disabled center_focused to leave the last column at its bounded position"
-sed -i 's/center_focused = false/center_focused = true/' "$UMBRIEL_CONFIG"
+sed -i 's/center_focused = "never"/center_focused = "always"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 wait_for_x harness-b "$EXPECT_CENTER_X" "enabling center_focused did not center the focused column on reload"
-sed -i 's/center_focused = true/center_focused = false/' "$UMBRIEL_CONFIG"
+sed -i 's/center_focused = "always"/center_focused = "never"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 wait_for_x harness-b 646 "disabling center_focused did not restore the bounded focused-column position"
 
@@ -137,4 +111,33 @@ if [[ $("$UMBRIEL" windows --json | jq '[.[] | select(.floating)] | length') -ne
   exit 1
 fi
 
-echo "2 clients tiled at ${EXPECT_W}x${EXPECT_H}, edge columns center, float round trip ok"
+# An odd effective gap leaves one indivisible pixel between two half-width columns. The layout assigns that pixel to
+# one column, so their combined span still fits exactly and changing focus cannot nudge the strip by one pixel.
+printf '\n[layout]\ngap = 5\n' >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+odd_ready=false
+for _ in $(seq 40); do
+  windows=$("$UMBRIEL" windows --json)
+  if jq -e '([.[].w] | add) + 9 == 1266' <<< "$windows" > /dev/null; then
+    odd_ready=true
+    break
+  fi
+  sleep 0.1
+done
+if [[ $odd_ready != true ]]; then
+  echo "odd-gap columns did not fill the viewport exactly: $windows"
+  exit 1
+fi
+odd_geometry=$(jq -c 'sort_by(.title) | map({title, x, w})' <<< "$windows")
+"$UMBRIEL" msg window-focus-left > /dev/null
+sleep 0.1
+left_geometry=$("$UMBRIEL" windows --json | jq -c 'sort_by(.title) | map({title, x, w})')
+"$UMBRIEL" msg window-focus-right > /dev/null
+sleep 0.1
+right_geometry=$("$UMBRIEL" windows --json | jq -c 'sort_by(.title) | map({title, x, w})')
+if [[ $left_geometry != "$odd_geometry" || $right_geometry != "$odd_geometry" ]]; then
+  echo "odd-gap focus shifted window geometry: initial=$odd_geometry left=$left_geometry right=$right_geometry"
+  exit 1
+fi
+
+echo "2 clients tiled, center_focused reload applies, float round trip and odd-gap focus geometry are stable"

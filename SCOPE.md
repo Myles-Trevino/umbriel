@@ -2,7 +2,8 @@ Scope
 ===
 
 Umbriel is a thin compositor layer over [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and
-[SceneFX](https://github.com/wlrfx/scenefx), built by the people who use it daily. It is young, and the fastest way to
+`umbrielfx`, its own hard fork of [SceneFX](https://github.com/wlrfx/scenefx). It is built by the people who use it
+daily. It is young, and the fastest way to
 make it worse is to grow it in every direction at once. This file records what the project takes on and what it
 declines, so a request gets a predictable answer instead of a case-by-case one.
 
@@ -33,7 +34,7 @@ Read the project [ethos](https://noctalia.dev/ethos) for the values behind these
   driven through `umbriel msg`.
 - **Configuration languages other than TOML**, and compatibility aliases, migration readers, or silent fallbacks for
   renamed keys.
-- **Effects that bypass SceneFX.** New visuals land in the SceneFX fork, never as ad-hoc scene graph hacks.
+- **Effects that bypass `umbrielfx`.** New visuals land in `umbrielfx/`, never as ad-hoc scene graph hacks.
 - **Reimplementing what wlroots provides**, and diverging from its release cadence.
 - **Feature parity with another compositor as the motivation.** "Project X has this" describes Project X, not a
   problem you have.
@@ -49,7 +50,7 @@ this maintenance budget.
 1. **Does it need the compositor?** If a client, a shell, or a script over `umbriel msg` can do it, that is where it
    belongs.
 2. **Does it extend something that exists, or open a new front?** Sharpening current behavior beats adding surface.
-3. **Does it fall out of wlroots and SceneFX?** A feature that needs machinery of its own costs far more than its
+3. **Does it fall out of wlroots and `umbrielfx`?** A feature that needs machinery of its own costs far more than its
    diff.
 4. **Who maintains it in a year?** Every option, key, and code path is carried forward, and re-tested on every
    wlroots bump.

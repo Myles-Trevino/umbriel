@@ -3,9 +3,12 @@
 extern "C" {
 // wlroots / SceneFX headers use C99 `float color[static N]`.
 #define static
-#include <scenefx/render/fx_renderer/fx_renderer.h>
-#include <scenefx/types/wlr_scene.h>
+#include <umbrielfx/render/fx_renderer/fx_renderer.h>
+#include <umbrielfx/types/wlr_scene.h>
 #include <wlr/backend.h>
+#if UMBRIEL_HAS_NATIVE_DRM_POLICY
+#include <wlr/backend/drm.h>
+#endif
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/multi.h>
@@ -21,6 +24,7 @@ extern "C" {
 #include <wlr/types/wlr_content_type_v1.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_export_dmabuf_v1.h>
@@ -67,6 +71,8 @@ extern "C" {
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_toplevel_tag_v1.h>

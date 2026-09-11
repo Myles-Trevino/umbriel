@@ -76,6 +76,7 @@ namespace umbriel {
     pango_layout_set_font_description(measureLayout, fontDesc);
     pango_layout_set_width(measureLayout, params.maxWidth * PANGO_SCALE);
     pango_layout_set_wrap(measureLayout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_indent(measureLayout, -params.hangingIndent * PANGO_SCALE);
     pango_layout_set_markup(measureLayout, params.markup.c_str(), -1);
 
     // pango_layout_get_pixel_size returns logical (pre-transform) dimensions.
@@ -108,6 +109,7 @@ namespace umbriel {
     pango_layout_set_font_description(layout, fontDesc);
     pango_layout_set_width(layout, textW * PANGO_SCALE);
     pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_indent(layout, -params.hangingIndent * PANGO_SCALE);
     pango_layout_set_markup(layout, params.markup.c_str(), -1);
     cairo_move_to(cr, params.padding, params.padding);
     pango_cairo_show_layout(cr, layout);

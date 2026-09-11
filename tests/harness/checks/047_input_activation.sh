@@ -3,8 +3,8 @@
 # intent and may reveal a mapped target even when unsolicited activation is disabled.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 readonly TARGET_LOG="$UMBRIEL_RUNTIME_DIR/input-activation-target.log"
 readonly SOURCE_LOG="$UMBRIEL_RUNTIME_DIR/input-activation-source.log"
 readonly POINTER_LOG="$UMBRIEL_RUNTIME_DIR/input-activation-pointer.log"

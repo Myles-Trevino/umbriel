@@ -3,7 +3,7 @@
 # in the lower subtree can move into the upper tile and back down.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 
 spawn_client() {
   local title=$1

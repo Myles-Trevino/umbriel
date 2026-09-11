@@ -6,8 +6,8 @@ set -euo pipefail
 
 readonly BTN_LEFT=272
 readonly TITLE=floating-drag-maximize-restore
-readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/fractional-client}"
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/floating-drag-maximize-restore.log"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'

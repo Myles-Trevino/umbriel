@@ -5,8 +5,8 @@
 # state Umbriel submitted through its diagnostics. Backend rejection and the synchronized retry are unit-tested.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly BASELINE="$(< "$UMBRIEL_CONFIG")"
 CLIENT_PID=
 CLIENT_LOG=

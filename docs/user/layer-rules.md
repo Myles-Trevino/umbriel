@@ -21,7 +21,9 @@ blur_popups = true
 | `match.namespace` | regex | Match the layer surface namespace. |
 
 Regular expressions match any part of a namespace. Use `^` and `$` to match
-the entire namespace.
+the entire namespace. A layer surface names itself when it is created, so
+`match.namespace = "^$"` selects the surfaces that named themselves with an
+empty string.
 
 ## Effects
 
@@ -30,7 +32,8 @@ the entire namespace.
 | `blur` | bool | Enable/disable blur for the layer surface. |
 | `blur_popups` | bool | Enable/disable blur for descendant XDG popups. |
 | `blur_ignore_alpha` | float | Skip blur where surface alpha is below this threshold (0.0-1.0). `0.0` blurs the entire rectangle; higher values leave transparent regions unblurred. |
-| `blur_optimized` | bool | Override `appearance.blur.optimized`. |
+| `blur_optimized` | bool | Override `appearance.blur.optimized`. A `true` value keeps the cached background blur alive on every output even when the global switch is off. |
 
 Layer-shell blur is off by default. As with window rules, every matching rule
-contributes its settings, and later values take precedence.
+contributes its settings, and later values take precedence. Rules from included
+files come before the rules in the file that includes them.

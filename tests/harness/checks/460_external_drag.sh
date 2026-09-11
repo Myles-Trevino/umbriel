@@ -6,8 +6,8 @@ set -euo pipefail
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
 readonly LEFT_BUTTON=272
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly DRAG_CLIENT="${UMBRIEL_DRAG_CLIENT:-./build-debug/drag-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly DRAG_CLIENT="${UMBRIEL_DRAG_CLIENT:-./build-debug/tests/drag-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/drag-client.log"
 
 if [[ ! -x $POINTER ]]; then

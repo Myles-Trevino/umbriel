@@ -3,7 +3,7 @@
 # A named scrolling-column creator keeps width ownership after its output disappears and returns.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly OWNER_FIFO="$UMBRIEL_RUNTIME_DIR/named-output-owner-control"
 
 spawn_client() {

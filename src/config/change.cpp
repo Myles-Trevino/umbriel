@@ -66,6 +66,13 @@ namespace umbriel {
       return lhs.directScanout == rhs.directScanout;
     }
 
+    bool sameOutputLayout(const OutputRule* before, const OutputRule* after) {
+      static const OutputRule defaults;
+      const OutputRule& lhs = before != nullptr ? *before : defaults;
+      const OutputRule& rhs = after != nullptr ? *after : defaults;
+      return lhs.layout == rhs.layout && lhs.workspaceAxis == rhs.workspaceAxis;
+    }
+
     bool sameWindowTearingPolicy(const Config& before, const Config& after) {
       size_t beforeIndex = 0;
       size_t afterIndex = 0;
@@ -89,6 +96,11 @@ namespace umbriel {
             || lhs.xdgTagPattern != rhs.xdgTagPattern
             || lhs.matchContentType != rhs.matchContentType
             || lhs.matchFocused != rhs.matchFocused
+            || lhs.matchFloating != rhs.matchFloating
+            || lhs.matchPinned != rhs.matchPinned
+            || lhs.matchScratchpad != rhs.matchScratchpad
+            || lhs.matchAlone != rhs.matchAlone
+            || lhs.matchAtStartup != rhs.matchAtStartup
             || lhs.allowTearing != rhs.allowTearing) {
           return false;
         }
@@ -99,7 +111,31 @@ namespace umbriel {
       static const OutputRule defaults;
       const OutputRule& lhs = before != nullptr ? *before : defaults;
       const OutputRule& rhs = after != nullptr ? *after : defaults;
-      return lhs.workspaces == rhs.workspaces;
+      return lhs.workspaces == rhs.workspaces && lhs.minWorkspaces == rhs.minWorkspaces;
+    }
+
+    bool sameDynamicWorkspaceDeclarations(const Config& before, const Config& after) {
+      size_t beforeIndex = 0;
+      size_t afterIndex = 0;
+      while (true) {
+        while (beforeIndex < before.workspaceRules.size() && before.workspaceRules[beforeIndex].index) {
+          ++beforeIndex;
+        }
+        while (afterIndex < after.workspaceRules.size() && after.workspaceRules[afterIndex].index) {
+          ++afterIndex;
+        }
+        const bool beforeEnd = beforeIndex == before.workspaceRules.size();
+        const bool afterEnd = afterIndex == after.workspaceRules.size();
+        if (beforeEnd || afterEnd) {
+          return beforeEnd && afterEnd;
+        }
+
+        const WorkspaceConfig& lhs = before.workspaceRules[beforeIndex++];
+        const WorkspaceConfig& rhs = after.workspaceRules[afterIndex++];
+        if (lhs.name != rhs.name || !outputNamesEqual(lhs.output, rhs.output)) {
+          return false;
+        }
+      }
     }
 
   } // namespace
@@ -115,9 +151,13 @@ namespace umbriel {
         || !sameWindowTearingPolicy(before, after);
     const bool directScanoutPolicy =
         outputNamesChanged || outputProjectionChanged(before, after, sameOutputDirectScanoutPolicy);
-    const bool workspaceInventory =
-        outputNamesChanged || outputProjectionChanged(before, after, sameWorkspaceInventory);
-    const bool sceneBlur = before.appearance.blur != after.appearance.blur;
+    const bool workspaceInventory = outputNamesChanged
+        || outputProjectionChanged(before, after, sameWorkspaceInventory)
+        || before.workspaces.emptyAbove != after.workspaces.emptyAbove
+        || !sameDynamicWorkspaceDeclarations(before, after);
+    const bool outputLayout = outputNamesChanged || outputProjectionChanged(before, after, sameOutputLayout);
+    const bool sceneBlur =
+        before.appearance.blur != after.appearance.blur || before.optimizedBlurNeeded() != after.optimizedBlurNeeded();
     const bool focusDim = before.animation.enabled != after.animation.enabled
         || before.animation.dimUnfocused != after.animation.dimUnfocused;
     return {
@@ -126,15 +166,21 @@ namespace umbriel {
         .directScanoutPolicy = directScanoutPolicy,
         .workspaceInventory = workspaceInventory,
         .workspaceLayout = workspaceInventory
+            || outputLayout
             || before.layout != after.layout
             || before.workspaceRules != after.workspaceRules
             || before.appearance.totalBorderWidth() != after.appearance.totalBorderWidth(),
         .sceneBlur = sceneBlur,
-        .viewChrome = before.appearance != after.appearance || before.windowRules != after.windowRules || focusDim,
+        // [colors] owns the border, backdrop, insert-hint, and shadow colors, so
+        // any color edit refreshes window chrome.
+        .viewChrome = before.appearance != after.appearance
+            || before.colors != after.colors
+            || before.windowRules != after.windowRules
+            || focusDim,
         .layerEffects = sceneBlur || before.layerRules != after.layerRules,
         .animation = before.animation != after.animation,
         .input = before.input != after.input || before.hotCorners != after.hotCorners,
-        .overviewPresentation = before.overview != after.overview,
+        .overviewPresentation = before.overview != after.overview || before.colors != after.colors,
         .internalUi = before.colors != after.colors || before.general.modKey != after.general.modKey,
     };
   }
@@ -166,6 +212,7 @@ namespace umbriel {
         .layout = true,
         .workspaces = true,
         .general = true,
+        .drm = true,
         .environment = true,
         .events = true,
         .input = true,
@@ -174,6 +221,7 @@ namespace umbriel {
         .windowRules = true,
         .layerRules = true,
         .securityContextRules = true,
+        .scratchpads = true,
         .workspaceRules = true,
     };
   }
@@ -188,6 +236,7 @@ namespace umbriel {
         .layout = before.layout != after.layout,
         .workspaces = before.workspaces != after.workspaces,
         .general = before.general != after.general,
+        .drm = before.drm != after.drm,
         .environment = before.environment != after.environment,
         .events = before.events != after.events,
         .input = before.input != after.input,
@@ -196,6 +245,7 @@ namespace umbriel {
         .windowRules = before.windowRules != after.windowRules,
         .layerRules = before.layerRules != after.layerRules,
         .securityContextRules = before.securityContextRules != after.securityContextRules,
+        .scratchpads = before.scratchpads != after.scratchpads,
         .workspaceRules = before.workspaceRules != after.workspaceRules,
     };
   }
@@ -219,6 +269,7 @@ namespace umbriel {
     add(layout, "layout");
     add(workspaces, "workspaces");
     add(general, "general");
+    add(drm, "drm");
     add(environment, "environment");
     add(events, "events");
     add(input, "input");
@@ -227,6 +278,7 @@ namespace umbriel {
     add(windowRules, "window rules");
     add(layerRules, "layer rules");
     add(securityContextRules, "security context rules");
+    add(scratchpads, "scratchpads");
     add(workspaceRules, "workspace rules");
     return out;
   }

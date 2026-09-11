@@ -1,6 +1,9 @@
 #include "workspace/scratchpad.h"
 
+#include "config/config.h"
+#include "input/cursor.h"
 #include "output/output.h"
+#include "scene/animation_shader.h"
 #include "server/server.h"
 #include "view/view.h"
 #include "wlr.h"
@@ -9,13 +12,40 @@
 #include <algorithm>
 #include <cmath>
 #include <ranges>
+#include <set>
 #include <utility>
 
 namespace umbriel {
 
+  namespace {
+    constexpr std::string_view kImplicitScratchpad = "default";
+
+    wlr_box usableArea(Server& server, Output* output) {
+      if (output == nullptr) {
+        return {};
+      }
+      wlr_box area = output->usableArea();
+      if (area.width <= 0 || area.height <= 0) {
+        wlr_output_layout_get_box(server.outputLayout(), output->wlr(), &area);
+      }
+      return area;
+    }
+
+    bool sameBox(const wlr_box& first, const wlr_box& second) {
+      return first.x == second.x && first.y == second.y && first.width == second.width && first.height == second.height;
+    }
+  } // namespace
+
   ScratchpadManager::ScratchpadManager(Server& server, wlr_scene_tree* root, wlr_scene_tree* shadowRoot)
       : m_server(&server), m_root(root), m_shadowRoot(shadowRoot) {
     m_server->registerAnimatable(this);
+    if (config().scratchpads.empty()) {
+      m_scratchpads.try_emplace(std::string(kImplicitScratchpad));
+    } else {
+      for (const ScratchpadConfig& scratchpad : config().scratchpads) {
+        m_scratchpads.try_emplace(scratchpad.name);
+      }
+    }
   }
 
   ScratchpadManager::~ScratchpadManager() {
@@ -33,6 +63,12 @@ namespace umbriel {
     for (auto& [output, fade] : m_backdropFades) {
       if (fade.tick(nowMsec)) {
         updateDimAndBlur(output);
+        if (const auto rect = m_dimRects.find(output); rect != m_dimRects.end()) {
+          updateAnimationShader(&rect->second->node, m_server->renderer(), AnimationEvent::Scratchpad, fade);
+        }
+        if (const auto blur = m_blurNodes.find(output); blur != m_blurNodes.end()) {
+          updateAnimationShader(&blur->second->node, m_server->renderer(), AnimationEvent::Scratchpad, fade);
+        }
         movedBackdrop = true;
       }
     }
@@ -61,47 +97,174 @@ namespace umbriel {
     if (fade != m_backdropFades.end() && fade->second.animating()) {
       return true;
     }
-    return std::ranges::any_of(m_hidingViews, [this, output](const View* view) {
-      return std::ranges::any_of(m_entries, [view, output](const Entry& entry) {
-        return entry.view == view && entry.output == output;
-      });
+    return std::ranges::any_of(m_hidingViews, [this, output](const View* view) { return outputFor(view) == output; });
+  }
+
+  ScratchpadManager::Scratchpad* ScratchpadManager::findScratchpad(std::string_view name) {
+    const auto scratchpad = m_scratchpads.find(name);
+    return scratchpad != m_scratchpads.end() ? &scratchpad->second : nullptr;
+  }
+
+  const ScratchpadManager::Scratchpad* ScratchpadManager::findScratchpad(std::string_view name) const {
+    const auto scratchpad = m_scratchpads.find(name);
+    return scratchpad != m_scratchpads.end() ? &scratchpad->second : nullptr;
+  }
+
+  ScratchpadManager::Entry* ScratchpadManager::findEntry(const View* view) {
+    const auto entry =
+        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
+    return entry != m_entries.end() ? &*entry : nullptr;
+  }
+
+  const ScratchpadManager::Entry* ScratchpadManager::findEntry(const View* view) const {
+    const auto entry =
+        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
+    return entry != m_entries.end() ? &*entry : nullptr;
+  }
+
+  bool ScratchpadManager::hasEntries(std::string_view name) const {
+    return std::ranges::any_of(m_entries, [name](const Entry& entry) { return entry.scratchpad == name; });
+  }
+
+  bool ScratchpadManager::visibleOn(Output* output) const {
+    return std::ranges::any_of(m_scratchpads, [output](const auto& entry) {
+      return entry.second.visible && entry.second.output == output;
     });
   }
 
-  bool ScratchpadManager::contains(const View* view) const {
-    return std::ranges::any_of(m_entries, [view](const Entry& entry) { return entry.view == view; });
+  bool ScratchpadManager::contains(const View* view) const { return findEntry(view) != nullptr; }
+
+  Output* ScratchpadManager::outputFor(const View* view) const {
+    const Entry* entry = findEntry(view);
+    const Scratchpad* scratchpad = entry != nullptr ? findScratchpad(entry->scratchpad) : nullptr;
+    return scratchpad != nullptr ? scratchpad->output : nullptr;
   }
 
-  bool ScratchpadManager::moveToScratchpad(View* view, Output* output) {
-    if (output == nullptr || m_server == nullptr || m_root == nullptr || m_shadowRoot == nullptr) {
+  std::string_view ScratchpadManager::nameFor(const View* view) const {
+    const Entry* entry = findEntry(view);
+    return entry != nullptr ? std::string_view(entry->scratchpad) : std::string_view{};
+  }
+
+  bool ScratchpadManager::hasScratchpad(std::string_view name) const { return findScratchpad(name) != nullptr; }
+
+  Output* ScratchpadManager::presentationOutput(std::string_view name, Output* fallback) const {
+    const Scratchpad* scratchpad = findScratchpad(name);
+    return scratchpad != nullptr && scratchpad->visible && scratchpad->output != nullptr ? scratchpad->output
+                                                                                         : fallback;
+  }
+
+  Output* ScratchpadManager::restoreOutputFor(const View* view) const {
+    const Entry* entry = findEntry(view);
+    return entry != nullptr ? m_server->outputFromName(entry->returnOutput) : nullptr;
+  }
+
+  bool ScratchpadManager::moveToScratchpad(View* view, std::string_view name, Output* invokingOutput) {
+    return admit(view, name, invokingOutput, Admission::Interactive, {});
+  }
+
+  bool ScratchpadManager::assignByWindowRule(
+      View* view, std::string_view name, Output* placementOutput, const WindowRuleAdmission& options
+  ) {
+    return admit(view, name, placementOutput, Admission::WindowRule, options);
+  }
+
+  bool ScratchpadManager::admit(
+      View* view, std::string_view name, Output* invokingOutput, Admission admission, const WindowRuleAdmission& options
+  ) {
+    Scratchpad* scratchpad = findScratchpad(name);
+    if (scratchpad == nullptr
+        || invokingOutput == nullptr
+        || m_server == nullptr
+        || m_root == nullptr
+        || m_shadowRoot == nullptr) {
       return false;
     }
-    if (view == nullptr || !view->mapped() || contains(view)) {
+    if (view == nullptr || !view->mapped()) {
       return false;
     }
 
-    Entry entry{
-        .view = view,
-        .output = output,
-        .returnOutput = {},
-        .displacedOutput = {},
-        .displacedPosition = std::nullopt,
-        .returnWorkspace = {},
-        .returnTiled = view->tiled(),
-    };
-    Output* sourceOutput = nullptr;
-    if (Workspace* previous = view->workspace()) {
-      entry.returnWorkspace = previous->name();
-      if (previous->group() != nullptr && previous->group()->output() != nullptr) {
-        sourceOutput = previous->group()->output();
-        entry.returnOutput = sourceOutput->wlr()->name;
+    Entry* existing = findEntry(view);
+    if (existing != nullptr && admission == Admission::Interactive) {
+      return false;
+    }
+
+    const bool transferring = existing != nullptr;
+    const bool sameScratchpad = existing != nullptr && existing->scratchpad == name;
+    const bool wasActivated = view->activated();
+    Output* sourceOutput = options.focusOrigin != nullptr ? options.focusOrigin : view->currentOutput();
+    std::string previousScratchpad;
+
+    const auto setReturnLocation = [](Entry& entry, Output* output, Workspace* workspace) {
+      entry.returnOutput.clear();
+      entry.returnWorkspace.clear();
+      entry.returnWorkspaceIndex = 0;
+      entry.returnWorkspaceNamed = false;
+      if (workspace != nullptr) {
+        entry.returnWorkspace = workspace->name();
+        entry.returnWorkspaceIndex = workspace->index();
+        entry.returnWorkspaceNamed = workspace->named();
+        if (workspace->group() != nullptr && workspace->group()->output() != nullptr) {
+          output = workspace->group()->output();
+        }
       }
+      if (output != nullptr && output->wlr()->name != nullptr) {
+        entry.returnOutput = output->wlr()->name;
+      }
+    };
+
+    if (transferring) {
+      if (options.updateRestoreLocation) {
+        setReturnLocation(*existing, options.restoreOutput, options.restoreWorkspace);
+      }
+      if (options.restoreTiled) {
+        existing->returnTiled = *options.restoreTiled;
+      }
+      previousScratchpad = existing->scratchpad;
+      if (!sameScratchpad) {
+        if (Scratchpad* previous = findScratchpad(previousScratchpad);
+            previous != nullptr && previous->lastFocused == view) {
+          previous->lastFocused = nullptr;
+        }
+        existing->scratchpad = std::string(name);
+      }
+    }
+
+    if (sameScratchpad) {
+      if (!scratchpad->visible && scratchpad->output != invokingOutput) {
+        moveScratchpad(name, invokingOutput);
+      }
+      return true;
+    }
+
+    if (!scratchpad->visible || scratchpad->output == nullptr) {
+      moveScratchpad(name, invokingOutput);
+      scratchpad = findScratchpad(name);
+    }
+    Output* output = scratchpad != nullptr ? scratchpad->output : nullptr;
+    if (output == nullptr) {
+      return false;
+    }
+
+    std::optional<Entry> newEntry;
+    if (!transferring) {
+      newEntry = Entry{
+          .view = view,
+          .scratchpad = std::string(name),
+          .returnOutput = {},
+          .displacedPosition = std::nullopt,
+          .returnWorkspace = {},
+          .returnWorkspaceIndex = 0,
+          .returnWorkspaceNamed = false,
+          .returnTiled = options.restoreTiled.value_or(view->tiled()),
+      };
+      Workspace* previous = options.restoreWorkspace != nullptr ? options.restoreWorkspace : view->workspace();
+      setReturnLocation(*newEntry, options.restoreOutput, previous);
     }
     if (view->toplevel()->scheduled.fullscreen || view->toplevel()->current.fullscreen) {
       view->toggleFullscreen();
     }
     if (view->pinned()) {
-      view->togglePinned(); // unpins and returns to floating/tiled state
+      view->togglePinned();
     }
     if (view->maximizedToEdges()) {
       view->setMaximizedToEdges(false, false);
@@ -109,38 +272,47 @@ namespace umbriel {
     view->setFloating(true);
     view->cancelPositionAnimation();
 
-    wlr_box targetArea = output->usableArea();
-    if (targetArea.width <= 0 || targetArea.height <= 0) {
-      wlr_output_layout_get_box(m_server->outputLayout(), output->wlr(), &targetArea);
-    }
-    const auto& spCfg = config().animation.scratchpad;
-    if (spCfg.fullscreen) {
+    const wlr_box targetArea = usableArea(*m_server, output);
+    const auto& scratchpadConfig = config().animation.scratchpad;
+    if (scratchpadConfig.fullscreen) {
       if (!view->toplevel()->scheduled.fullscreen && !view->toplevel()->current.fullscreen) {
         view->toggleFullscreen();
       }
-    } else if (spCfg.maximize) {
+    } else if (scratchpadConfig.maximize) {
       view->toggleMaximizedToEdges();
-    } else if (spCfg.scale > 0.0 && spCfg.scale <= 1.0 && targetArea.width > 0 && targetArea.height > 0) {
-      const int targetW = std::max(100, static_cast<int>(std::lround(targetArea.width * spCfg.scale)));
-      const int targetH = std::max(100, static_cast<int>(std::lround(targetArea.height * spCfg.scale)));
-      wlr_xdg_toplevel_set_size(view->toplevel(), targetW, targetH);
-      const int newX = targetArea.x + std::max(0, (targetArea.width - targetW) / 2);
-      const int newY = targetArea.y + std::max(0, (targetArea.height - targetH) / 2);
-      view->setPosition(newX, newY);
+    } else if (
+        scratchpadConfig.scale > 0.0 && scratchpadConfig.scale <= 1.0 && targetArea.width > 0 && targetArea.height > 0
+    ) {
+      const int targetWidth = std::max(100, static_cast<int>(std::lround(targetArea.width * scratchpadConfig.scale)));
+      const int targetHeight = std::max(100, static_cast<int>(std::lround(targetArea.height * scratchpadConfig.scale)));
+      wlr_xdg_toplevel_set_size(view->toplevel(), targetWidth, targetHeight);
+      view->setPosition(
+          targetArea.x + std::max(0, (targetArea.width - targetWidth) / 2),
+          targetArea.y + std::max(0, (targetArea.height - targetHeight) / 2)
+      );
     } else {
-      const int x = view->sceneTree()->node.x;
-      const int y = view->sceneTree()->node.y;
-      view->setPosition(x, y);
+      view->setPosition(view->sceneTree()->node.x, view->sceneTree()->node.y);
     }
 
-    view->moveToWorkspace(nullptr);
+    if (newEntry) {
+      view->moveToWorkspace(nullptr);
+      m_entries.push_back(std::move(*newEntry));
+    }
     wlr_scene_node_reparent(&view->sceneTree()->node, m_root);
     view->reparentShadow(m_shadowRoot);
-    view->setScratchpadBorder(true);
-    const bool wasVisible = std::ranges::find(m_visibleOutputs, output) != m_visibleOutputs.end();
-    m_entries.push_back(std::move(entry));
-    setVisible(output, wasVisible);
-    m_server->refocus(sourceOutput);
+    view->setInScratchpad(true);
+    const bool visible = scratchpad->visible;
+    setVisible(name, visible, admission == Admission::Interactive);
+    if (transferring && !hasEntries(previousScratchpad)) {
+      setVisible(previousScratchpad, false, admission == Admission::Interactive);
+    }
+    view->notifyOutputScale();
+    output->updateVrr();
+    output->updateHdr();
+    m_server->scheduleIpcWindowsEvent();
+    if (admission == Admission::Interactive || (wasActivated && !visible)) {
+      m_server->refocus(sourceOutput);
+    }
     return true;
   }
 
@@ -164,44 +336,34 @@ namespace umbriel {
     updateDimAndBlur(output);
   }
 
-  void ScratchpadManager::setVisible(Output* output, bool visible, bool animateTransition) {
-    if (output == nullptr) {
+  void ScratchpadManager::setVisible(std::string_view name, bool visible, bool animateTransition) {
+    Scratchpad* state = findScratchpad(name);
+    if (state == nullptr) {
       return;
     }
-    if (visible) {
-      if (std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
-        m_visibleOutputs.push_back(output);
-      }
-    } else {
-      std::erase(m_visibleOutputs, output);
-    }
-    wlr_box targetArea = output->usableArea();
-    if (targetArea.width <= 0 || targetArea.height <= 0) {
-      wlr_output_layout_get_box(m_server->outputLayout(), output->wlr(), &targetArea);
-    }
+    state->visible = visible;
+    Output* output = state->output;
+    const bool presented = visible && output != nullptr;
+    const wlr_box targetArea = usableArea(*m_server, output);
     const auto& animation = config().animation;
     const auto& scratchpad = animation.scratchpad;
-    const bool animate = animateTransition && animation.enabled && scratchpad.enabled;
-    retargetBackdrop(output, visible, animateTransition);
+    const bool animate = animateTransition && output != nullptr && animation.enabled && scratchpad.enabled;
+    retargetBackdrop(output, visibleOn(output), animateTransition);
 
     for (const Entry& entry : m_entries) {
-      if (entry.output != output || entry.view == nullptr) {
+      if (entry.scratchpad != name || entry.view == nullptr) {
         continue;
       }
       View* view = entry.view;
-      if (visible) {
+      if (presented) {
         view->setOnActiveWorkspace(true);
-        // Workspace-less views normally advertise the pointer's output. A
-        // scratchpad has an explicit owner, which can move while the pointer
-        // is still on an output that is being destroyed.
         view->enterForeignOutput(output);
         std::erase(m_hidingViews, view);
         view->cancelPositionAnimation();
         view->setNodeEnabled(true);
-        // Reposition only if the window's center would land off this output's usable area
         const int width = view->presentation().width();
         const int height = view->presentation().height();
-        if (width > 0 && height > 0) {
+        if (width > 0 && height > 0 && targetArea.width > 0 && targetArea.height > 0) {
           const int centerX = view->sceneTree()->node.x + width / 2;
           const int centerY = view->sceneTree()->node.y + height / 2;
           const bool centerOnTarget = centerX >= targetArea.x
@@ -209,21 +371,27 @@ namespace umbriel {
               && centerY >= targetArea.y
               && centerY < targetArea.y + targetArea.height;
           if (!centerOnTarget) {
-            const int newX = targetArea.x + std::max(0, (targetArea.width - width) / 2);
-            const int newY = targetArea.y + std::max(0, (targetArea.height - height) / 2);
-            view->snapPosition(newX, newY);
+            view->snapPosition(
+                targetArea.x + std::max(0, (targetArea.width - width) / 2),
+                targetArea.y + std::max(0, (targetArea.height - height) / 2)
+            );
           }
         }
         if (animate) {
           view->animateFadeTo(1.0F, scratchpad.durationMs, scratchpad.curve);
         } else {
           view->cancelFadeAnimation();
+          view->setFadeAlpha(1.0F);
         }
+        syncViewPresentation(view, true);
       } else {
         view->setOnActiveWorkspace(false);
+        // Hidden scratchpad windows remain assigned to their pad's output for
+        // foreign-toplevel consumers, just like windows on inactive
+        // workspaces. Moving the pad to no output still clears that
+        // membership through moveScratchpad().
+        view->enterForeignOutput(output);
         if (animate) {
-          // Keep the render tree alive until tickAnimations observes the completed fade. The inactive-workspace flag
-          // already removes this view from focus and action selection while it is still visible.
           view->setNodeEnabled(true);
           view->animateFadeTo(0.0F, scratchpad.durationMs, scratchpad.curve);
           if (std::ranges::find(m_hidingViews, view) == m_hidingViews.end()) {
@@ -238,6 +406,212 @@ namespace umbriel {
       }
     }
     updateDimAndBlur(output);
+  }
+
+  void ScratchpadManager::moveScratchpad(
+      std::string_view name, Output* output, View* alreadyPositioned, bool clearDisplacement
+  ) {
+    Scratchpad* state = findScratchpad(name);
+    if (state == nullptr) {
+      return;
+    }
+    Output* previous = state->output;
+    if (previous == output) {
+      if (output != nullptr) {
+        refreshOutputGeometry(output);
+      }
+      if (clearDisplacement) {
+        state->displacedOutput.clear();
+        for (Entry& entry : m_entries) {
+          if (entry.scratchpad == name) {
+            entry.displacedPosition.reset();
+          }
+        }
+      }
+      return;
+    }
+
+    if (state->visible && output != nullptr) {
+      std::string conflictingName;
+      for (const auto& [candidateName, candidate] : m_scratchpads) {
+        if (&candidate != state && candidate.visible && candidate.output == output) {
+          conflictingName = candidateName;
+          break;
+        }
+      }
+      if (!conflictingName.empty()) {
+        setVisible(conflictingName, false);
+      }
+    }
+
+    const wlr_box previousArea = state->usableArea.value_or(usableArea(*m_server, previous));
+    const wlr_box targetArea = usableArea(*m_server, output);
+    state->output = output;
+    state->usableArea = output != nullptr && targetArea.width > 0 && targetArea.height > 0
+        ? std::optional<wlr_box>{targetArea}
+        : std::nullopt;
+    if (clearDisplacement) {
+      state->displacedOutput.clear();
+    }
+
+    for (Entry& entry : m_entries) {
+      if (entry.scratchpad != name || entry.view == nullptr) {
+        continue;
+      }
+      View* view = entry.view;
+      if (clearDisplacement) {
+        entry.displacedPosition.reset();
+      }
+      if (previous != nullptr
+          && output != nullptr
+          && previousArea.width > 0
+          && previousArea.height > 0
+          && targetArea.width > 0
+          && targetArea.height > 0) {
+        remapViewRestoreGeometry(view, previousArea, targetArea);
+        if (view != alreadyPositioned) {
+          const double xFraction = static_cast<double>(view->sceneTree()->node.x - previousArea.x) / previousArea.width;
+          const double yFraction =
+              static_cast<double>(view->sceneTree()->node.y - previousArea.y) / previousArea.height;
+          const int newX = targetArea.x + static_cast<int>(std::lround(xFraction * targetArea.width));
+          const int newY = targetArea.y + static_cast<int>(std::lround(yFraction * targetArea.height));
+          view->cancelPositionAnimation();
+          view->setPosition(
+              std::clamp(
+                  newX, targetArea.x, targetArea.x + std::max(0, targetArea.width - view->toplevel()->current.width)
+              ),
+              std::clamp(
+                  newY, targetArea.y, targetArea.y + std::max(0, targetArea.height - view->toplevel()->current.height)
+              )
+          );
+        }
+      }
+
+      if (state->visible && output != nullptr) {
+        wlr_scene_node_reparent(&view->sceneTree()->node, m_root);
+        view->reparentShadow(m_shadowRoot);
+        view->setOnActiveWorkspace(true);
+        std::erase(m_hidingViews, view);
+        view->setNodeEnabled(true);
+        if (view != alreadyPositioned) {
+          syncViewPresentation(view, true);
+        }
+      } else if (state->visible) {
+        std::erase(m_hidingViews, view);
+        view->cancelFadeAnimation();
+        view->setFadeAlpha(0.0F);
+        view->setOnActiveWorkspace(false);
+        view->setNodeEnabled(false);
+      }
+      // setOnActiveWorkspace() resolves workspace-less views through the
+      // preferred output, which need not be this pad's destination during
+      // hotplug restoration. Apply the manager-owned assignment last.
+      view->enterForeignOutput(output);
+      if (view->mapped()) {
+        view->notifyOutputScale();
+      }
+    }
+
+    if (previous != nullptr) {
+      retargetBackdrop(previous, visibleOn(previous));
+      updateDimAndBlur(previous);
+    }
+    if (output != nullptr) {
+      retargetBackdrop(output, visibleOn(output));
+      updateDimAndBlur(output);
+    }
+    if (previous != nullptr) {
+      previous->updateVrr();
+      previous->updateHdr();
+    }
+    if (output != nullptr) {
+      output->updateVrr();
+      output->updateHdr();
+    }
+    m_server->scheduleIpcWindowsEvent();
+  }
+
+  void ScratchpadManager::remapViewRestoreGeometry(View* view, const wlr_box& previousArea, const wlr_box& targetArea) {
+    if (view == nullptr
+        || previousArea.width <= 0
+        || previousArea.height <= 0
+        || targetArea.width <= 0
+        || targetArea.height <= 0) {
+      return;
+    }
+    const auto remap = [&](wlr_box& box) {
+      const double xFraction = static_cast<double>(box.x - previousArea.x) / previousArea.width;
+      const double yFraction = static_cast<double>(box.y - previousArea.y) / previousArea.height;
+      const int newX = targetArea.x + static_cast<int>(std::lround(xFraction * targetArea.width));
+      const int newY = targetArea.y + static_cast<int>(std::lround(yFraction * targetArea.height));
+      box.x = std::clamp(newX, targetArea.x, targetArea.x + std::max(0, targetArea.width - box.width));
+      box.y = std::clamp(newY, targetArea.y, targetArea.y + std::max(0, targetArea.height - box.height));
+    };
+    if (view->m_hasMaximizeRestoreBox) {
+      remap(view->m_maximizeRestoreBox);
+    }
+    if (view->m_hasFullscreenRestoreBox) {
+      remap(view->m_fullscreenRestoreBox);
+    }
+  }
+
+  void ScratchpadManager::refreshOutputGeometry(Output* output) {
+    if (output == nullptr || m_server == nullptr) {
+      return;
+    }
+    const wlr_box targetArea = usableArea(*m_server, output);
+    if (targetArea.width <= 0 || targetArea.height <= 0) {
+      return;
+    }
+
+    bool geometryChanged = false;
+    bool movedEntry = false;
+    Cursor* cursor = m_server->cursor();
+    for (auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.output != output) {
+        continue;
+      }
+      if (!scratchpad.usableArea) {
+        scratchpad.usableArea = targetArea;
+        continue;
+      }
+      const wlr_box previousArea = *scratchpad.usableArea;
+      scratchpad.usableArea = targetArea;
+      if (sameBox(previousArea, targetArea) || previousArea.width <= 0 || previousArea.height <= 0) {
+        continue;
+      }
+      geometryChanged = true;
+
+      for (Entry& entry : m_entries) {
+        if (entry.scratchpad != name
+            || entry.view == nullptr
+            || (cursor != nullptr && cursor->isDraggingView(entry.view))) {
+          continue;
+        }
+        View* view = entry.view;
+        remapViewRestoreGeometry(view, previousArea, targetArea);
+        const double xFraction = static_cast<double>(view->sceneTree()->node.x - previousArea.x) / previousArea.width;
+        const double yFraction = static_cast<double>(view->sceneTree()->node.y - previousArea.y) / previousArea.height;
+        const int newX = targetArea.x + static_cast<int>(std::lround(xFraction * targetArea.width));
+        const int newY = targetArea.y + static_cast<int>(std::lround(yFraction * targetArea.height));
+        const int width = view->toplevel()->current.width;
+        const int height = view->toplevel()->current.height;
+        view->cancelPositionAnimation();
+        view->setPosition(
+            std::clamp(newX, targetArea.x, targetArea.x + std::max(0, targetArea.width - width)),
+            std::clamp(newY, targetArea.y, targetArea.y + std::max(0, targetArea.height - height))
+        );
+        syncViewPresentation(view, true);
+        movedEntry = true;
+      }
+    }
+
+    if (geometryChanged) {
+      updateDimAndBlur(output);
+    }
+    if (movedEntry) {
+      m_server->scheduleIpcWindowsEvent();
+    }
   }
 
   wlr_scene_rect* ScratchpadManager::dimRectFor(Output* output) {
@@ -269,42 +643,56 @@ namespace umbriel {
     if (output == nullptr) {
       return;
     }
-    const bool visible = std::ranges::find(m_visibleOutputs, output) != m_visibleOutputs.end();
+    const bool visible = visibleOn(output);
     const double dim = config().animation.scratchpad.dim;
     const bool blurEnabled = config().animation.scratchpad.blur && config().appearance.blur.enabled;
     const auto fade = m_backdropFades.find(output);
-    const float curAlpha = fade != m_backdropFades.end() ? static_cast<float>(fade->second.current()) : 0.0F;
+    const float currentAlpha = fade != m_backdropFades.end() ? static_cast<float>(fade->second.current()) : 0.0F;
 
     wlr_box box{};
     wlr_output_layout_get_box(m_server->outputLayout(), output->wlr(), &box);
 
     if (wlr_scene_rect* rect = dimRectFor(output)) {
-      if ((!visible && curAlpha <= 0.001F) || dim <= 0.0 || curAlpha <= 0.001F) {
+      if ((!visible && currentAlpha <= 0.001F) || dim <= 0.0 || currentAlpha <= 0.001F) {
         wlr_scene_node_set_enabled(&rect->node, false);
       } else {
         wlr_scene_node_set_position(&rect->node, box.x, box.y);
         wlr_scene_rect_set_size(rect, box.width, box.height);
-        const float color[4] = {0.0F, 0.0F, 0.0F, std::clamp(static_cast<float>(dim * curAlpha), 0.0F, 1.0F)};
+        const float color[4] = {
+            0.0F,
+            0.0F,
+            0.0F,
+            std::clamp(static_cast<float>(dim * currentAlpha), 0.0F, 1.0F),
+        };
         wlr_scene_rect_set_color(rect, color);
         wlr_scene_node_set_enabled(&rect->node, true);
       }
     }
 
     if (wlr_scene_blur* blur = blurNodeFor(output)) {
-      if ((!visible && curAlpha <= 0.001F) || !blurEnabled || curAlpha <= 0.001F) {
+      if ((!visible && currentAlpha <= 0.001F) || !blurEnabled || currentAlpha <= 0.001F) {
         wlr_scene_node_set_enabled(&blur->node, false);
       } else {
         wlr_scene_node_set_position(&blur->node, box.x, box.y);
         wlr_scene_blur_set_size(blur, box.width, box.height);
         wlr_scene_blur_set_corner_radius(blur, 0);
-        wlr_scene_blur_set_alpha(blur, std::clamp(curAlpha, 0.0F, 1.0F));
+        wlr_scene_blur_set_alpha(blur, std::clamp(currentAlpha, 0.0F, 1.0F));
         wlr_scene_node_set_enabled(&blur->node, true);
       }
     }
   }
 
   void ScratchpadManager::releaseOutput(Output* output) {
-    std::erase(m_visibleOutputs, output);
+    std::vector<std::string> stranded;
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.output == output) {
+        stranded.push_back(name);
+      }
+    }
+    for (const std::string& name : stranded) {
+      moveScratchpad(name, nullptr, nullptr, false);
+    }
+
     m_backdropFades.erase(output);
     if (const auto it = m_dimRects.find(output); it != m_dimRects.end()) {
       wlr_scene_node_destroy(&it->second->node);
@@ -321,15 +709,15 @@ namespace umbriel {
     const bool animate = animation.enabled && animation.scratchpad.enabled;
     if (!animate) {
       for (auto& [output, fade] : m_backdropFades) {
-        const bool visible = std::ranges::find(m_visibleOutputs, output) != m_visibleOutputs.end();
-        fade.snap(visible ? 1.0 : 0.0);
+        fade.snap(visibleOn(output) ? 1.0 : 0.0);
         updateDimAndBlur(output);
       }
       for (const Entry& entry : m_entries) {
         if (entry.view == nullptr) {
           continue;
         }
-        const bool visible = std::ranges::find(m_visibleOutputs, entry.output) != m_visibleOutputs.end();
+        const Scratchpad* scratchpad = findScratchpad(entry.scratchpad);
+        const bool visible = scratchpad != nullptr && scratchpad->visible && scratchpad->output != nullptr;
         entry.view->cancelFadeAnimation();
         entry.view->setFadeAlpha(visible ? 1.0F : 0.0F);
         entry.view->setNodeEnabled(visible);
@@ -342,179 +730,252 @@ namespace umbriel {
     }
   }
 
-  bool ScratchpadManager::toggle(Output* output) {
-    if (output == nullptr
-        || std::ranges::none_of(m_entries, [output](const Entry& entry) { return entry.output == output; })) {
+  bool ScratchpadManager::summon(std::string_view name, Output* invokingOutput) {
+    Scratchpad* scratchpad = findScratchpad(name);
+    if (scratchpad == nullptr || invokingOutput == nullptr || !hasEntries(name)) {
       return false;
     }
-    const bool show = std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end();
-    setVisible(output, show);
-    if (show) {
-      if (View* view = focused(output)) {
-        m_server->focusView(view);
+    if (scratchpad->visible && scratchpad->output == invokingOutput) {
+      return true;
+    }
+
+    std::string conflictingName;
+    for (const auto& [candidateName, candidate] : m_scratchpads) {
+      if (&candidate != scratchpad && candidate.visible && candidate.output == invokingOutput) {
+        conflictingName = candidateName;
+        break;
       }
-    } else {
-      m_server->refocus(output);
+    }
+    if (!conflictingName.empty()) {
+      setVisible(conflictingName, false);
+    }
+
+    if (scratchpad->output != invokingOutput) {
+      moveScratchpad(name, invokingOutput);
+      scratchpad = findScratchpad(name);
+    }
+    if (scratchpad == nullptr) {
+      return false;
+    }
+    if (!scratchpad->visible) {
+      setVisible(name, true);
+    }
+    return true;
+  }
+
+  bool ScratchpadManager::toggle(std::string_view name, Output* invokingOutput) {
+    Scratchpad* scratchpad = findScratchpad(name);
+    if (scratchpad == nullptr || invokingOutput == nullptr || !hasEntries(name)) {
+      return false;
+    }
+    if (scratchpad->visible && scratchpad->output == invokingOutput) {
+      setVisible(name, false);
+      m_server->refocus(invokingOutput);
+      return true;
+    }
+
+    if (!summon(name, invokingOutput)) {
+      return false;
+    }
+    if (View* view = focused(name)) {
+      m_server->focusView(view);
     }
     return true;
   }
 
   void ScratchpadManager::hideAll() {
-    const std::vector<Output*> visibleOutputs = m_visibleOutputs;
-    for (Output* output : visibleOutputs) {
-      setVisible(output, false, false);
+    std::vector<std::string> visible;
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.visible) {
+        visible.push_back(name);
+      }
+    }
+    for (const std::string& name : visible) {
+      setVisible(name, false, false);
     }
   }
 
-  View* ScratchpadManager::focused(Output* output) const {
-    if (std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
+  View* ScratchpadManager::focused(std::string_view name) const {
+    const Scratchpad* scratchpad = findScratchpad(name);
+    if (scratchpad == nullptr || !scratchpad->visible || scratchpad->output == nullptr) {
       return nullptr;
     }
-    const auto remembered = std::ranges::find_if(m_entries, [output](const Entry& entry) {
-      return entry.output == output && entry.lastFocused;
-    });
-    if (remembered != m_entries.end()) {
-      return remembered->view;
+    if (scratchpad->lastFocused != nullptr) {
+      const Entry* remembered = findEntry(scratchpad->lastFocused);
+      if (remembered != nullptr && remembered->scratchpad == name && scratchpad->lastFocused->mapped()) {
+        return scratchpad->lastFocused;
+      }
     }
     for (const Entry& entry : m_entries) {
-      if (entry.output == output) {
+      if (entry.scratchpad == name && entry.view != nullptr && entry.view->mapped()) {
         return entry.view;
       }
     }
     return nullptr;
   }
 
-  bool ScratchpadManager::hasFocus(Output* output) const {
-    if (m_focusedView == nullptr || std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
+  bool ScratchpadManager::hasFocus(std::string_view name) const {
+    if (m_focusedView == nullptr || focused(name) == nullptr) {
       return false;
     }
-    return std::ranges::any_of(m_entries, [this, output](const Entry& entry) {
-      return entry.view == m_focusedView && entry.output == output;
-    });
+    const Entry* entry = findEntry(m_focusedView);
+    return entry != nullptr && entry->scratchpad == name;
   }
 
   void ScratchpadManager::noteFocus(View* view) {
     m_focusedView = nullptr;
-    const auto focused = std::ranges::find_if(m_entries, [view](const Entry& entry) { return entry.view == view; });
-    if (focused == m_entries.end()) {
+    Entry* entry = findEntry(view);
+    if (entry == nullptr) {
       return;
     }
-
-    m_focusedView = view;
-    for (Entry& entry : m_entries) {
-      if (entry.output == focused->output) {
-        entry.lastFocused = entry.view == view;
-      }
+    Scratchpad* scratchpad = findScratchpad(entry->scratchpad);
+    if (scratchpad == nullptr) {
+      return;
     }
+    m_focusedView = view;
+    scratchpad->lastFocused = view;
   }
 
   void ScratchpadManager::finishMove(View* view, Output* output) {
-    const auto it = std::ranges::find_if(m_entries, [view](const Entry& entry) { return entry.view == view; });
-    if (it == m_entries.end() || view == nullptr) {
+    Entry* entry = findEntry(view);
+    if (entry == nullptr || view == nullptr) {
       return;
     }
-    Output* previous = it->output;
-    if (output != nullptr) {
-      it->output = output;
-      if (std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
-        m_visibleOutputs.push_back(output);
-      }
+    Scratchpad* scratchpad = findScratchpad(entry->scratchpad);
+    if (scratchpad == nullptr) {
+      return;
     }
-    if (previous != it->output) {
-      it->displacedOutput.clear();
-      it->displacedPosition.reset();
-    }
-    if (previous != it->output && it->lastFocused) {
-      for (Entry& entry : m_entries) {
-        if (&entry != &*it && entry.output == it->output) {
-          entry.lastFocused = false;
-        }
-      }
-    }
-    if (previous != it->output
-        && std::ranges::none_of(m_entries, [previous](const Entry& entry) { return entry.output == previous; })) {
-      std::erase(m_visibleOutputs, previous);
+    const std::string name = entry->scratchpad;
+    if (output != nullptr && scratchpad->output != output) {
+      moveScratchpad(name, output, view);
     }
     restorePresentation(view);
   }
 
   void ScratchpadManager::restorePresentation(View* view) {
-    const auto entry =
-        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
-    if (view == nullptr || entry == m_entries.end()) {
+    const Entry* entry = findEntry(view);
+    const Scratchpad* scratchpad = entry != nullptr ? findScratchpad(entry->scratchpad) : nullptr;
+    if (view == nullptr || entry == nullptr || scratchpad == nullptr || scratchpad->output == nullptr) {
       return;
     }
     wlr_scene_node_reparent(&view->sceneTree()->node, m_root);
     view->reparentShadow(m_shadowRoot);
-    view->setOnActiveWorkspace(true);
-    view->enterForeignOutput(entry->output);
-    view->setNodeEnabled(true);
+    view->setOnActiveWorkspace(scratchpad->visible);
+    view->enterForeignOutput(scratchpad->output);
+    view->setNodeEnabled(scratchpad->visible);
+    syncViewPresentation(view);
   }
 
-  bool ScratchpadManager::focusNext(Output* output) {
-    if (output == nullptr || std::ranges::find(m_visibleOutputs, output) == m_visibleOutputs.end()) {
+  void ScratchpadManager::syncViewPresentation(View* view, bool refreshMaximized) {
+    const Entry* entry = findEntry(view);
+    if (view == nullptr || entry == nullptr || !view->mapped()) {
+      return;
+    }
+    if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isDraggingView(view)) {
+      return;
+    }
+    if (view->toplevel()->scheduled.fullscreen) {
+      view->applyFullscreenLayout();
+      return;
+    }
+    const Scratchpad* scratchpad = findScratchpad(entry->scratchpad);
+    if (refreshMaximized
+        && scratchpad != nullptr
+        && scratchpad->output != nullptr
+        && (view->maximizedToEdges() || view->m_floatingMaximized)) {
+      const wlr_box area = usableArea(*m_server, scratchpad->output);
+      if (area.width > 0 && area.height > 0) {
+        view->cancelPositionAnimation();
+        view->setPosition(area.x, area.y);
+        wlr_xdg_toplevel_set_size(view->toplevel(), area.width, area.height);
+        view->applyPresentation(area);
+      }
+      return;
+    }
+    const wlr_box& geometry = view->toplevel()->base->geometry;
+    if (geometry.width <= 0 || geometry.height <= 0) {
+      return;
+    }
+    view->applyPresentation({
+        .x = view->sceneTree()->node.x,
+        .y = view->sceneTree()->node.y,
+        .width = geometry.width,
+        .height = geometry.height,
+    });
+  }
+
+  bool ScratchpadManager::focusNext(std::string_view name) {
+    const Scratchpad* scratchpad = findScratchpad(name);
+    if (scratchpad == nullptr || !scratchpad->visible || scratchpad->output == nullptr) {
       return false;
     }
     std::vector<View*> views;
     for (const Entry& entry : m_entries) {
-      if (entry.output == output && entry.view != nullptr && entry.view->mapped()) {
+      if (entry.scratchpad == name && entry.view != nullptr && entry.view->mapped()) {
         views.push_back(entry.view);
       }
     }
     if (views.empty()) {
       return false;
     }
-    View* current = focused(output);
+    View* current = focused(name);
     const auto it = std::ranges::find(views, current);
     View* target = it == views.end() || std::next(it) == views.end() ? views.front() : *std::next(it);
     m_server->focusView(target, FocusReason::Directional);
     return true;
   }
 
-  bool ScratchpadManager::restoreFocused(Output* output) {
-    View* view = focused(output);
-    if (view == nullptr) {
+  bool ScratchpadManager::restoreView(View* view, Output* fallback, bool focus) {
+    const auto iterator =
+        std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
+    if (iterator == m_entries.end()) {
       return false;
     }
-    const auto it = std::ranges::find_if(m_entries, [view](const Entry& entry) { return entry.view == view; });
-    if (it == m_entries.end()) {
-      return false;
+    Entry entry = std::move(*iterator);
+    Scratchpad* scratchpad = findScratchpad(entry.scratchpad);
+    Output* scratchpadOutput = scratchpad != nullptr ? scratchpad->output : fallback;
+    if (scratchpad != nullptr && scratchpad->lastFocused == view) {
+      scratchpad->lastFocused = nullptr;
     }
-    Entry entry = std::move(*it);
-    m_entries.erase(it);
-    if (std::ranges::none_of(m_entries, [output](const Entry& e) { return e.output == output; })) {
-      std::erase(m_visibleOutputs, output);
-      retargetBackdrop(output, false);
-    }
+    m_entries.erase(iterator);
     if (m_focusedView == view) {
       m_focusedView = nullptr;
     }
     std::erase(m_hidingViews, view);
+
+    view->reparentShadow(nullptr);
+    view->setInScratchpad(false);
     Output* restoreOutput = m_server->outputFromName(entry.returnOutput);
     if (restoreOutput == nullptr) {
-      restoreOutput = output;
+      restoreOutput = scratchpadOutput;
     }
-    Workspace* workspace = restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr
-        ? restoreOutput->workspaceGroup()->workspaceNamed(entry.returnWorkspace)
-        : nullptr;
-    if (workspace == nullptr && restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr) {
-      workspace = restoreOutput->workspaceGroup()->active();
+    Workspace* workspace = nullptr;
+    if (restoreOutput != nullptr && restoreOutput->workspaceGroup() != nullptr) {
+      WorkspaceGroup* group = restoreOutput->workspaceGroup();
+      if (!entry.returnWorkspace.empty()) {
+        workspace = entry.returnWorkspaceNamed ? group->workspaceNamed(entry.returnWorkspace)
+                                               : group->workspaceAtClamped(entry.returnWorkspaceIndex);
+        if (!entry.returnWorkspaceNamed && group->dynamic() && workspace != nullptr && workspace->named()) {
+          workspace = group->insertDynamicWorkspace(entry.returnWorkspaceIndex);
+        }
+      }
+      if (workspace == nullptr) {
+        workspace = group->active();
+      }
     }
-    view->reparentShadow(nullptr);
-    view->setScratchpadBorder(false);
     view->moveToWorkspace(workspace, false);
     if (entry.returnTiled) {
       view->setFloating(false);
     } else {
       view->setFloating(true);
-      if (restoreOutput != nullptr && restoreOutput != output) {
-        const wlr_box usable = restoreOutput->usableArea();
-        if (usable.width > 0 && usable.height > 0) {
-          const int w = view->toplevel()->current.width;
-          const int h = view->toplevel()->current.height;
+      if (restoreOutput != nullptr && restoreOutput != scratchpadOutput) {
+        const wlr_box area = restoreOutput->usableArea();
+        if (area.width > 0 && area.height > 0) {
+          const int width = view->toplevel()->current.width;
+          const int height = view->toplevel()->current.height;
           view->setPosition(
-              std::clamp(view->sceneTree()->node.x, usable.x, usable.x + std::max(0, usable.width - w)),
-              std::clamp(view->sceneTree()->node.y, usable.y, usable.y + std::max(0, usable.height - h))
+              std::clamp(view->sceneTree()->node.x, area.x, area.x + std::max(0, area.width - width)),
+              std::clamp(view->sceneTree()->node.y, area.y, area.y + std::max(0, area.height - height))
           );
         }
       }
@@ -522,28 +983,49 @@ namespace umbriel {
     if (workspace != nullptr) {
       workspace->syncViewPresentation(view);
     }
-    m_server->focusView(view);
+
+    if (scratchpad != nullptr && !hasEntries(entry.scratchpad) && scratchpad->visible) {
+      setVisible(entry.scratchpad, false);
+    }
+    if (scratchpadOutput != nullptr) {
+      scratchpadOutput->updateVrr();
+      scratchpadOutput->updateHdr();
+    }
+    if (focus) {
+      m_server->focusView(view);
+    }
     return true;
   }
 
+  bool ScratchpadManager::restoreFocused(std::string_view name) {
+    View* view = focused(name);
+    if (view == nullptr) {
+      return false;
+    }
+    const Scratchpad* scratchpad = findScratchpad(name);
+    return restoreView(view, scratchpad != nullptr ? scratchpad->output : nullptr, true);
+  }
+
   void ScratchpadManager::remove(View* view) {
-    const auto entry =
+    const auto iterator =
         std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
-    if (entry == m_entries.end()) {
+    if (iterator == m_entries.end()) {
       return;
     }
-    Output* entryOutput = entry->output;
+    const std::string name = iterator->scratchpad;
+    Scratchpad* scratchpad = findScratchpad(name);
     view->reparentShadow(nullptr);
-    view->setScratchpadBorder(false);
+    view->setInScratchpad(false);
     if (m_focusedView == view) {
       m_focusedView = nullptr;
     }
+    if (scratchpad != nullptr && scratchpad->lastFocused == view) {
+      scratchpad->lastFocused = nullptr;
+    }
     std::erase(m_hidingViews, view);
-    m_entries.erase(entry);
-    if (entryOutput != nullptr
-        && std::ranges::none_of(m_entries, [entryOutput](const Entry& e) { return e.output == entryOutput; })) {
-      std::erase(m_visibleOutputs, entryOutput);
-      retargetBackdrop(entryOutput, false);
+    m_entries.erase(iterator);
+    if (scratchpad != nullptr && !hasEntries(name) && scratchpad->visible) {
+      setVisible(name, false);
     }
   }
 
@@ -551,56 +1033,80 @@ namespace umbriel {
     if (from == to) {
       return;
     }
-    const bool movedRemembered = std::ranges::any_of(m_entries, [from](const Entry& entry) {
-      return entry.output == from && entry.lastFocused;
-    });
-    if (movedRemembered && to != nullptr) {
-      for (Entry& entry : m_entries) {
-        if (entry.output == to) {
-          entry.lastFocused = false;
-        }
+    std::vector<std::string> moving;
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.output == from) {
+        moving.push_back(name);
       }
     }
-    const bool wasVisible = std::ranges::find(m_visibleOutputs, from) != m_visibleOutputs.end();
-    if (wasVisible) {
-      setVisible(from, false);
-    }
-    for (Entry& entry : m_entries) {
-      if (entry.output == from) {
-        if (entry.displacedOutput.empty() && from != nullptr && from->wlr()->name != nullptr) {
-          entry.displacedOutput = from->wlr()->name;
-          const wlr_box homeArea = from->layoutBox();
-          if (entry.view != nullptr && homeArea.width > 0 && homeArea.height > 0) {
-            entry.displacedPosition = {{
-                static_cast<double>(entry.view->sceneTree()->node.x - homeArea.x) / homeArea.width,
-                static_cast<double>(entry.view->sceneTree()->node.y - homeArea.y) / homeArea.height,
-            }};
+    for (const std::string& name : moving) {
+      Scratchpad* scratchpad = findScratchpad(name);
+      if (scratchpad == nullptr) {
+        continue;
+      }
+      if (scratchpad->displacedOutput.empty() && from != nullptr && from->wlr()->name != nullptr) {
+        scratchpad->displacedOutput = from->wlr()->name;
+        const wlr_box homeArea = from->layoutBox();
+        for (Entry& entry : m_entries) {
+          if (entry.scratchpad != name || entry.view == nullptr || homeArea.width <= 0 || homeArea.height <= 0) {
+            continue;
           }
-        }
-        entry.output = to;
-        if (from != nullptr && to != nullptr && entry.view != nullptr) {
-          const wlr_box srcArea = from->usableArea();
-          const wlr_box dstArea = to->usableArea();
-          if (srcArea.width > 0 && srcArea.height > 0 && dstArea.width > 0 && dstArea.height > 0) {
-            const double xFrac = static_cast<double>(entry.view->sceneTree()->node.x - srcArea.x) / srcArea.width;
-            const double yFrac = static_cast<double>(entry.view->sceneTree()->node.y - srcArea.y) / srcArea.height;
-            const int newX = dstArea.x + static_cast<int>(std::lround(xFrac * dstArea.width));
-            const int newY = dstArea.y + static_cast<int>(std::lround(yFrac * dstArea.height));
-            entry.view->cancelPositionAnimation();
-            entry.view->setPosition(
-                std::clamp(
-                    newX, dstArea.x, dstArea.x + std::max(0, dstArea.width - entry.view->toplevel()->current.width)
-                ),
-                std::clamp(
-                    newY, dstArea.y, dstArea.y + std::max(0, dstArea.height - entry.view->toplevel()->current.height)
-                )
-            );
-          }
+          entry.displacedPosition = {{
+              static_cast<double>(entry.view->sceneTree()->node.x - homeArea.x) / homeArea.width,
+              static_cast<double>(entry.view->sceneTree()->node.y - homeArea.y) / homeArea.height,
+          }};
         }
       }
+      moveScratchpad(name, to, nullptr, false);
     }
-    if (wasVisible && to != nullptr) {
-      setVisible(to, true);
+  }
+
+  void ScratchpadManager::reconcileConfig() {
+    std::set<std::string, std::less<>> desired;
+    if (config().scratchpads.empty()) {
+      desired.emplace(kImplicitScratchpad);
+    } else {
+      for (const ScratchpadConfig& scratchpad : config().scratchpads) {
+        desired.emplace(scratchpad.name);
+      }
+    }
+
+    std::vector<std::string> removed;
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (!desired.contains(name)) {
+        removed.push_back(name);
+      }
+    }
+    bool restoredAny = false;
+    for (const std::string& name : removed) {
+      Scratchpad* scratchpad = findScratchpad(name);
+      Output* fallback = scratchpad != nullptr ? scratchpad->output : nullptr;
+      if (scratchpad != nullptr && scratchpad->visible) {
+        setVisible(name, false, false);
+      }
+      std::vector<View*> views;
+      for (const Entry& entry : m_entries) {
+        if (entry.scratchpad == name && entry.view != nullptr) {
+          views.push_back(entry.view);
+        }
+      }
+      if (Cursor* cursor = m_server->cursor(); cursor != nullptr) {
+        const bool removesGrabbedView =
+            std::ranges::any_of(views, [&](const View* view) { return cursor->isDraggingView(view); });
+        if (removesGrabbedView) {
+          cursor->resetMode();
+        }
+      }
+      for (View* view : views) {
+        restoredAny = restoreView(view, fallback, false) || restoredAny;
+      }
+      m_scratchpads.erase(name);
+    }
+    for (const std::string& name : desired) {
+      m_scratchpads.try_emplace(name);
+    }
+    if (restoredAny) {
+      m_server->refocus();
     }
   }
 
@@ -609,46 +1115,58 @@ namespace umbriel {
       return 0;
     }
     size_t restored = 0;
-    for (Entry& entry : m_entries) {
-      Output* home = entry.displacedOutput.empty() ? nullptr : m_server->outputFromName(entry.displacedOutput);
-      if (home != nullptr) {
-        const wlr_box homeArea = home->layoutBox();
-        if (entry.view != nullptr && entry.displacedPosition && homeArea.width > 0 && homeArea.height > 0) {
-          entry.view->cancelPositionAnimation();
-          entry.view->setPosition(
-              homeArea.x + static_cast<int>(std::lround((*entry.displacedPosition)[0] * homeArea.width)),
-              homeArea.y + static_cast<int>(std::lround((*entry.displacedPosition)[1] * homeArea.height))
-          );
-        }
-        entry.displacedOutput.clear();
-        entry.displacedPosition.reset();
+    std::vector<std::string> names;
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (!scratchpad.displacedOutput.empty() || scratchpad.output == nullptr) {
+        names.push_back(name);
       }
-      Output* target = home != nullptr ? home : (entry.output == nullptr ? fallback : nullptr);
-      if (target == nullptr || target == entry.output) {
+    }
+
+    for (const std::string& name : names) {
+      Scratchpad* scratchpad = findScratchpad(name);
+      if (scratchpad == nullptr) {
         continue;
       }
-      Output* source = entry.output;
-      const bool wasVisible =
-          source != nullptr && std::ranges::find(m_visibleOutputs, source) != m_visibleOutputs.end();
-      if (entry.lastFocused) {
-        for (Entry& candidate : m_entries) {
-          if (&candidate != &entry && candidate.output == target) {
-            candidate.lastFocused = false;
+      Output* home =
+          scratchpad->displacedOutput.empty() ? nullptr : m_server->outputFromName(scratchpad->displacedOutput);
+      Output* target = home != nullptr ? home : (scratchpad->output == nullptr ? fallback : nullptr);
+      if (target == nullptr) {
+        continue;
+      }
+      const bool moved = target != scratchpad->output;
+      if (moved) {
+        moveScratchpad(name, target, nullptr, false);
+      }
+      scratchpad = findScratchpad(name);
+      if (home != nullptr && scratchpad != nullptr) {
+        const wlr_box homeArea = home->layoutBox();
+        for (Entry& entry : m_entries) {
+          if (entry.scratchpad != name || entry.view == nullptr) {
+            continue;
           }
+          const bool managerOwnedGeometry = entry.view->toplevel()->scheduled.fullscreen
+              || entry.view->toplevel()->current.fullscreen
+              || entry.view->maximizedToEdges()
+              || entry.view->m_floatingMaximized;
+          if (entry.displacedPosition && !managerOwnedGeometry && homeArea.width > 0 && homeArea.height > 0) {
+            entry.view->cancelPositionAnimation();
+            entry.view->setPosition(
+                homeArea.x + static_cast<int>(std::lround((*entry.displacedPosition)[0] * homeArea.width)),
+                homeArea.y + static_cast<int>(std::lround((*entry.displacedPosition)[1] * homeArea.height))
+            );
+            if (scratchpad->visible) {
+              restorePresentation(entry.view);
+            }
+          }
+          entry.displacedPosition.reset();
         }
+        scratchpad->displacedOutput.clear();
       }
-      entry.output = target;
-      if (wasVisible) {
-        if (std::ranges::none_of(m_entries, [source](const Entry& candidate) { return candidate.output == source; })) {
-          setVisible(source, false);
-        }
-        setVisible(target, true);
-      } else if (entry.view != nullptr) {
-        const bool visible = std::ranges::find(m_visibleOutputs, target) != m_visibleOutputs.end();
-        entry.view->setOnActiveWorkspace(visible);
-        entry.view->setNodeEnabled(visible);
+      if (moved) {
+        restored += static_cast<size_t>(std::ranges::count_if(m_entries, [&](const Entry& entry) {
+          return entry.scratchpad == name;
+        }));
       }
-      ++restored;
     }
     return restored;
   }

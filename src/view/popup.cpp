@@ -10,23 +10,6 @@
 
 namespace umbriel {
 
-  namespace {
-    LayerSurface* layerSurfaceFromSurface(wlr_surface* surface) {
-      wlr_surface* walk = surface;
-      while (walk != nullptr) {
-        if (wlr_layer_surface_v1* layer = wlr_layer_surface_v1_try_from_wlr_surface(walk)) {
-          return static_cast<LayerSurface*>(layer->data);
-        }
-        if (wlr_xdg_popup* popup = wlr_xdg_popup_try_from_wlr_surface(walk)) {
-          walk = popup->parent;
-          continue;
-        }
-        break;
-      }
-      return nullptr;
-    }
-  } // namespace
-
   Popup::Popup(wlr_xdg_popup* popup, wlr_scene_tree* parentTree, wlr_scene_tree* captureTree) : m_popup(popup) {
     if (parentTree == nullptr) {
       wlr_xdg_surface* parent = wlr_xdg_surface_try_from_wlr_surface(m_popup->parent);
@@ -80,7 +63,7 @@ namespace umbriel {
   void Popup::handleCommit() {
     const wlr_box& geometry = m_popup->base->geometry;
     SurfaceBlurOptions blurOptions;
-    if (LayerSurface* layer = layerSurfaceFromSurface(m_popup->parent)) {
+    if (LayerSurface* layer = LayerSurface::fromSurface(m_popup->parent)) {
       blurOptions = layer->popupBlurOptions();
     } else if (View* view = View::fromSurface(m_popup->parent)) {
       blurOptions = view->popupBlurOptions();
@@ -96,7 +79,7 @@ namespace umbriel {
     // New popups miss the parent's map/workspace-time scale notify; tell them the parent's output scale before the
     // first configure so scale-aware clients (xwayland-satellite) size and map input correctly from frame one.
     Output* output = nullptr;
-    if (LayerSurface* layer = layerSurfaceFromSurface(m_popup->parent)) {
+    if (LayerSurface* layer = LayerSurface::fromSurface(m_popup->parent)) {
       output = layer->output();
     } else if (View* view = View::fromSurface(m_popup->parent)) {
       output = view->currentOutput();
@@ -109,7 +92,7 @@ namespace umbriel {
   }
 
   void Popup::unconstrain() {
-    if (LayerSurface* layer = layerSurfaceFromSurface(m_popup->parent)) {
+    if (LayerSurface* layer = LayerSurface::fromSurface(m_popup->parent)) {
       layer->unconstrainPopup(m_popup);
     } else if (View* view = View::fromSurface(m_popup->parent)) {
       view->unconstrainPopup(m_popup);

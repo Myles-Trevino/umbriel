@@ -2,7 +2,7 @@
 # A new Dwindle window splits the focused leaf, not the next leaf in flat order.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 
 spawn_client() {
   local title=$1

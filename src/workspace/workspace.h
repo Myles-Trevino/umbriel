@@ -34,7 +34,7 @@ namespace umbriel {
 
     Workspace(
         WorkspaceGroup& group, wlr_ext_workspace_handle_v1* handle, std::string id, std::string name, size_t index,
-        ResolvedLayoutConfig layoutConfig
+        bool named, ResolvedLayoutConfig layoutConfig
     );
     ~Workspace();
 
@@ -47,6 +47,9 @@ namespace umbriel {
     // identical across the ext protocol and the IPC surface.
     [[nodiscard]] const std::string& id() const { return m_id; }
     [[nodiscard]] const std::string& name() const { return m_name; }
+    // True for an explicit configured or client-created name. Numeric labels
+    // generated for anonymous static or dynamic positions leave this false.
+    [[nodiscard]] bool named() const { return m_named; }
     [[nodiscard]] size_t index() const { return m_index; }
     [[nodiscard]] bool active() const { return m_active; }
     [[nodiscard]] Layout& layout() { return *m_layout; }
@@ -79,7 +82,6 @@ namespace umbriel {
     void overrideLayoutMode(LayoutMode mode);
     void clearLayoutModeOverride() { m_layoutModeOverride.reset(); }
     [[nodiscard]] View* focusedView() const { return m_focusedView; }
-    [[nodiscard]] int slideOffsetY() const { return m_slideOffsetY; }
     [[nodiscard]] wlr_scene_tree* viewLayer(bool tiled) const { return tiled ? m_tiledLayer : m_floatingLayer; }
     [[nodiscard]] wlr_scene_tree* shadowLayer() const { return m_shadowLayer; }
     [[nodiscard]] wlr_scene_tree* fullscreenTree() const { return m_fullscreenTree; }
@@ -93,7 +95,10 @@ namespace umbriel {
     void restackFloatingViews();
     void addView(View* view, bool attachToLayout = true);
     View* removeView(View* view, bool reconcile = true);
-    void layoutAttach(View* view, std::optional<double> initialWidth = std::nullopt);
+    void layoutAttach(
+        View* view, std::optional<double> initialWidth = std::nullopt,
+        std::optional<int> initialPixelWidth = std::nullopt
+    );
     // Predict the first configure by applying the same insertion and full-width
     // transition that the mapped path will use on the authoritative layout.
     [[nodiscard]] Layout::InitialSize initialMaximizedSize(View* view, const wlr_box& usable) const;
@@ -112,10 +117,11 @@ namespace umbriel {
     // many times this is called in between: a touchpad swipe marks on every motion event, and unrelated paths reached
     // in the same frame (a focus change, a config reload, a client's fullscreen commit) each used to arrange on their
     // own. Prefer this to arrange(). Call arrange() directly only when the code immediately afterwards reads the
-    // arranged geometry back out of the layout, targetBox() is the only thing arrange() produces that is not simply
-    // applied to the scene, and a stale one would be read.
+    // arranged geometry back out of the layout, or when protocol state and size must land in one configure before the
+    // next frame. targetBox() is the only thing arrange() produces that is not simply applied to the scene.
     void markArrange(bool animate = true);
     void flushArrange();
+    void refreshAloneRuleStates();
     void syncViewPresentation(View* view);
     [[nodiscard]] View* focusAdjacent(int direction) const;
     [[nodiscard]] View* focusVertical(int direction) const;
@@ -146,15 +152,16 @@ namespace umbriel {
     bool toggleFocusedFullscreen();
     bool toggleFocusedFloating();
     void ensureFocusedVisible();
+    void activateFocusedColumn();
     void snapVisible(const View* view);
     [[nodiscard]] double scrollFractionToReveal(const View* view) const;
     void applyVisibility();
     void beginSwitchTransition();
     void showSwitchViews();
     void endSwitchTransition();
-    void setSlideOffset(double y);
+    void setSlideOffset(double x, double y);
     void applyLayoutConfig(ResolvedLayoutConfig layoutConfig);
-    void rename(std::string name, size_t index);
+    void rename(std::string name, size_t index, bool named);
 
     [[nodiscard]] const std::vector<View*>& allViews() const noexcept { return m_views; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
@@ -178,6 +185,10 @@ namespace umbriel {
     void clampScrollToRange();
     [[nodiscard]] View* focusAlongStrip(int direction) const;
     [[nodiscard]] View* focusWithinLane(int direction) const;
+    // Directional focus lands on the most recently focused window of the group
+    // the move entered (target column, or crossed dwindle subtree). Moves that
+    // stay inside one group keep `target`.
+    [[nodiscard]] View* preferRecentPeer(View* target) const;
     bool moveLaneAlongStrip(int direction);
     bool moveWithinLane(int direction);
     // Take `view` out of the layout while holding visible lanes still.
@@ -187,6 +198,7 @@ namespace umbriel {
     std::string m_id;
     std::string m_name;
     size_t m_index = 0;
+    bool m_named = false;
     bool m_active = false;
     std::vector<View*> m_views;
     std::vector<View*> m_floatingStack;
@@ -198,6 +210,12 @@ namespace umbriel {
     bool m_inSwitchTransition = false;
     bool m_arrangePending = false;
     bool m_arrangeAnimate = true;
+    // Remembers the last layout state, so alone-ness is only recomputed when it changed.
+    bool m_refreshingAloneRules = false;
+    size_t m_lastAloneViewCount = 0;
+    View* m_lastAloneSoleView = nullptr;
+    uint64_t m_lastAloneGeneration = 0;
+    int m_slideOffsetX = 0;
     int m_slideOffsetY = 0;
     std::vector<View*> m_switchViews;
     wlr_scene_tree* m_tree = nullptr;
@@ -223,21 +241,32 @@ namespace umbriel {
     [[nodiscard]] bool dynamic() const { return m_dynamic; }
     [[nodiscard]] Workspace* workspaceAt(size_t index) const;
     [[nodiscard]] Workspace* workspaceAtClamped(size_t index) const;
+    // Match an explicit name only. Anonymous numeric labels are positions.
     [[nodiscard]] Workspace* workspaceNamed(std::string_view name) const;
-    [[nodiscard]] Workspace* workspaceForSelector(std::string_view name) const;
     [[nodiscard]] Workspace* workspaceFromHandle(wlr_ext_workspace_handle_v1* handle) const;
     [[nodiscard]] size_t workspaceCount() const { return m_workspaces.size(); }
+    // Direction this output arranges its workspaces along, cached from configuration
+    // so rendering and input never re-resolve it per event.
+    [[nodiscard]] WorkspaceAxis workspaceAxis() const { return m_workspaceAxis; }
 
     void activate(Workspace* workspace, bool animate = true);
     void select(Workspace* workspace);
     void deactivate(Workspace* workspace);
+    // Dynamic groups reuse their highest empty anonymous workspace before appending. Static groups reject protocol
+    // create requests because their configured inventory is exact.
     Workspace* createWorkspace(const char* name);
+    // Acquire a destination for moving every window from another workspace. Static groups reuse their highest empty
+    // configured workspace without changing its identity; dynamic groups use the ordinary create behavior.
+    Workspace* transferDestination();
     // Insert an empty numbered workspace into a dynamic group and renumber the following workspaces. Static configured
     // groups cannot be extended this way and return null.
     Workspace* insertDynamicWorkspace(size_t index);
     bool moveActiveWorkspace(int direction);
     void reconcileInventory();
     void refreshLayouts();
+    // Re-resolve the output's workspace axis, settling any live slide on the old
+    // axis first. Called before per-workspace layout resolution.
+    void refreshWorkspaceAxis();
     void reconcileDynamic();
     // Every workspace, not just the active one: a client can change fullscreen state while another workspace is
     // showing, and that workspace still owes it a configure at the right size.
@@ -259,13 +288,14 @@ namespace umbriel {
     std::string nextWorkspaceId();
     Workspace* appendDynamicWorkspace();
     Workspace* prependDynamicWorkspace();
+    void reconcileDynamicNames(const std::vector<ResolvedWorkspace>& resolved);
     void refreshDynamicWorkspaceMetadata();
 
     struct Slide {
       Workspace* base = nullptr;
-      Workspace* up = nullptr;
-      Workspace* down = nullptr;
-      double height = 0;
+      Workspace* previous = nullptr;
+      Workspace* next = nullptr;
+      double extent = 0;
       double progress = 0;
     };
 
@@ -275,6 +305,8 @@ namespace umbriel {
     Workspace* m_active = nullptr;
     Workspace* m_previous = nullptr;
     bool m_dynamic = false;
+    size_t m_omittedConfiguredNames = 0;
+    WorkspaceAxis m_workspaceAxis = WorkspaceAxis::Vertical;
     uint32_t m_nextHandleSerial = 1;
     std::vector<std::unique_ptr<Workspace>> m_workspaces;
     AnimatedValue m_slideAnim;

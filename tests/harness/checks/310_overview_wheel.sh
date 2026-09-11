@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# The overview steps workspaces from a wheel notch, and stops at the ends. While the overview is up the real window trees are hidden, so switching is a discrete step down the filmstrip rather than the animated slide it is outside. The wheel, the arrow keys and the three-finger swipe all reach that step through Overview::selectRelativeWorkspace. Only the wheel is drivable here: the headless backend has no touchpad, and zwlr_virtual_pointer_v1 carries motion, buttons and axes but no gesture events. So this covers the shared selection path; the gesture state machine on top of it is not reachable without a real device. The active workspace is observed through ext-workspace-v1.
+# The overview steps workspaces from a wheel notch, and stops at the ends. While the overview is up the real window
+# trees are hidden, so switching is a discrete step down the filmstrip rather than the animated slide it is outside.
+# The wheel and middle-button drag reach Overview::selectRelativeWorkspace. This check
+# exercises the wheel path, while 346_overview_keybind_actions covers arrow input, which navigates cards first. The
+# headless backend has no touchpad, and zwlr_virtual_pointer_v1 carries motion, buttons and axes but no gesture
+# events, so the gesture state machine is not reachable without a real device. The active workspace is observed
+# through ext-workspace-v1.
 set -euo pipefail
 
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
 if [[ ! -x $POINTER ]]; then
   echo "pointer client not built at $POINTER"
@@ -21,11 +27,11 @@ pointer() {
   "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"
 }
 
-# Send one notch and report which workspace it activated, or "none".
+# Send one notch on the named wheel axis and report which workspace it activated, or "none".
 notch_activates() {
-  local before after
+  local dir=$1 command=${2:-notch} before after
   before=$("$WORKSPACE")
-  pointer notch "$1"
+  pointer "$command" "$dir"
   for _ in $(seq 20); do
     after=$("$WORKSPACE")
     [[ $after != "$before" ]] && { echo "$after"; return 0; }
@@ -35,12 +41,27 @@ notch_activates() {
 }
 
 expect_notch() {
-  local dir=$1 want=$2 got
-  got=$(notch_activates "$dir")
+  local dir=$1 want=$2 command=${3:-notch} got
+  got=$(notch_activates "$dir" "$command")
   if [[ $got != "$want" ]]; then
-    echo "notch $dir: expected workspace '$want', got '$got'"
+    echo "$command $dir: expected workspace '$want', got '$got'"
     return 1
   fi
+}
+
+expect_inert_notch() {
+  local dir=$1 command=$2 reason=$3 got
+  got=$(notch_activates "$dir" "$command")
+  if [[ $got != none ]]; then
+    echo "$reason ($command $dir activated workspace '$got')"
+    return 1
+  fi
+}
+
+# A layout-changing reload closes the overview, so every axis phase reopens it.
+open_overview() {
+  "$UMBRIEL" msg overview-open > /dev/null
+  sleep 0.6
 }
 
 # One window, so the group holds workspace 1 (occupied) and a dynamic 2.
@@ -83,4 +104,54 @@ printf '[layout\n' > "$UMBRIEL_CONFIG"
 expect_notch 1 2
 expect_notch -1 1
 
-echo "wheel steps survive failed and irrelevant reloads, and clamp at the top"
+# Horizontally arranged workspaces keep the vertical wheel and add the horizontal one. The malformed write above left
+# the file unusable, so this phase rewrites it whole; three static workspaces put both ends of the arrangement within
+# reach of a wheel.
+cat > "$UMBRIEL_CONFIG" << 'EOF'
+[general]
+xwayland = false
+show_cheatsheet = false
+autostart = []
+
+[output."HEADLESS-1"]
+workspaces = 3
+workspace_axis = "horizontal"
+EOF
+"$UMBRIEL" msg config-reload > /dev/null
+for _ in $(seq 40); do
+  [[ $("$WORKSPACE" --all | wc -l) -eq 3 ]] && break
+  sleep 0.1
+done
+if [[ $("$WORKSPACE" --all | wc -l) -ne 3 ]]; then
+  echo "the horizontal reload never produced three workspaces"
+  exit 1
+fi
+if [[ $("$WORKSPACE") != 1 ]]; then
+  echo "expected the window's workspace 1 to stay active across the horizontal reload, got '$("$WORKSPACE")'"
+  exit 1
+fi
+open_overview
+
+# The vertical wheel navigates either arrangement.
+expect_notch 1 2
+expect_notch -1 1
+
+# The horizontal wheel matches this arrangement, so it steps the filmstrip too.
+expect_notch 1 2 notch-horizontal
+expect_notch 1 3 notch-horizontal
+expect_inert_notch 1 notch-horizontal "a horizontal notch past the last workspace was not clamped"
+expect_inert_notch 1 notch "a vertical notch past the last workspace was not clamped"
+expect_notch -1 2 notch-horizontal
+expect_notch -1 1 notch-horizontal
+expect_inert_notch -1 notch-horizontal "a horizontal notch past the first workspace was not clamped"
+expect_inert_notch -1 notch "a vertical notch past the first workspace was not clamped"
+
+# Restoring the default arrangement takes the horizontal wheel out of the filmstrip again: it no longer matches the
+# axis the workspaces are arranged along, while the vertical wheel keeps stepping.
+sed -i 's/^workspace_axis = "horizontal"$/workspace_axis = "vertical"/' "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+open_overview
+expect_inert_notch 1 notch-horizontal "a horizontal wheel notch stepped vertically arranged workspaces"
+expect_notch 1 2
+
+echo "wheel steps survive failed and irrelevant reloads, clamp at both ends, and follow the output workspace axis"

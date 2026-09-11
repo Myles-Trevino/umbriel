@@ -6,7 +6,7 @@
 # black headless output makes the presented width measurable.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly BASELINE="$UMBRIEL_RUNTIME_DIR/initial-maximize-to-edges-baseline.png"
 readonly RULED="$UMBRIEL_RUNTIME_DIR/initial-maximize-to-edges-ruled.png"
 readonly MAXIMIZED_LOG="$UMBRIEL_RUNTIME_DIR/initial-maximize-ruled.log"

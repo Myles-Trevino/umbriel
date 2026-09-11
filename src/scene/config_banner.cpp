@@ -2,6 +2,7 @@
 
 #include "config/config.h"
 #include "config/config_diag.h"
+#include "scene/border_rect.h"
 #include "scene/color.h"
 #include "scene/text_buffer.h"
 #include "server/server.h"
@@ -12,16 +13,21 @@
 #include <filesystem>
 #include <format>
 #include <string>
+#include <vector>
 #include <wayland-server-core.h>
 
 namespace {
 
-  constexpr int kPadding = 14;
+  constexpr int kPadding = 20;
+  constexpr int kBorderWidth = 2;
   constexpr int kMaxLines = 6;
   constexpr int kDefaultMaxWidth = 800;
   constexpr int kAbsMaxWidth = 960;
   constexpr int kTopMargin = 24;
   constexpr int kAutoHideMs = 10000;
+  // Roughly the width of the bullet and its trailing space in monospace 11, so a
+  // wrapped message continues under its own first character.
+  constexpr int kHangingIndent = 18;
 
   // Make a diagnostic file path short relative to the config root's directory.
   std::string shortPath(const umbriel::ConfigDiagnostic& diag, const std::filesystem::path& configDir) {
@@ -92,9 +98,10 @@ namespace umbriel {
   }
 
   void ConfigBanner::hide() {
-    if (m_sceneBuffer != nullptr) {
-      wlr_scene_node_destroy(&m_sceneBuffer->node);
-      m_sceneBuffer = nullptr;
+    if (m_tree != nullptr) {
+      m_shadow.reset();
+      wlr_scene_node_destroy(&m_tree->node);
+      m_tree = nullptr;
     }
     m_lastDiagnostics.clear();
     m_persistent = false;
@@ -112,10 +119,11 @@ namespace umbriel {
   }
 
   void ConfigBanner::render(const std::vector<ConfigDiagnostic>& diagnostics) {
-    // Destroy previous buffer node.
-    if (m_sceneBuffer != nullptr) {
-      wlr_scene_node_destroy(&m_sceneBuffer->node);
-      m_sceneBuffer = nullptr;
+    // Destroy previous subtree.
+    if (m_tree != nullptr) {
+      m_shadow.reset();
+      wlr_scene_node_destroy(&m_tree->node);
+      m_tree = nullptr;
     }
 
     // Determine output scale and dimensions.
@@ -137,73 +145,109 @@ namespace umbriel {
       maxTextWidth = std::max(maxTextWidth, 200);
     }
 
-    // Determine heading.
-    const bool hasError = std::ranges::any_of(diagnostics, [](const ConfigDiagnostic& diagnostic) {
-      return diagnostic.severity == ConfigDiagnostic::Severity::Error;
+    // Errors first: they are the ones that kept the configuration from applying,
+    // and the list is truncated from the end.
+    std::vector<const ConfigDiagnostic*> ordered;
+    ordered.reserve(diagnostics.size());
+    for (const auto& diagnostic : diagnostics) {
+      ordered.push_back(&diagnostic);
+    }
+    std::ranges::stable_partition(ordered, [](const ConfigDiagnostic* d) {
+      return d->severity == ConfigDiagnostic::Severity::Error;
     });
-    const char* heading = hasError ? "Configuration errors" : "Configuration warnings";
+
+    const bool hasError = !ordered.empty() && ordered.front()->severity == ConfigDiagnostic::Severity::Error;
     const auto& colors = config().colors;
-    const std::string headingColor = rgbaHex(hasError ? colors.error : colors.warning);
+    const std::string severityColor = rgbaHex(hasError ? colors.error : colors.warning);
+    const std::string errorColor = rgbaHex(colors.error);
+    const std::string warningColor = rgbaHex(colors.warning);
     const std::string textColor = rgbaHex(colors.textPrimary);
+    const std::string mutedColor = rgbaHex(colors.textMuted);
 
-    // Build pango markup.
+    const int total = static_cast<int>(ordered.size());
+    const std::string heading = total == 1
+        ? std::string(hasError ? "Configuration error" : "Configuration warning")
+        : std::format("{} configuration {}", total, hasError ? "problems" : "warnings");
+
+    // Build pango markup: heading, a blank spacer, one bulleted entry per
+    // diagnostic, then a muted footer.
     const std::filesystem::path configDir = configRootPath().parent_path();
-    std::string markup;
-    markup += std::format("<span foreground='{}'>{}</span>", headingColor, escapeMarkup(heading));
+    std::string markup = std::format(
+        "<span size='13pt' weight='bold' foreground='{}'>{}</span>\n", severityColor, escapeMarkup(heading)
+    );
 
-    int shown = 0;
-    const int total = static_cast<int>(diagnostics.size());
-    for (int i = 0; i < total && shown < kMaxLines; ++i, ++shown) {
-      const auto& diagnostic = diagnostics[static_cast<size_t>(i)];
+    const int shown = std::min(total, kMaxLines);
+    for (int i = 0; i < shown; ++i) {
+      const ConfigDiagnostic& diagnostic = *ordered[static_cast<size_t>(i)];
+      const bool isError = diagnostic.severity == ConfigDiagnostic::Severity::Error;
       const std::string loc = shortPath(diagnostic, configDir);
-      const std::string escapedMessage = escapeMarkup(diagnostic.message);
-      if (loc.empty()) {
-        markup += std::format("\n<span foreground='{}'>{}</span>", textColor, escapedMessage);
-      } else {
-        markup += std::format("\n<span foreground='{}'>{}: {}</span>", textColor, escapeMarkup(loc), escapedMessage);
+      markup += std::format("\n<span foreground='{}'>\xe2\x80\xa2</span> ", isError ? errorColor : warningColor);
+      if (!loc.empty()) {
+        markup += std::format("<span foreground='{}'>{}</span>  ", mutedColor, escapeMarkup(loc));
       }
-    }
-    if (total > kMaxLines) {
-      const int remaining = total - kMaxLines;
-      markup += std::format("\n<span foreground='{}'>+{} more; run `umbriel validate`</span>", textColor, remaining);
+      markup += std::format("<span foreground='{}'>{}</span>", textColor, escapeMarkup(diagnostic.message));
     }
 
-    // Render text into a wlr_buffer via the shared utility.
+    std::string footer;
+    if (total > shown) {
+      footer += std::format("+{} more \xc2\xb7 ", total - shown);
+    }
+    footer += hasError ? "configuration not applied \xc2\xb7 run `umbriel validate`" : "run `umbriel validate`";
+    markup += std::format("\n\n<span foreground='{}'>{}</span>", mutedColor, escapeMarkup(footer));
+
+    // Transparent background: the panel rect behind provides the surface.
     TextBufferResult rendered = renderTextBuffer({
         .markup = std::move(markup),
         .font = "monospace 11",
         .maxWidth = maxTextWidth,
         .padding = kPadding,
         .scale = scale,
-        .bgR = colors.background[0],
-        .bgG = colors.background[1],
-        .bgB = colors.background[2],
-        .bgA = colors.background[3],
+        .hangingIndent = kHangingIndent,
+        .bgR = 0.0,
+        .bgG = 0.0,
+        .bgB = 0.0,
+        .bgA = 0.0,
     });
     if (rendered.buffer == nullptr) {
       return;
     }
 
-    // Create scene buffer node.
-    m_sceneBuffer = wlr_scene_buffer_create(m_parent, rendered.buffer);
+    m_tree = wlr_scene_tree_create(m_parent);
+
+    // Shadow, severity-colored border, rounded panel, then text.
+    const int cornerRadius = config().appearance.cornerRadius;
+    m_shadow.update(m_tree, rendered.logicalWidth, rendered.logicalHeight, kBorderWidth, cornerRadius);
+
+    float borderColor[4]{};
+    premultiplied(borderColor, hasError ? colors.error : colors.warning, 1.0F);
+    wlr_scene_border* panelBorder = wlr_scene_border_create(m_tree, borderColor, borderColor);
+    applyBorderGeometry(
+        panelBorder, makeBorderRing(rendered.logicalWidth, rendered.logicalHeight, cornerRadius, kBorderWidth, 0),
+        kBorderWidth, 0
+    );
+
+    float panelColor[4]{};
+    premultiplied(panelColor, colors.background, 1.0F);
+    wlr_scene_rect* panelRect =
+        wlr_scene_rect_create(m_tree, rendered.logicalWidth, rendered.logicalHeight, panelColor);
+    wlr_scene_rect_set_corner_radius(panelRect, nestedRadius(cornerRadius, kBorderWidth));
+    (void)panelRect;
+
+    wlr_scene_buffer* sceneBuf = wlr_scene_buffer_create(m_tree, rendered.buffer);
     wlr_buffer_drop(rendered.buffer); // scene holds the lock
-    if (m_sceneBuffer == nullptr) {
-      return;
+    if (sceneBuf != nullptr) {
+      // Map device-pixel buffer to logical output size; the banner never takes input.
+      wlr_scene_buffer_set_dest_size(sceneBuf, rendered.logicalWidth, rendered.logicalHeight);
+      sceneBuf->point_accepts_input = [](wlr_scene_buffer*, double*, double*) -> bool { return false; };
     }
-
-    // Map device-pixel buffer to logical output size.
-    wlr_scene_buffer_set_dest_size(m_sceneBuffer, rendered.logicalWidth, rendered.logicalHeight);
-
-    // Input pass-through.
-    m_sceneBuffer->point_accepts_input = [](wlr_scene_buffer*, double*, double*) -> bool { return false; };
 
     // Position: top-center of preferred output.
     if (haveOutput) {
-      const int x = outputBox.x + (outputBox.width - rendered.logicalWidth) / 2;
+      const int x = outputBox.x + std::max(0, (outputBox.width - rendered.logicalWidth) / 2);
       const int y = outputBox.y + kTopMargin;
-      wlr_scene_node_set_position(&m_sceneBuffer->node, x, y);
+      wlr_scene_node_set_position(&m_tree->node, x, y);
     } else {
-      wlr_scene_node_set_position(&m_sceneBuffer->node, kTopMargin, kTopMargin);
+      wlr_scene_node_set_position(&m_tree->node, kTopMargin, kTopMargin);
     }
   }
 

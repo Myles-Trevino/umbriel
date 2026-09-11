@@ -4,7 +4,7 @@
 # must reveal the application even when unsolicited activation requests normally only mark windows urgent.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/spawn-activation-client.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/spawn-activation-control"
 readonly TOKEN_FILE="$UMBRIEL_RUNTIME_DIR/spawn-activation-token"

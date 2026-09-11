@@ -3,7 +3,8 @@
 #include "config/config.h"
 #include "output/identity.h"
 
-#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace umbriel {
@@ -11,11 +12,20 @@ namespace umbriel {
   // Validation uses the same inventory rules as runtime resolution.
   [[nodiscard]] bool workspaceRuleTargetExists(const Config& config, const WorkspaceConfig& rule);
 
+  // Client identity a compositor may never have received. An unset value matches no pattern; a set but empty one
+  // matches a pattern that accepts the empty string, such as `^$`.
+  [[nodiscard]] inline std::optional<std::string_view> ruleText(const char* value) {
+    return value != nullptr ? std::optional<std::string_view>(value) : std::nullopt;
+  }
+
+  inline constexpr uint64_t kStartupWindowRuleDurationMs = 60'000;
+
   [[nodiscard]] ResolvedWindowRule resolveWindowRules(
-      const Config& config, const char* appId, const char* title, std::string_view xdgTag, ContentType contentType,
-      bool focused
+      const Config& config, std::optional<std::string_view> appId, std::optional<std::string_view> title,
+      std::optional<std::string_view> xdgTag, ContentType contentType, const WindowRuleState& state, uint64_t uptimeMs
   );
-  [[nodiscard]] ResolvedLayerRule resolveLayerRules(const Config& config, const char* layerNamespace);
+  [[nodiscard]] ResolvedLayerRule
+  resolveLayerRules(const Config& config, std::optional<std::string_view> layerNamespace);
   // The globals every [[security_context_rule]] matching the client's metadata
   // grants on top of the base allowed set.
   [[nodiscard]] std::vector<std::string>
@@ -24,11 +34,22 @@ namespace umbriel {
   // Return the sole fixed-output inventory containing this zero-based workspace
   // position. Null means no fixed owner or an ambiguous owner.
   [[nodiscard]] const OutputRule* uniqueFixedWorkspaceOwner(const Config& config, size_t index);
+  // Return the sole fixed-output inventory containing this exact workspace
+  // name. Null means no fixed owner or an ambiguous owner.
+  [[nodiscard]] const OutputRule* uniqueFixedWorkspaceOwner(const Config& config, std::string_view name);
   // Descriptor-specific output sections override connector fallbacks.
   [[nodiscard]] const OutputRule* findOutputRule(const Config& config, const OutputIdentity& identity);
+  // Direction the output arranges its workspaces along; vertical when no rule matches.
+  [[nodiscard]] WorkspaceAxis resolveWorkspaceAxis(const Config& config, const OutputIdentity& identity);
   [[nodiscard]] ResolvedLayoutConfig resolveGlobalLayout(const Config& config);
   [[nodiscard]] ResolvedLayoutConfig
   resolveWorkspaceLayout(const Config& config, const OutputIdentity& identity, std::string_view name, size_t index);
+  // Resolve an unnamed dynamic workspace. Its numeric protocol label is not an
+  // explicit name selector, so only index rules match it.
+  [[nodiscard]] ResolvedLayoutConfig
+  resolveUnnamedWorkspaceLayout(const Config& config, const OutputIdentity& identity, size_t index);
   [[nodiscard]] ResolvedWorkspaceSet resolveWorkspacesForOutput(const Config& config, const OutputIdentity& identity);
+  // Workspace count a dynamic output never shrinks below.
+  [[nodiscard]] size_t resolveDynamicWorkspaceMinimum(const Config& config, const OutputIdentity& identity);
 
 } // namespace umbriel

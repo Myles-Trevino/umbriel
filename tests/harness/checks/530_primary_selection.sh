@@ -3,7 +3,7 @@
 # while staying stable for clients that remain connected across a reload.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
 readonly PRIMARY_SELECTION=zwp_primary_selection_device_manager_v1
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/primary-selection-client.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/primary-selection-control"

@@ -32,6 +32,11 @@ hidden from restricted clients until it has received a security review.
 Trusted host services such as xdg-desktop-portal can mediate capture and other
 privileged operations for a sandboxed application.
 
+Restricted clients receive the xdg-foreign exporter but not the importer. A
+sandboxed application can export one of its windows and hand the handle to a
+portal, which imports it to parent its dialog. Parenting a window to another
+client's window stays with unrestricted processes.
+
 ## Per-application grants
 
 Some protocols have no portal equivalent. A status bar needs layer-shell, a
@@ -44,8 +49,18 @@ supplies. Every matching rule contributes its globals.
 [[security_context_rule]]
 match.sandbox_engine = 'org\.flatpak'
 match.app_id = 'org\.example\.ClipboardManager'
-allow_globals = ["ext_data_control_manager_v1"]
+allow_globals = [
+  "ext_data_control_manager_v1",
+  "zwlr_data_control_manager_v1",
+]
 ```
+
+Umbriel advertises both data-control variants to unrestricted clients. The
+`ext_data_control_manager_v1` global is the current protocol, while
+`zwlr_data_control_manager_v1` remains available for legacy clients. Both can
+observe and replace selections without keyboard focus, so restricted clients
+receive neither unless a matching rule grants it. Grant only the variants the
+application requires; the example grants both for compatibility.
 
 | Selector | Type | Description |
 |----------|------|-------------|

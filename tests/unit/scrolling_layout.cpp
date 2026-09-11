@@ -11,6 +11,7 @@
 #include <wlr/util/edges.h>
 // clang-format on
 
+using umbriel::CenterFocusedColumn;
 using umbriel::Column;
 using umbriel::Layout;
 using umbriel::LayoutConstraints;
@@ -25,10 +26,8 @@ namespace {
   // one. These are addresses, never dereferenced.
   View* stub(int id) { return reinterpret_cast<View*>(static_cast<uintptr_t>(0x1000 + (id * 0x10))); }
 
-  // Mirrors the shipped defaults except expandSingleColumn: geometry tests pin
-  // false so they exercise the resting-width math, and the expand_single_column
-  // behavior is covered by its own tests that flip the value back to true.
-  //   totalGap = gap + 2 * border = 12,  edgePad = gap + border = 10
+  // Mirrors the shipped defaults
+  // totalGap = gap + 2 * border = 12,  edgePad = gap + border = 10
   ResolvedLayoutConfig defaultConfig() {
     ResolvedLayoutConfig config;
     config.gap = 8;
@@ -36,7 +35,6 @@ namespace {
     config.edgePad = 10;
     config.scrolling.defaultWidthFraction = 0.5;
     config.scrolling.centerUnderfullStrip = true;
-    config.scrolling.expandSingleColumn = false;
     config.widthPresets = {1.0 / 3, 0.5, 2.0 / 3};
     return config;
   }
@@ -300,45 +298,6 @@ UMBRIEL_TEST(halfWidthColumnMatchesTheGapAwareFormula) {
   CHECK_EQ(fixture.layout.columnWidth(0, kViewport), 624);
 }
 
-// expand_single_column
-UMBRIEL_TEST(expandSingleColumnFalseKeepsTheConfiguredWidth) {
-  Fixture fixture;
-  fixture.addColumns(1);
-  CHECK_EQ(fixture.layout.columnWidth(0, kViewport), 624);
-}
-
-UMBRIEL_TEST(expandSingleColumnTrueFillsALoneColumn) {
-  Fixture fixture;
-  fixture.config.scrolling.expandSingleColumn = true;
-  fixture.addColumns(1);
-  CHECK_EQ(fixture.layout.columnWidth(0, kViewport), kViewport);
-}
-
-UMBRIEL_TEST(expandSingleColumnTrueHonorsClientMaxWidth) {
-  Fixture fixture;
-  fixture.config.scrolling.expandSingleColumn = true;
-  fixture.layout.setConstraints([](const View*) { return LayoutConstraints{.maxWidth = 300}; });
-  fixture.addColumns(1);
-  CHECK_EQ(fixture.layout.columnWidth(0, kViewport), 300);
-}
-
-UMBRIEL_TEST(expandSingleColumnTrueSizesTheFirstConfigureFull) {
-  Fixture fixture;
-  fixture.config.scrolling.expandSingleColumn = true;
-  const Layout::InitialSize initial = fixture.layout.initialSize(kUsable, std::nullopt, nullptr);
-  CHECK_EQ(initial.width, 1260);
-  CHECK_EQ(initial.height, 700);
-}
-
-UMBRIEL_TEST(expandSingleColumnTrueReexpandsTheLastSurvivor) {
-  Fixture fixture;
-  fixture.config.scrolling.expandSingleColumn = true;
-  fixture.addColumns(2);
-  fixture.layout.removeView(stub(1));
-  CHECK_EQ(fixture.layout.columns().size(), size_t{1});
-  CHECK_EQ(fixture.layout.columnWidth(0, kViewport), kViewport);
-}
-
 UMBRIEL_TEST(twoHalfColumnsTileExactlyAcrossTheViewport) {
   Fixture fixture;
   fixture.addColumns(2);
@@ -346,6 +305,25 @@ UMBRIEL_TEST(twoHalfColumnsTileExactlyAcrossTheViewport) {
   const int b = fixture.layout.columnWidth(1, kViewport);
   // Sum of widths plus the single inter-column gap fills the viewport exactly.
   CHECK_EQ(a + b + fixture.config.totalGap, kViewport);
+}
+
+UMBRIEL_TEST(oddGapHalfColumnsTileExactlyWithoutFocusScroll) {
+  Fixture fixture;
+  fixture.config.gap = 5;
+  fixture.config.totalGap = 9;
+  fixture.config.edgePad = 7;
+  constexpr int viewport = 1280 - 2 * 7;
+  fixture.addColumns(2);
+
+  const int first = fixture.layout.columnWidth(0, viewport);
+  const int second = fixture.layout.columnWidth(1, viewport);
+  CHECK_EQ(first + fixture.config.totalGap + second, viewport);
+
+  fixture.layout.setScroll(0.0);
+  fixture.layout.ensureVisible(1, viewport);
+  CHECK_EQ(fixture.layout.scroll(), 0.0);
+  fixture.layout.ensureVisible(0, viewport);
+  CHECK_EQ(fixture.layout.scroll(), 0.0);
 }
 
 UMBRIEL_TEST(threeThirdColumnsTileExactlyAcrossTheViewport) {
@@ -415,6 +393,59 @@ UMBRIEL_TEST(horizontalResizeRecentersAnUnderfullStripImmediately) {
       )
       <= 1
   );
+}
+
+UMBRIEL_TEST(leftwardResizeGrowsCurrentColumnAfterPreviousHitsMinimumWidth) {
+  Fixture fixture;
+  fixture.addColumns(2);
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.minWidth = view == stub(0) ? 900 : 1};
+  });
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box currentBefore = fixture.layout.targetBox(stub(1));
+  const int currentRightBefore = currentBefore.x + currentBefore.width;
+  CHECK_EQ(previousBefore.width, 900);
+
+  auto resize = fixture.layout.beginResize(stub(1), WLR_EDGE_LEFT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(-100.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box currentAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(previousAfter.width, previousBefore.width);
+  CHECK(currentAfter.x < currentBefore.x);
+  CHECK_EQ(currentAfter.x + currentAfter.width, currentRightBefore);
+  CHECK(currentAfter.width > currentBefore.width);
+}
+
+UMBRIEL_TEST(centeredUnderfullLeftwardResizeKeepsCurrentRightEdgeFixed) {
+  Fixture fixture;
+  fixture.addColumns(2);
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.minWidth = view == stub(0) ? 189 : 1};
+  });
+  CHECK(fixture.layout.setWidthFraction(0, 0.15));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box currentBefore = fixture.layout.targetBox(stub(1));
+  const int currentRightBefore = currentBefore.x + currentBefore.width;
+  CHECK_EQ(previousBefore.width, 189);
+
+  auto resize = fixture.layout.beginResize(stub(1), WLR_EDGE_LEFT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(-80.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box currentAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(previousAfter.width, previousBefore.width);
+  CHECK_EQ(currentAfter.x + currentAfter.width, currentRightBefore);
+  CHECK_EQ(currentAfter.width, currentBefore.width + 80);
 }
 
 UMBRIEL_TEST(middleOfPartiallyOffscreenColumnGrabsNothing) {
@@ -585,6 +616,35 @@ UMBRIEL_TEST(maximizedToEdgesColumnFillsTheUsableAreaIgnoringFractions) {
   CHECK(!fixture.layout.isFullWidth(1));
 }
 
+// A column that fills the viewport is presented against the usable area rather than the strut-inset strip, so the
+// strip has to reserve the strut band the window bleeds into. Without that reservation the next column keeps its old
+// offset and the window paints over it.
+UMBRIEL_TEST(aFillingColumnReservesTheStrutBandItBleedsInto) {
+  Fixture fixture;
+  fixture.config.struts = {.left = 17, .right = 23};
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(1, 0.5));
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.maximizedToEdges = view == stub(0)};
+  });
+  const int filling = kViewport + 2 * fixture.config.edgePad;
+  CHECK_EQ(fixture.layout.columnWidth(0, kViewport), filling);
+  // Leading strut for the filling column, trailing strut before its neighbor.
+  CHECK_EQ(fixture.layout.columnX(0, kViewport), 17);
+  CHECK_EQ(fixture.layout.columnX(1, kViewport), 17 + filling + fixture.config.totalGap + 23);
+}
+
+UMBRIEL_TEST(aFillingColumnInAVerticalStripReservesTheTopAndBottomStruts) {
+  Fixture fixture(ScrollingDirection::Vertical);
+  fixture.config.struts = {.left = 17, .right = 23, .top = 31, .bottom = 41};
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(1, 0.5));
+  fixture.layout.setConstraints([](const View* view) { return LayoutConstraints{.fullscreen = view == stub(0)}; });
+  const int filling = kVerticalViewport + 2 * fixture.config.edgePad;
+  CHECK_EQ(fixture.layout.columnX(0, kVerticalViewport), 31);
+  CHECK_EQ(fixture.layout.columnX(1, kVerticalViewport), 31 + filling + fixture.config.totalGap + 41);
+}
+
 UMBRIEL_TEST(preservedFullWidthSurvivesEdgeMaximizeToggle) {
   Fixture fixture;
   fixture.addColumns(1);
@@ -713,6 +773,26 @@ UMBRIEL_TEST(theShiftIsTheColumnWidthPlusOneGap) {
   CHECK_EQ(fixture.layout.scrollShiftForColumnRemoval(0, kViewport), 636.0);
 }
 
+UMBRIEL_TEST(closingAnOffScreenFillingColumnCompensatesItsBleedToo) {
+  Fixture fixture;
+  fixture.config.struts = {.left = 17, .right = 23};
+  fixture.addColumns(3);
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.maximizedToEdges = view == stub(0)};
+  });
+  // 17 of leading strut, 1280 of column, 12 of gap and 23 of trailing strut: the whole span column 0 held.
+  const double span = 17 + (kViewport + 2 * fixture.config.edgePad) + fixture.config.totalGap + 23;
+  fixture.layout.setScroll(span);
+  const int before = screenX(fixture.layout, 1);
+
+  const double shift = fixture.layout.scrollShiftForColumnRemoval(0, kViewport);
+  CHECK_EQ(shift, span);
+  fixture.layout.removeView(stub(0));
+  fixture.layout.setScroll(fixture.layout.scroll() - shift);
+
+  CHECK_EQ(screenX(fixture.layout, 0), before);
+}
+
 UMBRIEL_TEST(aColumnAtTheViewportEdgeIsNotCompensated) {
   Fixture fixture;
   fixture.addColumns(3);
@@ -825,7 +905,7 @@ UMBRIEL_TEST(snapVisibleCentersFullWidthColumn) {
 UMBRIEL_TEST(centerFocusedCentersAnInteriorColumn) {
   Fixture fixture;
   fixture.addColumns(3);
-  fixture.config.scrolling.centerFocused = true;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::Always;
 
   fixture.layout.ensureVisible(1, kViewport);
 
@@ -839,7 +919,7 @@ UMBRIEL_TEST(centerFocusedCentersAnInteriorColumn) {
 UMBRIEL_TEST(centerFocusedAllowsEdgeColumnsToOverscroll) {
   Fixture fixture;
   fixture.addColumns(3);
-  fixture.config.scrolling.centerFocused = true;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::Always;
 
   fixture.layout.ensureVisible(0, kViewport);
   CHECK(fixture.layout.scroll() < 0.0);
@@ -851,15 +931,70 @@ UMBRIEL_TEST(centerFocusedAllowsEdgeColumnsToOverscroll) {
 UMBRIEL_TEST(disablingCenterFocusedReturnsTheFocusedColumnToTheScrollRange) {
   Fixture fixture;
   fixture.addColumns(3);
-  fixture.config.scrolling.centerFocused = true;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::Always;
   fixture.layout.reconcileFocusedColumn(2, kViewport);
   CHECK(fixture.layout.scroll() > static_cast<double>(fixture.layout.maxScroll(kViewport)));
 
-  fixture.config.scrolling.centerFocused = false;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::Never;
   fixture.layout.reconcileFocusedColumn(2, kViewport);
 
   CHECK_EQ(fixture.layout.scroll(), static_cast<double>(fixture.layout.maxScroll(kViewport)));
   CHECK(!fixture.layout.centeredRest());
+}
+
+UMBRIEL_TEST(onOverflowCentersWhenTheColumnPairExceedsTheViewport) {
+  Fixture fixture;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::OnOverflow;
+  fixture.addColumns(3);
+  // Two 700 wide columns plus the gap between them overrun the 1260 viewport.
+  for (int column = 0; column < 3; ++column) {
+    CHECK(fixture.layout.setWidthFromPixels(column, kViewport, 700));
+  }
+
+  // The first activation only records where focus came from.
+  fixture.layout.activateColumn(0, kViewport);
+  fixture.layout.activateColumn(1, kViewport);
+
+  const int centeredX = fixture.layout.columnX(1, kViewport)
+      + fixture.layout.columnWidth(1, kViewport) / 2
+      - static_cast<int>(std::lround(fixture.layout.scroll()));
+  CHECK_EQ(centeredX, kViewport / 2);
+  CHECK(fixture.layout.centeredRest());
+}
+
+UMBRIEL_TEST(onOverflowLeavesAFittingColumnPairAtTheEdge) {
+  Fixture fixture;
+  // Two 0.5-fraction columns and the gap between them fill the viewport exactly.
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::OnOverflow;
+  fixture.addColumns(3);
+
+  fixture.layout.activateColumn(0, kViewport);
+  fixture.layout.activateColumn(1, kViewport);
+
+  const int right = fixture.layout.columnX(1, kViewport) + fixture.layout.columnWidth(1, kViewport);
+  CHECK_EQ(fixture.layout.scroll(), static_cast<double>(right - kViewport));
+  CHECK(!fixture.layout.centeredRest());
+}
+
+// Focus moving left measures the pair by the neighbor on the right, whose width is the one that decides whether both
+// fit. Measuring the target twice instead would call this pair 1012 wide and leave it uncentered.
+UMBRIEL_TEST(onOverflowMeasuresTheRightHandColumnWhenFocusMovesLeft) {
+  Fixture fixture;
+  fixture.config.scrolling.centerFocused = CenterFocusedColumn::OnOverflow;
+  fixture.addColumns(3);
+  CHECK(fixture.layout.setWidthFromPixels(0, kViewport, 500));
+  CHECK(fixture.layout.setWidthFromPixels(1, kViewport, 500));
+  CHECK(fixture.layout.setWidthFromPixels(2, kViewport, 800));
+
+  // 500 + gap + 800 overruns the 1260 viewport, so stepping back onto column 1 centers it.
+  fixture.layout.activateColumn(2, kViewport);
+  fixture.layout.activateColumn(1, kViewport);
+
+  const int centeredX = fixture.layout.columnX(1, kViewport)
+      + fixture.layout.columnWidth(1, kViewport) / 2
+      - static_cast<int>(std::lround(fixture.layout.scroll()));
+  CHECK_EQ(centeredX, kViewport / 2);
+  CHECK(fixture.layout.centeredRest());
 }
 
 UMBRIEL_TEST(ensureVisibleIsANoOpForAnAlreadyVisibleColumn) {

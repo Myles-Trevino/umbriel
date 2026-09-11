@@ -4,8 +4,8 @@
 # positions when the output comes back before its exclusive-zone panel.
 set -euo pipefail
 
-readonly LAYER_CLIENT="${UMBRIEL_LAYER_CLIENT:-./build-debug/layer-client}"
-readonly WINDOW_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly LAYER_CLIENT="${UMBRIEL_LAYER_CLIENT:-./build-debug/tests/layer-client}"
+readonly WINDOW_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly LAYER_HEIGHT=96
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'

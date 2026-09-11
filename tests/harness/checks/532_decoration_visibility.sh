@@ -3,7 +3,7 @@
 # staying stable for clients that remain connected across a config reload.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
 readonly XDG_DECORATION=zxdg_decoration_manager_v1
 readonly KDE_DECORATION=org_kde_kwin_server_decoration_manager
 readonly BIND_LOG="$UMBRIEL_RUNTIME_DIR/decoration-bind-client.log"

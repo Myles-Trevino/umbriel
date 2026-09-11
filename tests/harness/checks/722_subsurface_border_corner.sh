@@ -3,7 +3,7 @@
 # paints a full-window blue subsurface so a protruding corner is directly visible.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/subsurface-client}"
+readonly CLIENT="${UMBRIEL_SUBSURFACE_CLIENT:-./build-debug/tests/subsurface-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/subsurface-border-client.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/subsurface-border.png"
 
@@ -12,13 +12,15 @@ cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation]
 duration_ms = 1
 
+[colors.border]
+focused = "#00FF00"
+unfocused = "#00FF00"
+outer = "#200000"
+
 [appearance]
 border_width = 1
 outer_border_width = 8
 corner_radius = 12
-border_focused = "#00FF00"
-border_unfocused = "#00FF00"
-outer_border_color = "#200000"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 

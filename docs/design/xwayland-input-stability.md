@@ -34,7 +34,7 @@ Defense:
 `pinnedRoot`, `pinnedShadowRoot`): each output owns four scene trees carrying
 a `wlr_scene_tree_set_clip` of that output's layout box, and every workspace
 tree, fullscreen tree, pinned view and close snapshot hangs under them.
-Umbriel's SceneFX fork folds an ancestor tree clip into the visibility walk
+`umbrielfx` folds an ancestor tree clip into the visibility walk
 (`_scene_nodes_in_box` accumulates the clip, `scene_node_update_iterator`
 intersects `node->visible` with it), so a node that reaches past its own
 output has no visible region there at all: no rendering, no damage, no
@@ -44,7 +44,7 @@ The drag tree is deliberately outside those roots, which is what lets a
 dragged window span both outputs.
 
 A rejected approach, for whoever considers it next: pinning scene nodes to a
-single output at the SceneFX level (filtering `active_outputs` in
+single output inside `umbrielfx` (filtering `active_outputs` in
 `update_node_update_outputs`) does suppress the enter/leave churn, but it
 divorces output membership from rendering. `wlr_scene_output_build_state`
 asserts on buffers rendered on an output they are not members of (SIGABRT
@@ -54,7 +54,7 @@ feedback) silently misbehaves. Membership must stay derived from real scene
 geometry, which is exactly why the clip changes that geometry instead of
 filtering its result.
 
-## X11 games never survive a windowed resize round trip
+## X11 games can retain stale input after a windowed resize round trip
 
 A fake-fullscreen game (borderless window at output size) that receives a
 compositor-imposed windowed size, then returns to fullscreen, keeps a stale
@@ -63,39 +63,30 @@ but hover and clicks die outside the transient size. This is upstream
 Wine/satellite behavior, reproduced outside Umbriel; the boundary of the dead
 zone always equals whatever transient size the compositor sent.
 
-Umbriel therefore guarantees that compositor-driven fullscreen round trips
-never emit a size change:
+Umbriel therefore avoids incidental windowed resize round trips while keeping
+deliberate fullscreen exits authoritative:
 
 1. **Float toggle** (`View::setFloating(true)`) keeps the current size when
-   floating a fullscreen window (no configure), and records
+   floating a fullscreen window (no transient resize), and records
    `m_refullscreenOnTile`.
 2. **Re-tile** (`View::setFloating(false)`) restores fullscreen before the
    layout attach when that flag is set, so arrange sizes the column to the
    full output the client already has. A client that chose windowed mode
    itself clears the flag (`setFullscreen(false)` from any other path) and
    re-tiles as a regular column.
-3. **Unfullscreen grace** (`m_pendingUnfullscreenSize`, xwayland views only):
-   a compositor-initiated unfullscreen goes out with size 0x0 (client picks
-   its size, per xdg-shell), the view keeps its fullscreen layout slot and
-   presentation (`View::layoutFullscreen`), and `Workspace::arrange`
-   withholds the column size for `kUnfullscreenGraceMsec`. Acks prove
-   nothing (satellite acks instantly), and the game observably reacts only
-   when an actual resize pokes it, so the outcomes are:
-   - the client re-requests fullscreen: the grace cancels in
-     `setFullscreen(true)`, zero resizes;
-   - the client commits a different geometry: it accepted windowed mode and
-     tiles immediately;
-   - the grace expires untouched: the client ignored the state change, and
-     fullscreen is re-asserted rather than forcing a resize that would kill
-     its input. Such games effectively cannot be unfullscreened.
-   Client-initiated unfullscreen requests skip the grace (the client wants
-   windowed mode), and Wayland-native views keep immediate column sizing:
-   they survive resizes, and many keep their size on 0x0, which would
-   otherwise bounce them back to fullscreen.
+3. **Fullscreen exit** (`View::setFullscreen(false)`): a tiled view clears
+   fullscreen and sets its restored column size in the same client configure.
+   This applies equally to native Wayland and xwayland-satellite
+   views. There is no timer and no size-0x0 probe, so an X11 client that keeps
+   its fullscreen-sized buffer cannot make the compositor undo the action.
+   Client requests that arrive later still use the normal fullscreen request
+   path.
 
 Real migrations (dropping a window on a differently scaled output) still
-resize by necessity and can still break fragile games; that is upstream
-behavior, not something the compositor can mask.
+resize by necessity and can still break fragile games. A deliberate
+fullscreen exit followed later by fullscreen entry also necessarily crosses
+a windowed size. Those are upstream constraints, not transitions the
+compositor can mask without ignoring the requested state.
 
 ## Verifying changes here
 
@@ -110,10 +101,11 @@ which declares `# harness: outputs=2` so the harness boots it a two-output
 instance, and compares real framebuffers while a strip overflows the shared
 edge. Run it as `just check 650`.
 
-The rest cannot be automated here. The headless harness cannot exercise
-satellite or multi-output X coordinate spaces, so changes to these paths need
-a running session with an X11 game (Steam plus any fake-fullscreen title
-reproduces within two toggles). The signature to watch for on the game's X
-window during any toggle is a ConfigureNotify pair through a non-fullscreen
-size; a passive `StructureNotifyMask` monitor on `DISPLAY=:0` shows it
-directly.
+The shared fullscreen-exit ordering is covered by `just check 153`: the first
+windowed configure must already contain the restored tile size. The headless
+harness cannot exercise satellite or multi-output X coordinate spaces, so the
+X11 path still needs a running session with Steam or another X11 game. A
+fullscreen exit must start the windowed resize immediately and remain windowed
+after the animation settles. For the protected float and re-tile round trip,
+the signature to reject is a ConfigureNotify pair through a non-fullscreen
+size; a passive `StructureNotifyMask` monitor on `DISPLAY=:0` shows it directly.

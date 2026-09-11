@@ -1,4 +1,0 @@
-[submodule "subprojects/scenefx"]
-	path = subprojects/scenefx
-	url = https://github.com/noctalia-dev/scenefx.git
-	branch = umbriel

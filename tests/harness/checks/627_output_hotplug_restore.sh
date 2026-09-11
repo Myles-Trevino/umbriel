@@ -4,8 +4,9 @@
 # the same names. Windows must find their way home across that too.
 set -euo pipefail
 
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
-readonly FOREIGN_TOPLEVEL="${UMBRIEL_FOREIGN_TOPLEVEL_CLIENT:-./build-debug/foreign-toplevel-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
+readonly FOREIGN_TOPLEVEL="${UMBRIEL_FOREIGN_TOPLEVEL_CLIENT:-./build-debug/tests/foreign-toplevel-client}"
+readonly BASELINE="$(< "$UMBRIEL_CONFIG")"
 
 spawn_client() {
   foot --title="$1" sh -c 'sleep 120' > /dev/null 2>&1 &
@@ -27,6 +28,12 @@ field_of() {
 }
 
 workspace_of() { field_of "$1" workspace; }
+
+workspace_named_for_window() {
+  local workspace
+  workspace=$(workspace_of "$1")
+  "$UMBRIEL" workspaces --json | jq -r --arg id "$workspace" '.[] | select(.id == $id) | .named'
+}
 
 home_of() {
   local workspace=
@@ -100,6 +107,14 @@ for window in hotplug-first hotplug-second hotplug-other; do
   wait_for_home "$window" ''
 done
 
+# Make the recreated first output start with a configured numeric name at the saved anonymous position. Restoration
+# must insert anonymous workspaces for the displaced homes instead of placing those windows on the configured name.
+{
+  printf '%s\n' "$BASELINE"
+  printf '\n[[workspace]]\nname = "1"\noutput = "HEADLESS-1"\n'
+} > "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+
 # Plug the monitors back in one at a time, under the names they had before.
 created=$("$UMBRIEL" output-create HEADLESS-2)
 if [[ $created != HEADLESS-2 ]]; then
@@ -115,9 +130,19 @@ wait_for_home hotplug-first HEADLESS-1/1
 wait_for_home hotplug-second HEADLESS-1/2
 wait_for_home hotplug-other HEADLESS-2/1
 wait_for_active_workspace HEADLESS-1 3
+if [[ $(workspace_named_for_window hotplug-first) != false \
+      || $(workspace_named_for_window hotplug-second) != false ]]; then
+  echo "anonymous hotplug homes were restored onto the configured numeric name: $("$UMBRIEL" workspaces --json)"
+  exit 1
+fi
+if [[ $("$UMBRIEL" workspaces --json | jq \
+      '[.[] | select(.output == "HEADLESS-1" and .name == "1" and .named)] | length') != 1 ]]; then
+  echo "recreated output lost its configured numeric name: $("$UMBRIEL" workspaces --json)"
+  exit 1
+fi
 # Workspace 2 was neither the recreated group's initial workspace nor its
 # restored active workspace. Taskbars must learn this membership
 # without making the user visit the restored workspace first.
 "$FOREIGN_TOPLEVEL" hotplug-second HEADLESS-1
 
-echo "windows came home across outputs being destroyed and recreated"
+echo "anonymous windows came home across output recreation without colliding with a configured numeric name"

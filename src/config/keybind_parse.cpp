@@ -47,25 +47,6 @@ namespace umbriel {
       return WheelDirection::None;
     }
 
-    uint32_t mouseButtonFromName(std::string_view lowered) {
-      if (lowered == "mouseleft") {
-        return BTN_LEFT;
-      }
-      if (lowered == "mouseright") {
-        return BTN_RIGHT;
-      }
-      if (lowered == "mousemiddle") {
-        return BTN_MIDDLE;
-      }
-      if (lowered == "mouseback") {
-        return BTN_SIDE;
-      }
-      if (lowered == "mouseforward") {
-        return BTN_EXTRA;
-      }
-      return 0;
-    }
-
     bool applyModifier(std::string_view token, Keybind& output) {
       const std::string modifier = toLower(token);
       if (modifier == "mod") {
@@ -147,6 +128,48 @@ namespace umbriel {
       return true;
     }
 
+    bool parseWorkspaceArg(std::string_view arg, WorkspaceArg& workspace) {
+      std::string_view selector = arg;
+      const size_t separator = selector.find('/');
+      if (separator != std::string_view::npos) {
+        if (separator == 0
+            || separator + 1 == selector.size()
+            || selector.find('/', separator + 1) != std::string_view::npos) {
+          return false;
+        }
+        workspace.output = selector.substr(separator + 1);
+        selector = selector.substr(0, separator);
+      }
+
+      const bool beginsQuoted = selector.starts_with('"');
+      const bool endsQuoted = selector.ends_with('"');
+      if (beginsQuoted || endsQuoted) {
+        if (!beginsQuoted || !endsQuoted || selector.size() <= 2) {
+          return false;
+        }
+        selector.remove_prefix(1);
+        selector.remove_suffix(1);
+        if (selector.contains('"')) {
+          return false;
+        }
+        workspace.reference = WorkspaceName{std::string(selector)};
+        return true;
+      }
+
+      if (std::ranges::all_of(selector, [](char value) { return value >= '0' && value <= '9'; })) {
+        size_t index = 0;
+        const auto [end, error] = std::from_chars(selector.data(), selector.data() + selector.size(), index);
+        if (error != std::errc{} || end != selector.data() + selector.size() || index < 1 || index > kMaxWorkspaces) {
+          return false;
+        }
+        workspace.reference = WorkspaceIndex{index};
+        return true;
+      }
+
+      workspace.reference = WorkspaceName{std::string(selector)};
+      return true;
+    }
+
     constexpr ActionSpec kActionSpecs[] = {
         {"cheatsheet-close", "", "Hide the keybind cheatsheet", KeybindAction::CheatsheetClose},
         {"cheatsheet-open", "", "Show the keybind cheatsheet", KeybindAction::CheatsheetOpen},
@@ -195,10 +218,10 @@ namespace umbriel {
         {"overview-close", "", "Close the workspace overview", KeybindAction::OverviewClose},
         {"overview-open", "", "Open the workspace overview", KeybindAction::OverviewOpen},
         {"overview-toggle", "", "Open or close the workspace overview", KeybindAction::OverviewToggle},
-        {"scratchpad-focus-next", "[<output>]", "Focus the next visible scratchpad window",
-         KeybindAction::ScratchpadFocusNext, ActionArgKind::OptionalOutput},
-        {"scratchpad-toggle", "[<output>]", "Show or hide the output's scratchpad windows",
-         KeybindAction::ScratchpadToggle, ActionArgKind::OptionalOutput},
+        {"scratchpad-focus-next", "[<scratchpad>]", "Focus the next visible scratchpad window",
+         KeybindAction::ScratchpadFocusNext, ActionArgKind::OptionalScratchpad},
+        {"scratchpad-toggle", "[<scratchpad>]", "Show or hide the selected scratchpad windows",
+         KeybindAction::ScratchpadToggle, ActionArgKind::OptionalScratchpad},
         {"session-quit", "[skip-confirmation]", "Quit the session, confirming first unless told to skip",
          KeybindAction::SessionQuit, ActionArgKind::SkipConfirmation},
         {"spawn", "<cmd>", "Run a command with a launch activation token", KeybindAction::Spawn,
@@ -271,8 +294,8 @@ namespace umbriel {
          KeybindAction::WindowMoveToOutputRight},
         {"window-move-to-output-up", "", "Move the focused window to the output above",
          KeybindAction::WindowMoveToOutputUp},
-        {"window-move-to-scratchpad", "[<output>]", "Move the focused window into the scratchpad",
-         KeybindAction::WindowMoveToScratchpad, ActionArgKind::OptionalOutput},
+        {"window-move-to-scratchpad", "[<scratchpad>]", "Move the focused window into a scratchpad",
+         KeybindAction::WindowMoveToScratchpad, ActionArgKind::OptionalScratchpad},
         {"window-move-to-workspace", "<workspace>[/<output>]", "Move the focused window to the selected workspace",
          KeybindAction::WindowMoveToWorkspace, ActionArgKind::Workspace},
         {"window-move-to-workspace-next", "", "Move the focused window to the next workspace",
@@ -280,8 +303,8 @@ namespace umbriel {
         {"window-move-to-workspace-previous", "", "Move the focused window to the previous workspace",
          KeybindAction::WindowMoveToWorkspacePrevious},
         {"window-move-up", "", "Move the focused window up in its column", KeybindAction::WindowMoveUp},
-        {"window-restore-from-scratchpad", "[<output>]", "Return the scratchpad window to its saved workspace",
-         KeybindAction::WindowRestoreFromScratchpad, ActionArgKind::OptionalOutput},
+        {"window-restore-from-scratchpad", "[<scratchpad>]", "Return a scratchpad window to its saved workspace",
+         KeybindAction::WindowRestoreFromScratchpad, ActionArgKind::OptionalScratchpad},
         {"window-set-height", "<fraction>", "Set the focused window's height fraction", KeybindAction::WindowSetHeight,
          ActionArgKind::WidthFraction},
         {"window-set-width", "<fraction>", "Set the focused column's width fraction", KeybindAction::WindowSetWidth,
@@ -290,13 +313,14 @@ namespace umbriel {
         {"window-swap-previous", "", "Swap with the previous window in layout order",
          KeybindAction::WindowSwapPrevious},
         {"window-toggle-floating", "", "Float or tile the focused window", KeybindAction::ToggleFloating},
-        {"window-toggle-fullscreen", "", "Toggle fullscreen for the focused window", KeybindAction::ToggleFullscreen},
+        {"window-toggle-fullscreen", "", "Toggle fullscreen or exit a window covering the focus",
+         KeybindAction::ToggleFullscreen},
         {"window-toggle-maximize", "", "Toggle full width for the focused column", KeybindAction::ToggleMaximize},
         {"window-toggle-maximize-to-edges", "", "Toggle maximize without gaps, struts, or borders",
          KeybindAction::ToggleMaximizeToEdges},
         {"window-toggle-pinned", "", "Pin the focused window above other windows", KeybindAction::TogglePinned},
-        {"window-toggle-scratchpad", "[<output>]", "Move the focused window to or from the scratchpad",
-         KeybindAction::WindowToggleScratchpad, ActionArgKind::OptionalOutput},
+        {"window-toggle-scratchpad", "[<scratchpad>]", "Move the focused window to or from a scratchpad",
+         KeybindAction::WindowToggleScratchpad, ActionArgKind::OptionalScratchpad},
         {"workspace-focus-last", "", "Focus the previously active workspace", KeybindAction::WorkspaceFocusLast},
         {"workspace-move-down", "", "Move the focused workspace down the list", KeybindAction::WorkspaceMoveDown},
         {"workspace-move-to-output-down", "", "Move every workspace window to the output below",
@@ -319,6 +343,43 @@ namespace umbriel {
   } // namespace
 
   std::span<const ActionSpec> actionSpecs() { return kActionSpecs; }
+
+  uint32_t mouseButtonFromName(std::string_view name) {
+    const std::string lowered = toLower(name);
+    if (lowered == "mouseleft") {
+      return BTN_LEFT;
+    }
+    if (lowered == "mouseright") {
+      return BTN_RIGHT;
+    }
+    if (lowered == "mousemiddle") {
+      return BTN_MIDDLE;
+    }
+    if (lowered == "mouseback") {
+      return BTN_SIDE;
+    }
+    if (lowered == "mouseforward") {
+      return BTN_EXTRA;
+    }
+    return 0;
+  }
+
+  const char* mouseButtonName(uint32_t button) {
+    switch (button) {
+    case BTN_LEFT:
+      return "MouseLeft";
+    case BTN_RIGHT:
+      return "MouseRight";
+    case BTN_MIDDLE:
+      return "MouseMiddle";
+    case BTN_SIDE:
+      return "MouseBack";
+    case BTN_EXTRA:
+      return "MouseForward";
+    default:
+      return nullptr;
+    }
+  }
 
   bool parseChord(std::string_view chord, Keybind& output) {
     output = Keybind{};
@@ -438,18 +499,9 @@ namespace umbriel {
           break;
         }
         WorkspaceArg workspace;
-        std::string_view selector = arg;
-        const size_t separator = selector.find('/');
-        if (separator != std::string_view::npos) {
-          if (separator == 0
-              || separator + 1 == selector.size()
-              || selector.find('/', separator + 1) != std::string_view::npos) {
-            break;
-          }
-          workspace.output = selector.substr(separator + 1);
-          selector = selector.substr(0, separator);
+        if (!parseWorkspaceArg(arg, workspace)) {
+          break;
         }
-        workspace.name = selector;
         output.action = spec.action;
         output.payload = std::move(workspace);
         return true;
@@ -463,6 +515,18 @@ namespace umbriel {
         if (takeActionArg(value, spec, arg)) {
           output.action = spec.action;
           output.payload = OutputArg{.output = std::string(arg)};
+          return true;
+        }
+        break;
+      case ActionArgKind::OptionalScratchpad:
+        if (value == spec.name) {
+          output.action = spec.action;
+          output.payload = ScratchpadArg{};
+          return true;
+        }
+        if (takeActionArg(value, spec, arg)) {
+          output.action = spec.action;
+          output.payload = ScratchpadArg{.name = std::string(arg)};
           return true;
         }
         break;
@@ -541,6 +605,7 @@ namespace umbriel {
     };
 
     add(KeybindAction::SessionQuit, XKB_KEY_Escape);
+    add(KeybindAction::WindowClose, XKB_KEY_q);
     add(KeybindAction::WindowFocusNext, XKB_KEY_F1);
 
     add(KeybindAction::WindowFocusLeft, XKB_KEY_Left);
@@ -590,7 +655,7 @@ namespace umbriel {
         bind.keysym = keysym;
         bind.action = action;
         WorkspaceArg workspace;
-        workspace.name = std::to_string(index + 1);
+        workspace.reference = WorkspaceIndex{static_cast<size_t>(index + 1)};
         bind.payload = std::move(workspace);
         keybinds.push_back(std::move(bind));
       };

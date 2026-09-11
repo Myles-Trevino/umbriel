@@ -1,10 +1,16 @@
 #include "layer/layer_surface.h"
 
+#include "scene/animation_shader.h"
+extern "C" {
+#include <umbrielfx/render/animation.h>
+}
+
 #include "config/resolve.h"
 #include "core/dirty.h"
 #include "core/log.h"
 #include "input/seat.h"
 #include "output/output.h"
+#include "overview/overview.h"
 #include "server/server.h"
 #include "view/popup.h"
 #include "wlr.h"
@@ -16,6 +22,22 @@ namespace umbriel {
   namespace {
     constexpr Logger kLog("layer");
   } // namespace
+
+  LayerSurface* LayerSurface::fromSurface(wlr_surface* surface) {
+    wlr_surface* walk = surface;
+    while (walk != nullptr) {
+      walk = wlr_surface_get_root_surface(walk);
+      if (wlr_layer_surface_v1* layer = wlr_layer_surface_v1_try_from_wlr_surface(walk)) {
+        return static_cast<LayerSurface*>(layer->data);
+      }
+      if (wlr_xdg_popup* popup = wlr_xdg_popup_try_from_wlr_surface(walk)) {
+        walk = popup->parent;
+        continue;
+      }
+      break;
+    }
+    return nullptr;
+  }
 
   LayerSurface::LayerSurface(Server& server, wlr_layer_surface_v1* layerSurface)
       : SceneNode(SceneNodeKind::LayerSurface), m_server(&server), m_layerSurface(layerSurface) {
@@ -51,14 +73,16 @@ namespace umbriel {
       m_layerSurface = nullptr;
       return;
     }
-    m_rule = resolveLayerRules(config(), m_layerSurface->namespace_);
+    m_rule = resolveLayerRules(config(), ruleText(m_layerSurface->namespace_));
     m_scene->tree->node.data = sceneNodeData(this);
     m_layerSurface->data = this;
 
     m_map.notify = onMap;
     wl_signal_add(&m_layerSurface->surface->events.map, &m_map);
     m_unmap.notify = onUnmap;
-    wl_signal_add(&m_layerSurface->surface->events.unmap, &m_unmap);
+    // Snapshot before the scene helper disables its subsurface tree. The normal
+    // buffer iterator intentionally skips disabled trees.
+    wl_list_insert(&m_layerSurface->surface->events.unmap.listener_list, &m_unmap.link);
     m_commit.notify = onCommit;
     wl_signal_add(&m_layerSurface->surface->events.commit, &m_commit);
     m_destroy.notify = onDestroy;
@@ -82,7 +106,11 @@ namespace umbriel {
   }
 
   bool LayerSurface::tickAnimations(uint64_t nowMsec) {
-    if (!m_fade.tick(nowMsec)) {
+    const bool ticked = m_fade.tick(nowMsec);
+    if (m_scene != nullptr) {
+      updateAnimationShader(&m_scene->tree->node, m_server->renderer(), AnimationEvent::Layers, m_fade);
+    }
+    if (!ticked) {
       return false;
     }
     applyFadeAlpha();
@@ -96,7 +124,9 @@ namespace umbriel {
       return;
     }
     // Overshooting curves can push this out of range; wlr_scene_buffer_set_opacity asserts opacity is in [0, 1].
-    float alpha = std::clamp(static_cast<float>(m_fade.current()), 0.0F, 1.0F);
+    float alpha = m_fade.animating() && animationShader(m_server->renderer(), AnimationEvent::Layers) != nullptr
+        ? 1.0F
+        : std::clamp(static_cast<float>(m_fade.current()), 0.0F, 1.0F);
     wlr_scene_node_for_each_buffer(
         &m_scene->tree->node,
         [](wlr_scene_buffer* buffer, int /*sx*/, int /*sy*/, void* data) {
@@ -147,6 +177,7 @@ namespace umbriel {
           }
           wlr_scene_buffer_set_transform(copy, src->transform);
           wlr_scene_buffer_set_corner_radii(copy, src->corners);
+          wlr_scene_buffer_set_corner_box(copy, &src->corner_box);
           wlr_scene_buffer_set_opacity(copy, src->opacity);
           wlr_scene_buffer_set_transfer_function(copy, src->transfer_function);
           wlr_scene_buffer_set_primaries(copy, src->primaries);
@@ -163,9 +194,12 @@ namespace umbriel {
       return;
     }
 
+    wlr_scene_node_copy_animations_for_snapshot(&snap->node, &m_scene->tree->node);
     m_server->animateCloseSnapshot(
         out, snap, {},
-        Server::CloseSnapshotOverrides{.durationMs = layers.durationMs, .curve = layers.curve, .style = "fade"}
+        Server::CloseSnapshotOverrides{
+            .durationMs = layers.durationMs, .curve = layers.curve, .style = "fade", .event = AnimationEvent::Layers
+        }
     );
     wlr_output_schedule_frame(out->wlr());
   }
@@ -202,10 +236,7 @@ namespace umbriel {
   }
 
   bool LayerSurface::hasKeyboardFocus() const {
-    if (m_layerSurface == nullptr) {
-      return false;
-    }
-    return m_server->seat()->wlr()->keyboard_state.focused_surface == m_layerSurface->surface;
+    return m_layerSurface != nullptr && fromSurface(m_server->seat()->wlr()->keyboard_state.focused_surface) == this;
   }
 
   void LayerSurface::reparentToLayer(uint32_t layer) {
@@ -281,7 +312,7 @@ namespace umbriel {
   }
 
   void LayerSurface::applyConfig() {
-    m_rule = resolveLayerRules(config(), m_layerSurface->namespace_);
+    m_rule = resolveLayerRules(config(), ruleText(m_layerSurface->namespace_));
     updateBlur();
   }
 
@@ -329,6 +360,7 @@ namespace umbriel {
       focus();
     }
     updateBlur();
+    notifyDesktopStack();
 
     const auto& animation = config().animation;
     const auto& layers = animation.layers;
@@ -348,6 +380,7 @@ namespace umbriel {
   void LayerSurface::handleUnmap() {
     // Snapshot before any other unmap bookkeeping runs: the live buffer is still valid here.
     beginCloseAnimation();
+    wlr_scene_node_clear_animations(&m_scene->tree->node);
     const bool hadFocus = hasKeyboardFocus();
     m_mapped = false;
     m_server->updateIdleInhibit();
@@ -362,8 +395,19 @@ namespace umbriel {
       }
     }
     m_arrangingOut = false;
+    notifyDesktopStack();
     if (hadFocus) {
       m_server->refocus();
+    }
+  }
+
+  void LayerSurface::notifyDesktopStack() {
+    const uint32_t layer = m_layerSurface->current.layer;
+    if (layer != ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND && layer != ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM) {
+      return;
+    }
+    if (Overview* overview = m_server->overview()) {
+      overview->onDesktopLayerChanged(output());
     }
   }
 
@@ -384,6 +428,7 @@ namespace umbriel {
 
     if ((m_layerSurface->current.committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) != 0) {
       reparentToLayer(m_layerSurface->current.layer);
+      notifyDesktopStack();
     }
 
     if ((m_layerSurface->current.committed & WLR_LAYER_SURFACE_V1_STATE_KEYBOARD_INTERACTIVITY) != 0) {

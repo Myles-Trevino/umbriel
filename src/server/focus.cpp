@@ -2,6 +2,7 @@
 
 #include "config/config.h"
 #include "core/log.h"
+#include "input/cursor.h"
 #include "input/seat.h"
 #include "layer/layer_surface.h"
 #include "output/output.h"
@@ -30,6 +31,8 @@ namespace umbriel {
         return "grab";
       case FocusReason::DragDrop:
         return "drag-drop";
+      case FocusReason::Gesture:
+        return "gesture";
       case FocusReason::Startup:
         return "startup";
       case FocusReason::XdgActivation:
@@ -105,6 +108,14 @@ namespace umbriel {
     if (overviewActive) {
       m_server.overview()->onFocusChanged();
     }
+    // Pointer presses and compositor grabs already align focus with their target. Keyboard and activation-driven focus
+    // can instead replace the scene beneath a stationary pointer, so let the next eligible hover refresh it once.
+    if (reason != FocusReason::PointerHover
+        && reason != FocusReason::PointerPress
+        && reason != FocusReason::Grab
+        && reason != FocusReason::DragDrop) {
+      m_server.cursor()->invalidateHoverFocus();
+    }
 
     // Derive reveal policy from the focus reason.
     if (workspace == nullptr || !view->tiled()) {
@@ -118,12 +129,16 @@ namespace umbriel {
     case FocusReason::Startup:
     case FocusReason::XdgActivation:
     case FocusReason::ForeignActivation:
-      workspace->ensureFocusedVisible();
+      workspace->activateFocusedColumn();
       workspace->markArrange(true);
       break;
     case FocusReason::Grab:
       // No reveal: the grab is about to move/detach the tile; revealing would
       // shift computed grab offsets and cause a visual jump.
+      break;
+    case FocusReason::Gesture:
+      // No reveal: the finger already chose where the strip rests, and a reveal
+      // would drag it somewhere else on release.
       break;
     }
   }
@@ -132,6 +147,9 @@ namespace umbriel {
     if (m_server.sessionLocked() || exclusiveKeyboardLayer() != nullptr) {
       return;
     }
+    // A pointer drag clears normal pointer focus even when keyboard focus returns to the same activated view. The
+    // synthetic motion after release must still get one chance to select the drop target under the cursor.
+    m_server.cursor()->invalidateHoverFocus();
     View* seatFocused = View::fromSurface(m_server.seat()->wlr()->keyboard_state.focused_surface);
     for (const auto& entry : m_server.registry().all()) {
       if (entry->mapped() && entry->activated() && (entry->onActiveWorkspace() || entry->pinned())) {
@@ -153,6 +171,82 @@ namespace umbriel {
     return nullptr;
   }
 
+  bool FocusManager::retainCurrentKeyboardFocus() {
+    if (m_server.overview() != nullptr && m_server.overview()->active()) {
+      return false;
+    }
+
+    wlr_surface* focusedSurface = m_server.seat()->wlr()->keyboard_state.focused_surface;
+    if (focusedSurface == nullptr || !focusedSurface->mapped) {
+      return false;
+    }
+
+    const auto outputIsUsable = [this](Output* output) {
+      return output != nullptr
+          && output->wlr()->enabled
+          && wlr_output_layout_get(m_server.outputLayout(), output->wlr()) != nullptr;
+    };
+
+    if (View* view = View::fromSurface(focusedSurface)) {
+      if (!view->mapped() || (!view->onActiveWorkspace() && !view->pinned())) {
+        return false;
+      }
+
+      Output* output = nullptr;
+      if (ScratchpadManager* scratchpad = m_server.scratchpadManager();
+          scratchpad != nullptr && scratchpad->contains(view)) {
+        output = scratchpad->outputFor(view);
+      } else if (Workspace* workspace = view->workspace(); workspace != nullptr && workspace->group() != nullptr) {
+        output = workspace->group()->output();
+      } else if (view->pinned()) {
+        output = view->currentOutput();
+      }
+      if (!outputIsUsable(output)) {
+        return false;
+      }
+
+      // The seat surface is already correct. Refresh only the owner's chrome
+      // and stacking so a popup or input grab keeps the exact focused surface.
+      view->applySeatFocus(false);
+      if (Workspace* workspace = view->workspace(); workspace != nullptr && (!view->pinned() || workspace->active())) {
+        workspace->setFocusedView(view);
+      }
+      m_server.refreshOutputPolicies();
+      return true;
+    }
+
+    if (LayerSurface* layer = LayerSurface::fromSurface(focusedSurface);
+        layer != nullptr && layer->acceptsKeyboard() && outputIsUsable(layer->output())) {
+      // Preserve an on-demand layer and any popup grab it currently owns.
+      m_server.deactivateViews(nullptr);
+      m_server.refreshOutputPolicies();
+      return true;
+    }
+    return false;
+  }
+
+  void FocusManager::refocus() {
+    if (m_server.sessionLocked()) {
+      return;
+    }
+    if (LayerSurface* layer = exclusiveKeyboardLayer()) {
+      wlr_surface* focusedSurface = m_server.seat()->wlr()->keyboard_state.focused_surface;
+      if (focusedSurface != nullptr && focusedSurface->mapped && LayerSurface::fromSurface(focusedSurface) == layer) {
+        // Infrastructure changes must not replace this layer's popup with its
+        // root surface. Explicit interactions still call focus() directly.
+        m_server.deactivateViews(nullptr);
+        m_server.refreshOutputPolicies();
+        return;
+      }
+      layer->focus();
+      return;
+    }
+    if (retainCurrentKeyboardFocus()) {
+      return;
+    }
+    refocusFallback(nullptr);
+  }
+
   void FocusManager::refocus(Output* preferred) {
     if (m_server.sessionLocked()) {
       return;
@@ -161,7 +255,10 @@ namespace umbriel {
       layer->focus();
       return;
     }
+    refocusFallback(preferred);
+  }
 
+  void FocusManager::refocusFallback(Output* preferred) {
     const auto focusMappedOn = [this](Output* output) -> bool {
       if (output == nullptr || output->workspaceGroup() == nullptr) {
         return false;
@@ -233,7 +330,7 @@ namespace umbriel {
   void FocusManager::clearNormalFocus() {
     // A lock takes the whole seat, so the pointer goes too. Everything else is
     // the same teardown as clearKeyboardFocus.
-    wlr_seat_pointer_clear_focus(m_server.seat()->wlr());
+    m_server.cursor()->clearPointerFocusOverridingGrab();
     clearKeyboardFocus();
   }
 

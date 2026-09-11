@@ -4,7 +4,7 @@
 # the other output must activate that view instead of mistaking its per-workspace focus for global keyboard focus.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly TARGET_LOG="$UMBRIEL_RUNTIME_DIR/spawn-output-target.log"
 readonly CONTROL_FIFO="$UMBRIEL_RUNTIME_DIR/spawn-output-control"
 readonly TOKEN_FILE="$UMBRIEL_RUNTIME_DIR/spawn-output-token"

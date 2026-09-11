@@ -3,7 +3,6 @@
 // clang-format off
 // See keybind_parse.cpp: <cmath> must precede the wayland chain.
 #include <cmath>
-#include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
 extern "C" {
 #include <wlr/types/wlr_keyboard.h>
@@ -31,23 +30,6 @@ namespace {
       return "WheelLeft";
     case umbriel::WheelDirection::Right:
       return "WheelRight";
-    default:
-      return nullptr;
-    }
-  }
-
-  const char* mouseButtonName(uint32_t button) {
-    switch (button) {
-    case BTN_LEFT:
-      return "MouseLeft";
-    case BTN_RIGHT:
-      return "MouseRight";
-    case BTN_MIDDLE:
-      return "MouseMiddle";
-    case BTN_SIDE:
-      return "MouseBack";
-    case BTN_EXTRA:
-      return "MouseForward";
     default:
       return nullptr;
     }
@@ -125,7 +107,7 @@ namespace {
       const char* name = wheelName(bind.wheel);
       result += name != nullptr ? name : "Wheel?";
     } else if (bind.mouseButton != 0) {
-      const char* name = mouseButtonName(bind.mouseButton);
+      const char* name = umbriel::mouseButtonName(bind.mouseButton);
       result += name != nullptr ? name : "Mouse?";
     } else {
       char buf[64];
@@ -162,11 +144,24 @@ namespace {
     return {std::move(base), std::string(rest)};
   }
 
+  std::string workspaceReferenceLabel(const umbriel::WorkspaceReference& reference) {
+    if (const auto* index = std::get_if<umbriel::WorkspaceIndex>(&reference)) {
+      return std::to_string(index->value);
+    }
+    const auto* name = std::get_if<umbriel::WorkspaceName>(&reference);
+    if (name == nullptr) {
+      return {};
+    }
+    const bool needsQuotes = !name->value.empty()
+        && std::ranges::all_of(name->value, [](char value) { return value >= '0' && value <= '9'; });
+    return needsQuotes ? "\"" + name->value + "\"" : name->value;
+  }
+
   // Empty unless the bind targets a workspace. Used to collapse the runs of
-  // per-digit workspace binds into a single row.
+  // per-digit positional workspace binds into a single row.
   std::string workspaceSelectorName(const umbriel::Keybind& bind) {
     const auto* workspace = umbriel::payloadIf<umbriel::WorkspaceArg>(bind);
-    return workspace != nullptr ? workspace->name : std::string{};
+    return workspace != nullptr ? workspaceReferenceLabel(workspace->reference) : std::string{};
   }
 
   // Driven by the spec's argument kind and the bind's payload variant, so the
@@ -219,7 +214,7 @@ namespace {
         return name;
       case umbriel::ActionArgKind::Workspace:
         if (const auto* workspace = umbriel::payloadIf<umbriel::WorkspaceArg>(bind)) {
-          std::string label = name + ": " + workspace->name;
+          std::string label = name + ": " + workspaceReferenceLabel(workspace->reference);
           if (!workspace->output.empty()) {
             label += "/" + workspace->output;
           }
@@ -230,6 +225,12 @@ namespace {
         if (const auto* output = umbriel::payloadIf<umbriel::OutputArg>(bind);
             output != nullptr && !output->output.empty()) {
           return name + ": " + output->output;
+        }
+        return name;
+      case umbriel::ActionArgKind::OptionalScratchpad:
+        if (const auto* scratchpad = umbriel::payloadIf<umbriel::ScratchpadArg>(bind);
+            scratchpad != nullptr && !scratchpad->name.empty()) {
+          return name + ": " + scratchpad->name;
         }
         return name;
       case umbriel::ActionArgKind::WindowId:

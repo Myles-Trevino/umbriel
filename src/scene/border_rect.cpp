@@ -1,7 +1,7 @@
 #include "scene/border_rect.h"
 
 extern "C" {
-#include <scenefx/types/fx/clipped_region.h>
+#include <umbrielfx/types/fx/clipped_region.h>
 }
 
 namespace umbriel {

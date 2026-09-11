@@ -1,1 +1,7 @@
+option(
+  'tests',
+  type: 'feature',
+  value: 'auto',
+  description: 'Build unit tests, harness clients, and umbrielfx checks (auto: on for unsanitized debug builds)',
+)
 option('jemalloc', type: 'feature', value: 'auto', description: 'Use jemalloc on glibc builds')

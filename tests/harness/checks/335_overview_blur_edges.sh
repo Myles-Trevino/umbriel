@@ -3,11 +3,15 @@
 # bottom of that reduced image must duplicate its edge texels rather than read the unused remainder of the texture.
 set -euo pipefail
 
-readonly LAYER="${UMBRIEL_LAYER_CLIENT:-./build-debug/layer-client}"
+readonly LAYER="${UMBRIEL_LAYER_CLIENT:-./build-debug/tests/layer-client}"
 readonly LAYER_LOG="$UMBRIEL_RUNTIME_DIR/blur-background.log"
 readonly SCREENSHOT="$UMBRIEL_RUNTIME_DIR/overview-blur-edges.png"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
+
+[colors.overview]
+background_tint = "#00000000"
+workspace_background = "#00000000"
 
 [appearance.blur]
 enabled = true
@@ -21,8 +25,8 @@ saturation = 1.0
 
 [overview]
 background_blur = true
-background_tint = "#00000000"
-workspace_background = "#00000000"
+# The centre sample is the blur reference, so the workspace preview must not mirror the wallpaper over it.
+workspace_wallpaper = false
 
 [animation.overview]
 enabled = false

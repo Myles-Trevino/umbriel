@@ -8,7 +8,7 @@ readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
 readonly DROP_X=630
 readonly DROP_Y=360
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 
 pointer() {
   "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"

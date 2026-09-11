@@ -1,45 +1,109 @@
 # Configuration
 
-Umbriel checks `$XDG_CONFIG_HOME/umbriel/config.toml` first, followed by each
-`$XDG_CONFIG_DIRS/umbriel/config.toml`, then the packaged
-`share/umbriel/config.toml`. Pass `umbriel -c <path>` to use a different file.
-The packaged file is [`examples/config.toml`](../../examples/config.toml) and
-can be copied into your user config directory as a starting point. Umbriel
-does not create or modify a user config automatically.
+Without `-c`, Umbriel checks `$XDG_CONFIG_HOME/umbriel/config.toml` first,
+followed by each `$XDG_CONFIG_DIRS/umbriel/config.toml`, then the packaged
+`share/umbriel/config.toml`. The candidate paths come from the startup
+environment and remain watched for the session. Creating a higher-priority
+file or removing the current file re-evaluates the lookup without a restart.
+Removal selects the next existing file, or built-in defaults when none remain.
+
+An invalid higher-priority file does not fall through to a lower-priority one.
+Umbriel keeps the last working configuration until the file is corrected or
+removed. Pass `umbriel -c <path>` to pin one exact path instead of using the
+lookup chain. A missing or invalid pinned path never falls back to an implicit
+candidate. Umbriel does not create or modify a user config automatically.
+
+At startup, a missing explicit `-c` path, syntax errors, unreadable files, and
+invalid include directives are fatal. Other invalid settings fall back to
+defaults unless `[drm]` is configured.
 
 ## Starting configuration
 
-Distribution packages normally install the starting configuration under
-`/usr/share/umbriel/config.toml`. Copy it before making local changes:
+The packaged starting configuration is
+[`examples/config.toml`](https://github.com/noctalia-dev/umbriel/blob/main/examples/config.toml).
+Distribution packages normally install it under `/usr/share/umbriel/config.toml`. Copy it before
+making local changes:
 
 ```sh
 mkdir -p ~/.config/umbriel
 cp /usr/share/umbriel/config.toml ~/.config/umbriel/config.toml
 ```
 
-For an installation using another prefix, replace `/usr/share` with that
-installation's data directory, commonly `/usr/local/share`. Nix users should
-prefer `programs.umbriel.settings` in Home Manager or hjem.
+With a manual installation using the `/usr/local` prefix, the default example
+configuration is available at `/usr/local/share/umbriel/config.toml`. Nix users
+should prefer `programs.umbriel.settings` in Home Manager or hjem.
 
-Changes normally apply as soon as you save. If a reload fails, Umbriel keeps
-your last working configuration and continues watching included files. Save a
-corrected file to try the reload again. Options that require a restart are
-marked in their reference tables.
+Creating the user file while Umbriel is running applies it automatically, as
+do later saves. No logout or restart is needed. If a reload fails, Umbriel
+keeps your last working configuration and continues watching the failed
+candidate and its included files. Save a corrected file to try the reload
+again. Options that require a restart are marked in their reference tables.
+
+A successful reload keeps the current keyboard focus when its window or
+keyboard-interactive layer remains mapped, visible, and on an enabled output.
+If that owner is no longer usable, Umbriel selects the active workspace on the
+pointer output instead.
+
+## Diagnostics
+
+Warnings and errors from a load or reload appear in a panel at the top of the
+primary output, bordered in `colors.warning` or `colors.error` for the highest
+severity present. Errors are listed first, since they are the ones that kept the
+configuration from applying. Each entry names its file, line, and column.
+
+A panel that reports only warnings hides itself after ten seconds; one that
+reports an error stays until the next successful reload. At most six entries are
+listed, and the footer counts the rest. `umbriel validate` prints the full list
+without a running compositor and exits nonzero when it reports a diagnostic.
 
 ## Include
 
 ```toml
 [include]
-files = ["appearance.toml", "keybinds.toml"]
+files = [
+    "appearance.toml",
+    "keybinds.toml",
+]
+
+[include.optional]
+files = [
+    "~/.config/umbriel/noctalia.toml",
+]
 ```
 
-Paths are resolved relative to the main config file. A leading `~` or `~/`
-expands to your home directory, and `$VAR` or `${VAR}` expands environment
-variables. Later files override earlier files, and values in the main file
-override every include.
+Paths are resolved relative to the file that declares them. `~` and `~/`
+expand to the user's home directory. `$VAR` and `${VAR}` expand environment
+variables.
 
-`files` is the only key `[include]` accepts. Anything else in the section is
-reported as an unknown key, in the main config and in included files alike.
+Missing files in `[include.optional]` are silently ignored and remain watched
+unless the main file declares `[drm]`. Creating a non-DRM optional file applies
+it without a restart. An optional file that exists must contain valid TOML.
+
+Files in `[include]` are applied in list order, followed by files in
+`[include.optional]`. Values in the including file override every include.
+
+A key that holds a table is merged key by key, so an include can set
+`colors.accent_primary` while your main config sets `colors.background`. A key
+that holds a list of rules (`[[window_rule]]`, `[[layer_rule]]`,
+`[[security_context_rule]]`, `[[workspace]]`, `[[input.device]]`) collects the
+entries from every file, in the order the files are applied. Every other value,
+including a plain array such as `general.autostart` or
+`output.<name>.position`, is replaced by the last file that sets it. Setting a
+rule list to `[]` replaces it too, which discards the entries earlier files
+contributed.
+
+Because rule lists are collected rather than replaced, a duplicate that is an
+error inside one file is still an error across files: two `[[input.device]]`
+entries with the same `name`, or two `[[workspace]]` entries selecting the same
+workspace, are reported and the config is rejected.
+
+`[include]` accepts `files` and the `optional` sub-table.
+`[include.optional]` accepts only `files`. Unknown keys and invalid types reject
+both main and included configurations.
+
+If an included file defines `[drm]`, add an empty `[drm]` table to the main
+file. Umbriel then rejects a missing required or optional include instead of
+applying an incomplete exclusion list.
 
 You can split your config into multiple files for clarity:
 
@@ -58,6 +122,11 @@ files = [
 ```
 
 ## General
+`general.xwayland = true` provides X11 application support through the
+`xwayland-satellite` executable. Install `xwayland-satellite` and make sure it
+is on `PATH` before starting Umbriel. If it is unavailable, X11 applications
+will not work and Umbriel shows a startup warning. Set `xwayland = false` when
+X11 support is not needed.
 
 ```toml
 [general]
@@ -73,21 +142,60 @@ honor_restored_maximize = false
 | ------------------------- | ------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autostart`               | string array | `[]`                    | Shell commands run once after startup. Never re-run on config reload.                                                                                                                                                                   |
 | `mod_key`                 | string       | Super (Alt when nested) | Modifier represented by `Mod` in keybinds. Accepts `Super`, `Alt`, `Ctrl`, or `Shift`; aliases `Logo`, `Win`, and `Control` are also accepted. Applies on reload.                                                                       |
-| `xwayland`                | bool         | `true`                  | Spawn `xwayland-satellite` for X11 app support. The binary must be installed. Changing this requires a restart.                                                                                                                         |
+| `xwayland`                | bool         | `true`                  | Spawn `xwayland-satellite` for X11 app support. The executable must be installed and on `PATH`; otherwise X11 applications will not work. Changing this requires a restart.                    |
 | `show_cheatsheet`         | bool         | `true`                  | Show the keybinds cheatsheet overlay on startup. If an included file is still missing, Umbriel waits for it to load before showing the overlay. Press any key or mouse button to dismiss, or toggle at runtime via `cheatsheet-toggle`. |
 | `focus_on_activate`       | bool         | `false`                 | Let unsolicited activation requests add focus and reveal their target. When false, a mapped target is only marked urgent, while an unmapped target still follows its normal `default_focused` map policy. Tokens issued by `spawn:` and client tokens validated from focused input represent user launch intent and may focus the target. Window rules override this per application. |
 | `honor_restored_maximize` | bool         | `false`                 | Honor maximized state requested by applications before their first buffer maps. The first visible configure then uses the final maximized layout target. A request sent after mapping is a normal runtime maximize request and can resize an already visible window. Later maximize requests are always honored. Applies to newly opened windows. |
+
+## DRM devices
+
+Use the optional `[drm]` section to keep GPUs unopened in a native session.
+Omit it to retain automatic GPU discovery. Changes require a restart.
+
+```toml
+[drm]
+ignored_pci_addresses = ["0000:01:00.0"]
+# Alternative using a stable DRM path:
+# ignored_devices = ["/dev/dri/by-path/pci-0000:01:00.0-card"]
+```
+
+| Key                     | Type         | Default | Description |
+| ----------------------- | ------------ | ------- | ----------- |
+| `ignored_devices`       | string array | `[]`    | Absolute DRM card or render-node paths that resolve at startup. Either node excludes the whole GPU. |
+| `ignored_pci_addresses` | string array | `[]`    | PCI addresses in `domain:bus:slot.function` form. Use this when the GPU may start bound to `vfio-pci`. |
+
+Prefer stable `/dev/dri/by-path` links over numbered `cardN` and `renderDN`
+paths. Each path resolves once at startup and pins that GPU for the session,
+even if the path disappears, changes target, or gets reused. Startup rejects
+unresolved paths with guidance to use `ignored_pci_addresses` instead.
+
+Umbriel does not bind or unbind PCI drivers. Configure libvirt with managed
+host devices, or use equivalent host tooling, for that lifecycle.
+
+### Limits
+
+- The section has no effect on nested Wayland, X11, or headless backends.
+- A native session fails to start if the build lacks the wlroots DRM backend or libudev.
+- Startup fails if no allowed GPU works. Losing the primary GPU ends the session.
+- Secondary GPUs must support the primary GPU's DMA-BUF format and modifiers.
+- `WLR_RENDERER_FORCE_SOFTWARE=1` is incompatible with exclusions.
+- Exclusions override `WLR_DRM_DEVICES` and `WLR_RENDER_DRM_DEVICE`.
+- With exclusions, `WLR_BACKENDS` supports only `drm` and optional `libinput`.
+
+See [DRM GPU exclusion](../design/drm-device-policy.md) for the backend and
+renderer design.
 
 ## Environment
 
 ```toml
 [environment]
-GTK_THEME = "Adwaita:dark"
-QT_QPA_PLATFORMTHEME = "qt5ct"
+ELECTRON_OZONE_PLATFORM_HINT = "auto"
+SDL_VIDEODRIVER = "wayland"
 ```
 
-Umbriel exports these variables to itself and commands it starts. In a native
-session, it also publishes them to the systemd user manager before
+Umbriel exports these variables to itself and commands it starts. They override
+values inherited from the login profile loaded by `start-umbriel`. In a native
+session, Umbriel also publishes them to the systemd user manager before
 `umbriel-session.target` starts. Systemd session services such as Noctalia
 inherit the same values, as do applications they launch. D-Bus receives the
 graphical connection variables but not arbitrary configured variables, because
@@ -117,6 +225,50 @@ lid_open = "notify-send 'The laptop lid is open!'"
 ```
 
 Defines commands that are executed when the laptop lid is closed or opened.
+
+## Scratchpads
+
+With no `[[scratchpad]]` entries, Umbriel provides one implicit scratchpad
+named `default`. Bare scratchpad actions select it:
+
+```toml
+[keybinds]
+"Mod+Shift+Space" = "window-move-to-scratchpad"
+"Mod+Space" = "scratchpad-toggle"
+```
+
+To use multiple scratchpads, define each name and include that name in every
+scratchpad action:
+
+```toml
+[[scratchpad]]
+name = "terminal"
+
+[[scratchpad]]
+name = "music"
+
+[keybinds]
+"Mod+Shift+Space" = "window-toggle-scratchpad:terminal"
+"Mod+Space" = "scratchpad-toggle:terminal"
+"Mod+Shift+M" = "window-toggle-scratchpad:music"
+"Mod+M" = "scratchpad-toggle:music"
+```
+
+Defining any named scratchpad removes the implicit `default` scratchpad, so
+bare scratchpad actions are invalid in named mode. Names must be nonempty and
+unique. The name `default` is reserved and cannot appear in a
+`[[scratchpad]]` entry.
+
+Scratchpads are global and roam between outputs. Each stored window keeps its
+own restore output and workspace. Removing a scratchpad definition during a
+config reload restores its windows to those saved destinations.
+
+An opening window rule can assign a matching window automatically. Use
+`default_scratchpad = "default"` in implicit mode or an exact configured name
+in named mode.
+
+See [Scratchpads](scratchpad.md) for action behavior, focus, dragging, and
+multi-output details.
 
 ## Idle inhibition
 

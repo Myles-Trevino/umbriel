@@ -5,6 +5,7 @@
 
 #include "layout/layout.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -14,6 +15,8 @@
 #include <vector>
 
 namespace umbriel {
+
+  inline constexpr size_t kMaxWorkspaces = 64;
 
   enum class WheelDirection {
     None,
@@ -154,14 +157,27 @@ namespace umbriel {
     double fraction = 0.0;
     bool operator==(const WidthArg&) const = default;
   };
+  struct WorkspaceIndex {
+    size_t value = 0;
+    bool operator==(const WorkspaceIndex&) const = default;
+  };
+  struct WorkspaceName {
+    std::string value;
+    bool operator==(const WorkspaceName&) const = default;
+  };
+  using WorkspaceReference = std::variant<WorkspaceIndex, WorkspaceName>;
   struct WorkspaceArg {
-    std::string name;
-    std::string output; // empty = resolve against the focused output
+    WorkspaceReference reference;
+    std::string output; // empty = positions use the cursor-preferred output, names resolve globally
     bool operator==(const WorkspaceArg&) const = default;
   };
   struct OutputArg {
     std::string output; // empty = the focused output
     bool operator==(const OutputArg&) const = default;
+  };
+  struct ScratchpadArg {
+    std::string name; // empty = the implicit default scratchpad
+    bool operator==(const ScratchpadArg&) const = default;
   };
   struct WindowIdArg {
     std::string id; // empty = the focused window
@@ -177,7 +193,8 @@ namespace umbriel {
   };
 
   using KeybindPayload = std::variant<
-      std::monostate, SpawnArg, SubmapArg, WidthArg, WorkspaceArg, OutputArg, WindowIdArg, LayoutModeArg, QuitArg>;
+      std::monostate, SpawnArg, SubmapArg, WidthArg, WorkspaceArg, OutputArg, ScratchpadArg, WindowIdArg, LayoutModeArg,
+      QuitArg>;
 
   struct Keybind {
     // What triggers the bind.
@@ -190,6 +207,7 @@ namespace umbriel {
     uint32_t mouseButton = 0; // evdev BTN_* code, 0 = not a mouse bind
     bool repeat = true;
     bool allowWhenLocked = false;
+    int cooldownMs = 0;
 
     // What it does.
     KeybindAction action = KeybindAction::None;
@@ -228,6 +246,7 @@ namespace umbriel {
     WidthFraction,
     Workspace,
     OptionalOutput,
+    OptionalScratchpad,
     WindowId,
     OptionalWindowId,
     WidthDelta,
@@ -245,13 +264,21 @@ namespace umbriel {
     ActionArgKind argKind = ActionArgKind::None;
   };
 
+  // Evdev BTN_* code for a canonical mouse button name such as "MouseBack", or 0 when the name is not one. Matching is
+  // case-insensitive.
+  [[nodiscard]] uint32_t mouseButtonFromName(std::string_view name);
+
+  // Canonical name for an evdev BTN_* code, or nullptr for a button Umbriel does not name.
+  [[nodiscard]] const char* mouseButtonName(uint32_t button);
+
   // Parse a chord such as "Mod+Shift+h", "Ctrl+Alt+Delete", "Mod+WheelUp", "Mod+MouseBack", or "submap[resize],Escape".
   // Only the trigger fields are written; the action is set separately by parseAction. Returns false and leaves `output`
   // default-constructed on any malformed input.
   bool parseChord(std::string_view chord, Keybind& output);
 
-  // Parse an action such as "window-close", "spawn:foot", "window-set-width:0.5", or "workspace-switch:2/DP-1", writing
-  // the action and its payload into `output` without touching the trigger fields.
+  // Parse an action such as "window-close", "spawn:foot", "window-set-width:0.5", or "workspace-switch:2/DP-1",
+  // writing the action and its payload into `output` without touching the trigger fields. Numeric workspace selectors
+  // are positions; surround a name with double quotes when the name itself contains only digits.
   bool parseAction(std::string_view value, Keybind& output);
 
   std::span<const ActionSpec> actionSpecs();

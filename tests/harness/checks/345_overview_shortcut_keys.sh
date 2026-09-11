@@ -6,8 +6,8 @@ set -euo pipefail
 readonly BTN_LEFT=272
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly FIRST_LOG="$UMBRIEL_RUNTIME_DIR/shortcut-first.log"
 readonly SECOND_LOG="$UMBRIEL_RUNTIME_DIR/shortcut-second.log"
 readonly THIRD_LOG="$UMBRIEL_RUNTIME_DIR/shortcut-third.log"

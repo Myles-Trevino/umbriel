@@ -3,9 +3,9 @@
 # compatibility global. Builds with wayland-protocols 1.49 expose version 3 to Wine clients for Windows BT.2100.
 set -euo pipefail
 
-readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/global-client}"
-readonly UNMAP_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
-readonly POINTER_CLIENT="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly GLOBAL_CLIENT="${UMBRIEL_GLOBAL_CLIENT:-./build-debug/tests/global-client}"
+readonly UNMAP_CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
+readonly POINTER_CLIENT="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 CLIENT_PID=
 
 if [[ ! -x $GLOBAL_CLIENT || ! -x $POINTER_CLIENT ]]; then

@@ -1,4 +1,16 @@
-<!-- If this PR is not ready for review yet, please mark it as Draft. -->
+<!-- A bot checks this description and converts the pull request back to a draft if
+     required structure is missing. It never closes the pull request.
+
+     Required: the Summary, Motivation, Type of Change, Testing, and Checklist
+     headings, and the Checklist wording below. Before marking a pull request ready for
+     review, select at least one change type and check every Checklist item.
+
+     Everything else may be deleted, including these guidance comments and any of the
+     Related Issue, Manual Coverage, Screenshots / Videos, and Additional Notes sections.
+     In Type of Change, keep only the lines that apply.
+
+     An explanation does not replace a required check. If a required statement is not
+     true yet, keep the pull request as Draft. -->
 
 ## Summary
 
@@ -46,10 +58,11 @@
 
 ## Checklist
 
+<!-- Before marking the pull request ready for review, check every item below. -->
+
 - [ ] This PR is ready for review, or it is marked as Draft.
 - [ ] This change fits `SCOPE.md`, or its scope was agreed in an issue or on Discord first.
 - [ ] I read and followed the relevant guidance in `CONTRIBUTING.md`.
-- [ ] I initialized and updated the SceneFX submodule where required.
 - [ ] I ran `just format`, or this PR has no C++ changes.
 - [ ] I ran the relevant build, test, lint, or verification commands, or explained why they were not run.
 - [ ] I functionally verified compositor behavior where automated checks are insufficient.

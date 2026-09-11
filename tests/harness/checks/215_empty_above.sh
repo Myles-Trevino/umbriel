@@ -3,7 +3,7 @@
 # preserve that inventory and renumber every surviving workspace.
 set -euo pipefail
 
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
 workspace_names() {
   "$WORKSPACE" --all | cut -f2 | sort -n | paste -sd ' ' -

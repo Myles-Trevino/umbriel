@@ -13,6 +13,9 @@ namespace umbriel {
     int maxWidth = 800; // logical pixels (text wrap limit)
     int padding = 14;   // logical pixels on all sides
     double scale = 1.0; // device-pixel scale (ceil of output scale)
+    // Logical pixels every wrapped continuation line is indented by, so a wrapped
+    // list entry stays under its own text instead of returning to the margin.
+    int hangingIndent = 0;
     // Background colour.
     double bgR = 0.0;
     double bgG = 0.0;

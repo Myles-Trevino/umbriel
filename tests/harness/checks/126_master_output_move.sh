@@ -3,7 +3,7 @@
 # Master output moves transfer the focused master or stack area as one column.
 set -euo pipefail
 
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
 accepts() {
   if ! out=$("$UMBRIEL" msg "$1" 2>&1); then

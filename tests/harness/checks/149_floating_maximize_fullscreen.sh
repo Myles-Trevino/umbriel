@@ -8,7 +8,7 @@
 # snapshot, so no custom mode here.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/fractional-client}"
+readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/float-maximize-fullscreen.log"
 
 # Animations off, as elsewhere: an animated move settles on the target pixel

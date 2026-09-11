@@ -4,9 +4,9 @@
 # and workspace once the monitors come back.
 set -euo pipefail
 
-readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/workspace-client}"
+readonly WORKSPACE="${UMBRIEL_WORKSPACE_CLIENT:-./build-debug/tests/workspace-client}"
 
-BASELINE="$(< "$UMBRIEL_CONFIG")"$'\n[appearance]\nanimation_ms = 1'
+BASELINE="$(< "$UMBRIEL_CONFIG")"$'\n[animation]\nduration_ms = 1'
 
 write_config() {
   {

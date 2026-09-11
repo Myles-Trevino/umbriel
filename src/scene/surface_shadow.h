@@ -1,10 +1,19 @@
 #pragma once
 
+#include <array>
+
 struct wlr_scene_shadow;
 struct wlr_scene_tree;
+struct wlr_scene_node;
 struct wlr_box;
 
 namespace umbriel {
+
+  struct ShadowSnapshot {
+    wlr_scene_tree* tree = nullptr;
+    wlr_scene_shadow* node = nullptr;
+    std::array<float, 4> color{};
+  };
 
   // Owns the desired-state logic for one SceneFX drop-shadow node. The node is a
   // child of the owner's scene tree and freed by scene-tree teardown (no destructor).
@@ -19,6 +28,8 @@ namespace umbriel {
     void reset();
     // Set an opacity multiplier applied to the shadow color (for fade animations).
     void setAlpha(float alpha);
+    void setAnimationSource(wlr_scene_node* source);
+    [[nodiscard]] ShadowSnapshot snapshot(wlr_scene_tree* parent, wlr_scene_node* source) const;
 
   private:
     wlr_scene_shadow* m_node = nullptr;

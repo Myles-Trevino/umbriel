@@ -1,6 +1,11 @@
 #include "scene/surface_shadow.h"
 
 #include "config/config.h"
+
+#include <algorithm>
+extern "C" {
+#include <umbrielfx/render/animation.h>
+}
 // clang-format off
 #include <cstring> // IWYU pragma: keep
 #include "wlr.h"
@@ -12,6 +17,7 @@ namespace umbriel {
       wlr_scene_tree* parent, int contentWidth, int contentHeight, int borderTotal, int cornerRadius
   ) {
     const auto& cfg = config().appearance.shadow;
+    const auto& shadow = config().colors.shadow;
     const int sigma = cfg.softness;
 
     // Decorated box origin (in parent coords): (-borderTotal, -borderTotal)
@@ -19,7 +25,7 @@ namespace umbriel {
     const int decWidth = contentWidth + 2 * borderTotal;
     const int decHeight = contentHeight + 2 * borderTotal;
 
-    const bool want = cfg.enabled && cfg.color[3] > 0.0F && contentWidth > 0 && contentHeight > 0;
+    const bool want = cfg.enabled && shadow[3] > 0.0F && contentWidth > 0 && contentHeight > 0;
     if (!want) {
       if (m_node != nullptr) {
         wlr_scene_node_set_enabled(&m_node->node, false);
@@ -29,7 +35,7 @@ namespace umbriel {
 
     // Lazy create: first time only.
     if (m_node == nullptr) {
-      const float initColor[4] = {cfg.color[0], cfg.color[1], cfg.color[2], cfg.color[3] * m_alpha};
+      const float initColor[4] = {shadow[0], shadow[1], shadow[2], shadow[3] * m_alpha};
       m_node = wlr_scene_shadow_create(parent, 0, 0, 0, static_cast<float>(sigma), initColor);
       if (m_node == nullptr) {
         return;
@@ -61,7 +67,7 @@ namespace umbriel {
     if (m_node->blur_sigma != static_cast<float>(sigma)) {
       wlr_scene_shadow_set_blur_sigma(m_node, static_cast<float>(sigma));
     }
-    const float color[4] = {cfg.color[0], cfg.color[1], cfg.color[2], cfg.color[3] * m_alpha};
+    const float color[4] = {shadow[0], shadow[1], shadow[2], shadow[3] * m_alpha};
     if (std::memcmp(m_node->color, color, sizeof(m_node->color)) != 0) {
       wlr_scene_shadow_set_color(m_node, color);
     }
@@ -84,11 +90,42 @@ namespace umbriel {
   void SurfaceShadow::setAlpha(float alpha) {
     m_alpha = alpha;
     if (m_node != nullptr) {
-      const auto& cfg = config().appearance.shadow;
-      const float color[4] = {cfg.color[0], cfg.color[1], cfg.color[2], cfg.color[3] * m_alpha};
+      const auto& shadow = config().colors.shadow;
+      const float color[4] = {shadow[0], shadow[1], shadow[2], shadow[3] * m_alpha};
       wlr_scene_shadow_set_color(m_node, color);
     }
   }
 
   void SurfaceShadow::reset() { m_node = nullptr; }
+
+  void SurfaceShadow::setAnimationSource(wlr_scene_node* source) {
+    if (m_node != nullptr) {
+      wlr_scene_shadow_set_animation_source(m_node, source, config().colors.shadow.data());
+    }
+  }
+
+  ShadowSnapshot SurfaceShadow::snapshot(wlr_scene_tree* parent, wlr_scene_node* source) const {
+    if (m_node == nullptr || !m_node->node.enabled) {
+      return {};
+    }
+    auto* tree = wlr_scene_tree_create(parent);
+    if (tree == nullptr) {
+      return {};
+    }
+    auto* node = wlr_scene_shadow_create(
+        tree, m_node->width, m_node->height, m_node->corner_radius, m_node->blur_sigma, m_node->color
+    );
+    if (node == nullptr) {
+      wlr_scene_node_destroy(&tree->node);
+      return {};
+    }
+    wlr_scene_node_set_position(&tree->node, source->x, source->y);
+    wlr_scene_node_lower_to_bottom(&tree->node);
+    wlr_scene_node_set_position(&node->node, m_node->node.x, m_node->node.y);
+    wlr_scene_shadow_set_clipped_region(node, m_node->clipped_region);
+    wlr_scene_shadow_set_animation_source(node, source, config().colors.shadow.data());
+    ShadowSnapshot result{.tree = tree, .node = node};
+    std::copy_n(m_node->color, 4, result.color.begin());
+    return result;
+  }
 } // namespace umbriel

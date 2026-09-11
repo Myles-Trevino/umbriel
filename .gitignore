@@ -2,9 +2,6 @@
 build*/
 cmake-build-*/
 
-# Meson subprojects (scenefx is a git submodule, not a wrap download)
-subprojects/*
-!subprojects/scenefx/
 compile_commands.json
 
 # Editor / IDE
@@ -27,3 +24,4 @@ result
 result-*
 /TODO.md
 /pr-*.md
+/.github/workflows/scripts/__pycache__

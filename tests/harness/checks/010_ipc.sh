@@ -4,6 +4,7 @@ set -euo pipefail
 
 spawn_client() {
   foot --title="ipc-client" sh -c 'sleep 120' > /dev/null 2>&1 &
+  CLIENT_PID=$!
 }
 
 wait_for_windows() {
@@ -119,6 +120,11 @@ if [[ $(jq -r '.[0].active' <<< "$windows") != $(jq -r '.[0].focused' <<< "$wind
   echo "active flag does not match the focused state of the only window: $windows"
   exit 1
 fi
+# The reported pid is the client's own process, not the compositor's or the CLI's.
+if [[ $(jq -r '.[0].pid' <<< "$windows") != "$CLIENT_PID" ]]; then
+  echo "expected pid $CLIENT_PID for the only window: $windows"
+  exit 1
+fi
 
 workspaces=$("$UMBRIEL" workspaces --json)
 if ! jq -e '
@@ -126,10 +132,12 @@ if ! jq -e '
   and all(.[];
     (has("id") and (.id | type == "string"))
     and (has("name") and (.name | type == "string"))
+    and (has("named") and (.named | type == "boolean"))
     and (has("index") and (.index | type == "number") and .index >= 1)
     and (has("output") and (.output | type == "string"))
     and (has("active") and (.active | type == "boolean"))
     and (has("focused") and (.focused | type == "boolean"))
+    and (has("occupied") and (.occupied | type == "boolean"))
     and (has("layout") and (.layout | type == "string"))
   )
   and ([.[] | select(.active)] | length == 1)
@@ -140,11 +148,17 @@ if ! jq -e '
   echo "workspaces --json has an unexpected initial shape: $workspaces"
   exit 1
 fi
+# One client is mapped, so the first workspace is occupied and the trailing
+# dynamic sentinel is not.
 if ! jq -e '
   .[0].index == 1
   and .[0].name == "1"
+  and .[0].named == false
   and .[0].output == "HEADLESS-1"
   and (.[0].id | test("^HEADLESS-1:[0-9]+$"))
+  and .[0].occupied == true
+  and ([.[] | select(.occupied)] | length == 1)
+  and ([.[] | select(.occupied | not)] | length >= 1)
 ' <<< "$workspaces" > /dev/null; then
   echo "first workspace has unexpected identity fields: $workspaces"
   exit 1
@@ -213,7 +227,7 @@ if line is None:
 initial = json.loads(line)
 if initial.get("event") != "workspaces" or not isinstance(initial.get("data"), list) or not initial["data"]:
     raise SystemExit(f"initial workspaces event has the wrong shape: {line!r}")
-for key in ("id", "name", "index", "output", "active", "focused", "layout"):
+for key in ("id", "name", "named", "index", "output", "active", "focused", "occupied", "layout"):
     if key not in initial["data"][0]:
         raise SystemExit(f"workspaces event entry lacks '{key}': {initial['data'][0]}")
 if focused_layout(initial) != "scrolling":
@@ -274,6 +288,35 @@ finally:
     stream.wait(timeout=5)
 action("workspace-set-layout:scrolling")
 
+# Submap subscribers receive the current context immediately, then each change
+# to the active value. A reset of a nested layer reveals its parent before the
+# default context returns as null.
+sub = connect()
+sub.sendall(b'{"cmd":"subscribe","events":["submap"]}\n')
+buf = b""
+
+
+def expect_submap(want, reason):
+    global buf
+    line, buf = read_one(sub, buf)
+    if line is None:
+        raise SystemExit(f"{reason} delivered no submap event")
+    event = json.loads(line)
+    if event.get("event") != "submap" or event.get("data") != want:
+        raise SystemExit(f"{reason} delivered the wrong submap event: {event!r}")
+
+
+expect_submap(None, "subscribing")
+action("submap:outer")
+expect_submap("outer", "entering the outer layer")
+action("submap:inner")
+expect_submap("inner", "entering the inner layer")
+action("submap:reset")
+expect_submap("outer", "resetting the inner layer")
+action("submap:reset")
+expect_submap(None, "resetting the outer layer")
+sub.close()
+
 # An unknown family is rejected by name, and the client exits instead of waiting on a stream that will never open.
 rejected = subprocess.run([umbriel, "subscribe", "definitely-not-an-event"], capture_output=True, text=True, timeout=5)
 if rejected.returncode == 0:
@@ -329,6 +372,45 @@ if ! jq -e 'type == "array"' <<< "$layers" > /dev/null; then
   exit 1
 fi
 
+# Output management is a Wayland-client query rather than IPC, but it follows
+# the same JSON flag convention as the inspection commands.
+outputs=$("$UMBRIEL" outputs --json)
+if ! jq -e '
+  type == "array" and length == 1
+  and all(.[];
+    (has("name") and (.name | type == "string"))
+    and (has("description") and (.description | type == "string"))
+    and (has("make") and (.make | type == "string"))
+    and (has("model") and (.model | type == "string"))
+    and (has("serial") and (.serial | type == "string"))
+    and (has("config_name") and (.config_name == null or (.config_name | type == "string")))
+    and (has("physical_size") and (.physical_size | type == "object")
+      and (.physical_size.width_mm | type == "number")
+      and (.physical_size.height_mm | type == "number"))
+    and (has("enabled") and (.enabled | type == "boolean"))
+    and (has("position") and (.position | type == "object")
+      and (.position.x | type == "number")
+      and (.position.y | type == "number"))
+    and (has("transform") and (.transform | type == "string"))
+    and (has("scale") and (.scale | type == "number"))
+    and (has("adaptive_sync") and (.adaptive_sync == null or (.adaptive_sync | type == "boolean")))
+    and (has("modes") and (.modes | type == "array")
+      and all(.modes[];
+        (.width | type == "number")
+        and (.height | type == "number")
+        and (.refresh_mhz | type == "number")
+        and (.preferred | type == "boolean")
+        and (.current | type == "boolean")))
+  )
+' <<< "$outputs" > /dev/null; then
+  echo "outputs --json has an unexpected shape: $outputs"
+  exit 1
+fi
+if [[ $("$UMBRIEL" outputs -j) != "$outputs" ]]; then
+  echo "outputs -j differs from outputs --json"
+  exit 1
+fi
+
 # The headless harness may have no physical keyboard, in which case the command
 # errors with "no keyboard". Exactly one of the two shapes must appear.
 if layouts=$("$UMBRIEL" keyboard-layouts --json 2>/dev/null); then
@@ -353,6 +435,82 @@ if "$UMBRIEL" msg definitely-not-an-action > /dev/null 2>&1; then
   echo "msg accepted an unknown action"
   exit 1
 fi
+
+# Occupancy transitions are pushed by the workspace's own view list. A static
+# inventory keeps dynamic reconciliation, which pushes events of its own for
+# every add, prune, and renumber, out of the observation.
+printf '\n[output.HEADLESS-1]\nworkspaces = 2\n' >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+python3 - "$UMBRIEL_SOCKET" "$UMBRIEL" <<'PY'
+import json
+import socket
+import subprocess
+import sys
+import time
+
+socket_path, umbriel = sys.argv[1:]
+
+
+def read_one(client, buf):
+    client.settimeout(5)
+    while b"\n" not in buf:
+        chunk = client.recv(4096)
+        if not chunk:
+            return None, buf
+        buf += chunk
+    line, buf = buf.split(b"\n", 1)
+    return line, buf
+
+
+def action(*args):
+    subprocess.run([umbriel, "msg", *args], check=True, capture_output=True, text=True, timeout=5)
+
+
+def occupancy(payload):
+    return {ws["index"]: ws["occupied"] for ws in payload["data"] if ws["output"] == "HEADLESS-1"}
+
+
+def await_occupancy(client, buf, want, reason):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            line, buf = read_one(client, buf)
+        except TimeoutError:
+            break
+        if line is None:
+            break
+        parsed = json.loads(line)
+        if parsed.get("event") == "workspaces" and occupancy(parsed) == want:
+            return buf
+    raise SystemExit(f"{reason} pushed no workspaces event reporting {want}")
+
+
+sub = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sub.connect(socket_path)
+sub.sendall(b'{"cmd":"subscribe","events":["workspaces"]}\n')
+buf = b""
+line, buf = read_one(sub, buf)
+if line is None:
+    raise SystemExit("subscribing to workspaces delivered no initial state")
+if occupancy(json.loads(line)) != {1: True, 2: False}:
+    raise SystemExit(f"static inventory does not report the mapped window's workspace as occupied: {line!r}")
+
+action("workspace-switch:2")
+client = subprocess.Popen(
+    ["foot", "--title=ipc-occupancy", "sh", "-c", "sleep 120"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+try:
+    buf = await_occupancy(sub, buf, {1: True, 2: True}, "mapping a window on the empty workspace")
+finally:
+    client.terminate()
+    client.wait(timeout=10)
+buf = await_occupancy(sub, buf, {1: True, 2: False}, "closing the workspace's only window")
+sub.close()
+action("workspace-switch:1")
+PY
+wait_for_windows 1
 
 python3 - "$UMBRIEL_SOCKET" "$UMBRIEL" <<'PY'
 import json

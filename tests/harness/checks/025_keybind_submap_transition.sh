@@ -3,7 +3,7 @@
 # runs first, and omitting the optional transition keeps the existing persistent-submap behavior.
 set -euo pipefail
 
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
 readonly KEY_S=31
 readonly KEY_1=2
 readonly KEY_2=3

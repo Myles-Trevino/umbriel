@@ -6,9 +6,9 @@ set -euo pipefail
 readonly OUTPUT_W=1280
 readonly OUTPUT_H=720
 readonly LEFT_BUTTON=272
-readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/pointer-client}"
-readonly DRAG_CLIENT="${UMBRIEL_DRAG_CLIENT:-./build-debug/drag-client}"
-readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/unmap-client}"
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+readonly DRAG_CLIENT="${UMBRIEL_DRAG_CLIENT:-./build-debug/tests/drag-client}"
+readonly CLIENT="${UMBRIEL_UNMAP_CLIENT:-./build-debug/tests/unmap-client}"
 readonly DRAG_LOG="$UMBRIEL_RUNTIME_DIR/data-drag.log"
 readonly POINTER_LOG="$UMBRIEL_RUNTIME_DIR/data-drag-pointer.log"
 readonly SOURCE_LOG="$UMBRIEL_RUNTIME_DIR/data-drag-source.log"

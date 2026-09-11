@@ -373,6 +373,37 @@ UMBRIEL_TEST(verticalMoveCrossesNestedBranches) {
   CHECK_EQ(fixture.layout.targetBox(stub(1)).y, upperRight.y);
 }
 
+UMBRIEL_TEST(focusPeersSpanTheCrossedSubtree) {
+  Fixture fixture;
+  for (int i = 0; i < 3; ++i) {
+    fixture.layout.insertView(stub(i), i);
+    fixture.layout.arrange(kUsable);
+  }
+
+  // stub(0) fills the left half; stub(1) and stub(2) split the right one.
+  const auto rightTarget = fixture.layout.focusHorizontalLeaf(stub(0), 1);
+  CHECK(rightTarget.has_value());
+  const std::vector<View*> peers = fixture.layout.focusPeers(stub(0), rightTarget.value_or(nullptr));
+  CHECK_EQ(peers.size(), size_t{2});
+  CHECK(std::ranges::find(peers, stub(1)) != peers.end());
+  CHECK(std::ranges::find(peers, stub(2)) != peers.end());
+  CHECK(std::ranges::find(peers, stub(0)) == peers.end());
+}
+
+UMBRIEL_TEST(focusPeersStayLocalWithinASplit) {
+  Fixture fixture;
+  for (int i = 0; i < 3; ++i) {
+    fixture.layout.insertView(stub(i), i);
+    fixture.layout.arrange(kUsable);
+  }
+
+  // Moving between the two right-hand siblings enters no wider group, and the
+  // single left leaf is a group of one: neither offers an alternative.
+  CHECK(fixture.layout.focusPeers(stub(1), stub(2)).size() < size_t{2});
+  CHECK(fixture.layout.focusPeers(stub(2), stub(0)).size() < size_t{2});
+  CHECK(fixture.layout.focusPeers(stub(0), nullptr).empty());
+}
+
 UMBRIEL_TEST(splitsFollowTheLongerEdgeOnAPortraitArea) {
   Fixture fixture;
   fixture.addLeaves(3);

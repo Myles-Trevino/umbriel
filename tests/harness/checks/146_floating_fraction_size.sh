@@ -6,7 +6,7 @@
 # client commit's usable-area snapshot, so no custom mode here.
 set -euo pipefail
 
-readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/fractional-client}"
+readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
 
