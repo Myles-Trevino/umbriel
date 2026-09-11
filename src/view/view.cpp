@@ -576,7 +576,7 @@ namespace umbriel {
     m_fadeAlpha = std::clamp(alpha, 0.0F, 1.0F);
     float effective = effectiveOpacity();
     wlr_scene_node_for_each_buffer(&m_sceneTree->node, setCompositorOpacity, &effective);
-    setBorderFocused(m_borderFocusedState);
+    m_decoration.setBorderRawColor(m_borderColorAnim.current(), effective);
     // The analytic fallback still follows the lifecycle fade. Shader-shaped
     // shadows get their opacity from captured pixels instead of this multiplier.
     const float shadowOpacity = m_customFade && m_fade.animating() ? effective * m_fadeAlpha : effective;
