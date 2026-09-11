@@ -62,6 +62,12 @@ namespace umbriel {
     void silentCancel();
     [[nodiscard]] bool beginScroll(Workspace* workspace, double scale, ScrollSource source);
     void updateScroll(double delta, uint32_t timeMsec);
+    // A held mouse button owns the scroll state until it is released, whether it pans the active workspace or an
+    // overview row. Touchpad gestures step aside for it.
+    [[nodiscard]] bool pointerScrollActive() const {
+      return m_state == State::Scroll
+          && (m_scrollSource == ScrollSource::Pointer || m_scrollSource == ScrollSource::OverviewPointer);
+    }
 
     Server* m_server = nullptr;
     State m_state = State::Idle;

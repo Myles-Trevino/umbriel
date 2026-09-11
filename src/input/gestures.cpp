@@ -241,15 +241,13 @@ namespace umbriel {
   }
 
   void Gestures::updatePointerScroll(double dx, double dy, uint32_t timeMsec) {
-    if (m_state == State::Scroll
-        && (m_scrollSource == ScrollSource::Pointer || m_scrollSource == ScrollSource::OverviewPointer)) {
+    if (pointerScrollActive()) {
       updateScroll(m_scrollVertical ? dy : dx, timeMsec);
     }
   }
 
   void Gestures::endPointerScroll(bool cancelled, uint32_t timeMsec) {
-    if (m_state == State::Scroll
-        && (m_scrollSource == ScrollSource::Pointer || m_scrollSource == ScrollSource::OverviewPointer)) {
+    if (pointerScrollActive()) {
       finishScroll(cancelled, timeMsec);
     }
   }
@@ -291,7 +289,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
     if (m_state != State::Idle) {
@@ -340,7 +338,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
 
@@ -495,7 +493,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
 
