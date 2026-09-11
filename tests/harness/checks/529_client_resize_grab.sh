@@ -72,12 +72,19 @@ wait_for_layout() {
 }
 
 "$OBSERVER" "$SOURCE" resize-on-press > "$SOURCE_LOG" 2>&1 &
+source_pid=$!
 await_windows 1
 "$OBSERVER" "$TARGET" > "$TARGET_LOG" 2>&1 &
+target_pid=$!
 await_windows 2
 
-read -r source_x source_y source_w source_h < <(window_box "$SOURCE")
-read -r target_x target_y target_w target_h < <(window_box "$TARGET")
+# Mapping is visible to IPC before the deferred layout places the new neighbor.
+for _ in $(seq 40); do
+  read -r source_x source_y source_w source_h < <(window_box "$SOURCE")
+  read -r target_x target_y target_w target_h < <(window_box "$TARGET")
+  (( target_x >= source_x + source_w )) && break
+  sleep 0.05
+done
 resize_start_x=$((source_x + source_w - 20))
 resize_y=$((source_y + source_h / 2))
 resize_end_x=$((resize_start_x + RESIZE_DX))
@@ -119,3 +126,49 @@ if ((target_presses != 1 || target_releases != 1)); then
 fi
 
 echo "client-requested tiled resize changed the layout and released input to its neighbor"
+
+# A client may acknowledge a configure without changing its buffer. Releasing a
+# resize must restore 1:1 sampling for it and its resized sibling without waiting
+# for another client commit.
+kill "$source_pid" "$target_pid"
+wait "$source_pid" "$target_pid" 2>/dev/null || true
+await_windows 0
+"$UMBRIEL" msg workspace-set-layout:dwindle > /dev/null
+readonly PATTERN="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
+HOLD_SIZE=1 "$PATTERN" "$SOURCE" 1200 700 > "$SOURCE_LOG" 2>&1 &
+await_windows 1
+HOLD_SIZE=1 "$PATTERN" "$TARGET" 1200 700 > "$TARGET_LOG" 2>&1 &
+await_windows 2
+sleep 0.2
+read -r source_x source_y source_w source_h < <(window_box "$SOURCE")
+read -r target_x target_y target_w target_h < <(window_box "$TARGET")
+resize_start_x=$((target_x - 30))
+resize_y=$((source_y + 200))
+readonly HELD="$UMBRIEL_RUNTIME_DIR/resize-held.png"
+readonly RELEASED="$UMBRIEL_RUNTIME_DIR/resize-released.png"
+
+impure_pixels() {
+  magick "$1" -alpha off -crop "120x1+$2+$resize_y" +repage -depth 8 txt:- |
+    tail -n +2 | grep -c -E -v '#(0000FF|00FF00) ' || true
+}
+
+"$POINTER" "$OUTPUT_W" "$OUTPUT_H" \
+  move "$resize_start_x" "$resize_y" mod logo press 273 \
+  move "$((resize_start_x - 160))" "$resize_y" pause 1500 \
+  release 273 mod none > "$POINTER_LOG" 2>&1 &
+pointer_pid=$!
+sleep 0.4
+grim -o HEADLESS-1 "$HELD"
+wait "$pointer_pid"
+sleep 0.1
+grim -o HEADLESS-1 "$RELEASED"
+read -r target_x target_y target_w target_h < <(window_box "$TARGET")
+for sample_x in "$((source_x + 40))" "$((target_x + 40))"; do
+  held_impure=$(impure_pixels "$HELD" "$sample_x")
+  released_impure=$(impure_pixels "$RELEASED" "$sample_x")
+  if (( held_impure == 0 || released_impure != 0 )); then
+    echo "resize sampling did not return to 1:1 at x=$sample_x: held=$held_impure released=$released_impure"
+    exit 1
+  fi
+done
+echo "resize release restored 1:1 sampling for both fixed-buffer tiles"

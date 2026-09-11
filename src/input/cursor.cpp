@@ -741,6 +741,9 @@ namespace umbriel {
       m_server->gestures()->endPointerScroll(true, 0);
     }
     const bool restoreDragPresentation = isDraggingView(view);
+    const auto* tiledResize = std::get_if<TiledResizeGrab>(&m_grab);
+    Workspace* resizedWorkspace = tiledResize != nullptr ? tiledResize->workspace : nullptr;
+    const bool restoreResizePresentation = std::holds_alternative<FloatingResizeGrab>(m_grab);
     if (std::holds_alternative<FloatingResizeGrab>(m_grab) && view != nullptr) {
       view->finishFloatingResize();
     }
@@ -748,6 +751,19 @@ namespace umbriel {
     m_grabButton = 0;
     if (restoreDragPresentation && view != nullptr) {
       view->restoreHomePresentation();
+    }
+    // Resize scaling belongs to the grab, including every sibling tile it resizes. Clear it before restoring clips:
+    // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
+    if (resizedWorkspace != nullptr) {
+      for (View* resized : resizedWorkspace->allViews()) {
+        if (resized->mapped() && resized->tiled()) {
+          resized->resetPresentedSurface();
+          resized->syncOwnedPresentation();
+        }
+      }
+    } else if (restoreResizePresentation && view != nullptr && view->mapped()) {
+      view->resetPresentedSurface();
+      view->syncOwnedPresentation();
     }
     refreshInteractiveCursor();
   }
