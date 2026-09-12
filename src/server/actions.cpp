@@ -1375,29 +1375,12 @@ namespace umbriel {
         targetCenteredRest = sc->centeredRest();
       }
 
-      struct ColumnSnapshot {
-        std::vector<View*> views;
-        double widthFrac = 0.5;
-        double savedWidthFrac = 0.0;
-        std::vector<double> heightWeights;
-        double topGapWeight = 1.0;
-        double bottomGapWeight = 1.0;
-      };
-
-      const auto snapshotColumns = [](Workspace* ws) {
-        std::vector<ColumnSnapshot> cols;
-        for (const Column& c : ws->layout().columns()) {
-          cols.push_back({
-              .views = c.views,
-              .widthFrac = c.widthFrac,
-              .savedWidthFrac = c.savedWidthFrac,
-              .heightWeights = c.heightWeights,
-              .topGapWeight = c.topGapWeight,
-              .bottomGapWeight = c.bottomGapWeight,
-          });
-        }
-        return cols;
-      };
+      // The layout snapshots itself, so a dwindle split tree and a master area ratio survive the transfer the same
+      // way scrolling's column widths do. restoreState refuses a snapshot from another mode, which is exactly the
+      // case where no structure can be replayed: those windows keep their order and the destination layout shapes
+      // them.
+      const LayoutCapture sourceTiles = sourceWs->layout().captureState();
+      const LayoutCapture targetTiles = targetWs->layout().captureState();
 
       const auto snapshotFloats = [](Workspace* ws) {
         std::vector<View*> floats;
@@ -1408,72 +1391,37 @@ namespace umbriel {
         }
         return floats;
       };
-
-      const std::vector<ColumnSnapshot> sourceCols = snapshotColumns(sourceWs);
       const std::vector<View*> sourceFloats = snapshotFloats(sourceWs);
-
-      const std::vector<ColumnSnapshot> targetCols = snapshotColumns(targetWs);
       const std::vector<View*> targetFloats = snapshotFloats(targetWs);
 
-      for (const ColumnSnapshot& col : sourceCols) {
-        for (View* v : col.views) {
-          v->moveToWorkspace(targetWs, /*attachToLayout=*/false);
+      const auto transfer = [](const LayoutCapture& tiles, const std::vector<View*>& floats, Workspace* dest) {
+        for (const LayoutMember& member : tiles.members) {
+          if (member.view != nullptr) {
+            member.view->moveToWorkspace(dest, /*attachToLayout=*/false);
+          }
         }
-      }
-      for (View* v : sourceFloats) {
-        v->rememberFloatingPosition();
-        v->moveToWorkspace(targetWs, /*attachToLayout=*/false);
-      }
-
-      for (const ColumnSnapshot& col : targetCols) {
-        for (View* v : col.views) {
-          v->moveToWorkspace(sourceWs, /*attachToLayout=*/false);
-        }
-      }
-      for (View* v : targetFloats) {
-        v->rememberFloatingPosition();
-        v->moveToWorkspace(sourceWs, /*attachToLayout=*/false);
-      }
-
-      // Row weights are rejected for rows that do not exist yet, so the whole column is assembled before its stored
-      // widths, weights and gaps are applied.
-      const auto buildColumns = [](Workspace* dest, const std::vector<ColumnSnapshot>& cols) {
-        for (const ColumnSnapshot& col : cols) {
-          if (col.views.empty()) {
-            continue;
-          }
-          View* first = col.views.front();
-          dest->layout().insertView(first, static_cast<int>(dest->layout().columns().size()));
-          const int column = dest->layout().columnOf(first);
-          for (size_t row = 1; row < col.views.size(); ++row) {
-            dest->layout().insertViewIntoColumn(col.views[row], column, static_cast<int>(row));
-          }
-          ScrollingLayout* scrolling = dest->scrollingLayout();
-          if (scrolling == nullptr) {
-            continue;
-          }
-          const double normalWidth = col.savedWidthFrac > 0.0 ? col.savedWidthFrac : col.widthFrac;
-          scrolling->setWidthFraction(column, normalWidth);
-          if (col.savedWidthFrac > 0.0) {
-            scrolling->toggleFullWidth(column);
-          }
-          for (size_t row = 0; row < col.heightWeights.size(); ++row) {
-            scrolling->setHeightWeight(column, static_cast<int>(row), col.heightWeights[row]);
-          }
-          scrolling->setTopGapWeight(column, col.topGapWeight);
-          scrolling->setBottomGapWeight(column, col.bottomGapWeight);
+        for (View* view : floats) {
+          view->rememberFloatingPosition();
+          view->moveToWorkspace(dest, /*attachToLayout=*/false);
         }
       };
+      transfer(sourceTiles, sourceFloats, targetWs);
+      transfer(targetTiles, targetFloats, sourceWs);
 
-      buildColumns(targetWs, sourceCols);
-      for (View* v : sourceFloats) {
-        v->restoreFloatingPosition();
-      }
-
-      buildColumns(sourceWs, targetCols);
-      for (View* v : targetFloats) {
-        v->restoreFloatingPosition();
-      }
+      const auto rebuild = [](Workspace* dest, const LayoutCapture& tiles, const std::vector<View*>& floats) {
+        if (tiles.snapshot == nullptr || !dest->layout().restoreState(*tiles.snapshot, tiles.members)) {
+          for (const LayoutMember& member : tiles.members) {
+            if (member.view != nullptr) {
+              dest->layout().insertView(member.view, static_cast<int>(dest->layout().columns().size()));
+            }
+          }
+        }
+        for (View* view : floats) {
+          view->restoreFloatingPosition();
+        }
+      };
+      rebuild(targetWs, sourceTiles, sourceFloats);
+      rebuild(sourceWs, targetTiles, targetFloats);
 
       if (ScrollingLayout* sc = targetWs->scrollingLayout()) {
         sc->setScroll(sourceScroll, sourceCenteredRest);

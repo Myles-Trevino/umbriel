@@ -146,4 +146,25 @@ assert_box stack-bottom "$left" 0 "$bottom_before"
 assert_box wide "$left" 0 "$wide_before"
 assert_box lone "$right" 0 "$lone_before"
 
-echo "active workspace swap exchanged both outputs' windows with their widths, row splits and scroll intact"
+# Dwindle keeps a split tree rather than columns, so its ratios only survive if
+# the transfer replays the layout's own state instead of rebuilding columns.
+accepts "workspace-set-layout:dwindle"
+accepts "workspace-switch:LEFT/HEADLESS-1"
+accepts "workspace-set-layout:dwindle"
+accepts "window-focus:$(field_of wide id)"
+accepts "window-modify-width:0.15"
+sleep 0.4
+top_dwindle=$(box_of stack-top)
+bottom_dwindle=$(box_of stack-bottom)
+wide_dwindle=$(box_of wide)
+lone_dwindle=$(box_of lone)
+
+accepts workspace-swap-active-outputs
+wait_for_workspace stack-top "$right"
+sleep 0.4
+assert_box stack-top "$right" "$OFFSET" "$top_dwindle"
+assert_box stack-bottom "$right" "$OFFSET" "$bottom_dwindle"
+assert_box wide "$right" "$OFFSET" "$wide_dwindle"
+assert_box lone "$left" "-$OFFSET" "$lone_dwindle"
+
+echo "active workspace swap exchanged both outputs' windows with their scrolling widths, row splits, scroll offset and dwindle split ratios intact"
