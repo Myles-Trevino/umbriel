@@ -1618,9 +1618,7 @@ namespace umbriel {
   void Overview::teardown() {
     cancelNavigation();
     clearMiddlePress();
-    if (m_dropHint != nullptr) {
-      m_dropHint->hideImmediate();
-    }
+    hideDropHint();
     for (const auto& state : m_outputs) {
       clearDesktop(*state);
       for (const auto& card : state->cards) {
