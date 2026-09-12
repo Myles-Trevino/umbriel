@@ -168,6 +168,8 @@ namespace umbriel {
 
     [[nodiscard]] const std::vector<View*>& allViews() const noexcept { return m_views; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
+    // Pull the scroll offset back into [0, maxScroll]. For removals and restored offsets only: a touchpad swipe
+    // overscrolls on purpose.
     void clampScrollToRange();
 
   private:

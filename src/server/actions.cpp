@@ -1435,6 +1435,8 @@ namespace umbriel {
         v->moveToWorkspace(sourceWs, /*attachToLayout=*/false);
       }
 
+      // Row weights are rejected for rows that do not exist yet, so the whole column is assembled before its stored
+      // widths, weights and gaps are applied.
       const auto buildColumns = [](Workspace* dest, const std::vector<ColumnSnapshot>& cols) {
         for (const ColumnSnapshot& col : cols) {
           if (col.views.empty()) {
@@ -1442,23 +1444,24 @@ namespace umbriel {
           }
           View* first = col.views.front();
           dest->layout().insertView(first, static_cast<int>(dest->layout().columns().size()));
-          if (ScrollingLayout* scrolling = dest->scrollingLayout()) {
-            const int targetCol = scrolling->columnOf(first);
-            const double normalWidth = col.savedWidthFrac > 0.0 ? col.savedWidthFrac : col.widthFrac;
-            scrolling->setWidthFraction(targetCol, normalWidth);
-            if (col.savedWidthFrac > 0.0) {
-              scrolling->toggleFullWidth(targetCol);
-            }
-            for (size_t row = 0; row < col.heightWeights.size(); ++row) {
-              scrolling->setHeightWeight(targetCol, static_cast<int>(row), col.heightWeights[row]);
-            }
-            scrolling->setTopGapWeight(targetCol, col.topGapWeight);
-            scrolling->setBottomGapWeight(targetCol, col.bottomGapWeight);
-          }
+          const int column = dest->layout().columnOf(first);
           for (size_t row = 1; row < col.views.size(); ++row) {
-            View* view = col.views[row];
-            dest->layout().insertViewIntoColumn(view, dest->layout().columnOf(first), static_cast<int>(row));
+            dest->layout().insertViewIntoColumn(col.views[row], column, static_cast<int>(row));
           }
+          ScrollingLayout* scrolling = dest->scrollingLayout();
+          if (scrolling == nullptr) {
+            continue;
+          }
+          const double normalWidth = col.savedWidthFrac > 0.0 ? col.savedWidthFrac : col.widthFrac;
+          scrolling->setWidthFraction(column, normalWidth);
+          if (col.savedWidthFrac > 0.0) {
+            scrolling->toggleFullWidth(column);
+          }
+          for (size_t row = 0; row < col.heightWeights.size(); ++row) {
+            scrolling->setHeightWeight(column, static_cast<int>(row), col.heightWeights[row]);
+          }
+          scrolling->setTopGapWeight(column, col.topGapWeight);
+          scrolling->setBottomGapWeight(column, col.bottomGapWeight);
         }
       };
 
@@ -1482,18 +1485,22 @@ namespace umbriel {
         sourceWs->clampScrollToRange();
       }
 
+      // Every transfer already handed each workspace a layout-aware replacement focus, so the remembered view is only
+      // reinstated where it actually landed, and the fallback covers a workspace left with no focus at all.
       if (sourceFocused != nullptr && sourceFocused->workspace() == targetWs) {
         targetWs->setFocusedView(sourceFocused);
-      } else if (targetWs->hasViews()) {
+      } else if (targetWs->focusedView() == nullptr && targetWs->hasViews()) {
         targetWs->setFocusedView(targetWs->allViews().front());
       }
 
       if (targetFocused != nullptr && targetFocused->workspace() == sourceWs) {
         sourceWs->setFocusedView(targetFocused);
-      } else if (sourceWs->hasViews()) {
+      } else if (sourceWs->focusedView() == nullptr && sourceWs->hasViews()) {
         sourceWs->setFocusedView(sourceWs->allViews().front());
       }
 
+      // Gesture keeps the seat focus where it is without revealing its column: the restored scroll offset above is
+      // what both strips must settle on.
       if (seatFocus != nullptr && seatFocus->mapped()) {
         server.focusView(seatFocus, FocusReason::Gesture);
         maybeWarpCursorToWindow(server, seatFocus);
@@ -1504,11 +1511,6 @@ namespace umbriel {
 
       sourceWs->markArrange(true);
       targetWs->markArrange(true);
-      sourceWs->flushArrange();
-      targetWs->flushArrange();
-
-      wlr_output_schedule_frame(sourceOutput->wlr());
-      wlr_output_schedule_frame(targetOutput->wlr());
 
       return true;
     }
