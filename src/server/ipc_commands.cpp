@@ -401,6 +401,7 @@ namespace umbriel {
             {"output", output->wlr()->name},
             {"active", workspace->active()},
             {"focused", output.get() == preferred && workspace->active()},
+            {"occupied", workspace->hasViews()},
             {"layout", layoutModeName(workspace->layoutMode())},
         });
       }

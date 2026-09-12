@@ -57,8 +57,8 @@ honor_restored_maximize = false                 # Honor restored maximized state
 # Documentation: https://docs.noctalia.dev/umbriel/configuration/#environment
 
 [environment]
-# GTK_THEME = "Adwaita:dark"
-# QT_QPA_PLATFORMTHEME = "qt5ct"
+# ELECTRON_OZONE_PLATFORM_HINT = "auto"
+# SDL_VIDEODRIVER = "wayland"
 
 # Hardware events
 # These commands run when a laptop lid opens or closes. Uncomment either hook
@@ -259,7 +259,7 @@ hide_when_typing = false                        # Keep visible while typing
 hide_timeout_ms = 0                             # Idle hide timeout, 0 disables; maximum is 3600000
 
 [input.focus]
-follows_mouse = false                           # Focus the pointer target after pointer motion
+follows_mouse = false                           # Focus on pointer motion and Dwindle/master tiles revealed on close
 # Refuse hover focus when revealing a window would scroll farther than this
 # many viewport widths. Omit the key for no limit.
 # follows_mouse_max_scroll = 0.5
@@ -390,6 +390,9 @@ follows_mouse = false                           # Focus the pointer target after
 # Resize, maximize, fullscreen, and close actions target a scratchpad that owns
 # keyboard focus. Layout-relative window actions leave the workspace behind it
 # unchanged.
+# `window-focus:<window-id>` and `window-focus-warp:<window-id>` also summon a
+# hidden scratchpad target to the output under the pointer. The `-warp` form
+# then moves the cursor to that target.
 # Documentation: https://docs.noctalia.dev/umbriel/scratchpads/
 "Mod+Shift+Space" = "window-move-to-scratchpad"
 "Mod+Space" = "scratchpad-toggle"
@@ -490,9 +493,10 @@ center_focused = "never"                        # never, always, or on_overflow
 # preserve_split = false                        # Keep every split direction fixed after creation
 
 [layout.master]
-position = "left"                               # left or right master area
+position = "left"                               # left, right, or center master area
 default_width_fraction = 0.55                   # Initial master area fraction, 0.1-0.9
 new_on_top = true                               # Put new windows at the top of the stack
+new_becomes_master = false                      # New windows take the master slot
 
 # ───────────────────────────── Window Rules ─────────────────────────────────
 # Match windows by application ID, title, XDG tag, content type, or focus state.
@@ -564,8 +568,10 @@ default_pinned = true
 # default_scratchpad = "terminal"
 # default_output = "DP-1"
 # default_workspace = 2
-
-# Open an application maximized while keeping its parented dialogs natural-sized.
+# default_floating = true
+# default_width = 0.6
+# default_height = 0.5
+# default_position = { x = 0, y = 8, anchor = "top" }
 
 # [[window_rule]]
 # match.app_id = "^example-app$"
@@ -674,6 +680,8 @@ blur_optimized = false
 # Every event accepts shader = "path/to/effect.glsl". Inline GLSL is not supported.
 # File paths are relative to this config, including configs loaded via include.
 # Bundled reveal.glsl and squash.glsl can be referenced by their installed absolute paths.
+# Shaders can use umbriel_sample_previous(uv) for target-local feedback.
+# umbriel_random_seed is a stable vec4 that changes for each transition.
 # Copy examples/shaders beside your config only if you want editable local versions.
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -713,11 +721,15 @@ enabled = true
 duration_ms = 250
 curve = "easeout"
 
-# Overview opening, closing, and row settling
+# Overview opening and closing
 [animation.overview]
 enabled = true
 duration_ms = 250
 curve = "easeout"
+# Filmstrip movement between workspace previews: wheel, keyboard, and touchpad
+# release alike. A spring curve settles from wherever the previews are and keeps
+# the speed a swipe let go with; any other curve runs over duration_ms instead.
+workspace_curve = "spring:1,1000"
 
 # Scratchpad show, hide, and backdrop
 [animation.scratchpad]
@@ -767,6 +779,8 @@ curve = "easeout"
 
 [overview]
 zoom = 0.5                                      # Workspace scale in overview, 0.1-0.75
+scroll_factor_horizontal = 1.0                  # Overview gesture travel, left and right, 0.1-10.0
+scroll_factor_vertical = 1.0                    # Overview gesture travel, up and down, 0.1-10.0
 # Pinned windows stay hidden until overview closes; visible scratchpads are dismissed.
 # background_blur = true                        # Blur the wallpaper behind overview rows
 # workspace_wallpaper = true                    # Mirror wallpapers inside workspace previews

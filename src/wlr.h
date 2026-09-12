@@ -1,8 +1,7 @@
 #pragma once
+#include "wlr_color.h"
 
 extern "C" {
-// wlroots / SceneFX headers use C99 `float color[static N]`.
-#define static
 #include <umbrielfx/render/fx_renderer/fx_renderer.h>
 #include <umbrielfx/types/wlr_scene.h>
 #include <wlr/backend.h>
@@ -71,6 +70,8 @@ extern "C" {
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_toplevel_tag_v1.h>
@@ -87,5 +88,4 @@ extern "C" {
 #define namespace namespace_
 #include <wlr/types/wlr_layer_shell_v1.h>
 #undef namespace
-#undef static
 }

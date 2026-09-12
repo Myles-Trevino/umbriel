@@ -14,6 +14,7 @@
 // <n>/120" for every presentation, so the last line is the layout's size rather than the size the client picked to
 // answer an unsized initial configure. Then it keeps the connection alive until the harness kills it.
 // Usage: fractional-client [title [default_width default_height [margin]]].
+// HOLD_SIZE keeps the default dimensions while acknowledging configures, exposing compositor-only resize scaling.
 
 #include "fractional-scale-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
@@ -178,8 +179,9 @@ namespace {
   // with the size its layout assigns.
   void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
     auto& state = *static_cast<State*>(data);
-    state.logicalWidth = width > 0 ? width : state.defaultWidth;
-    state.logicalHeight = height > 0 ? height : state.defaultHeight;
+    const bool holdSize = std::getenv("HOLD_SIZE") != nullptr;
+    state.logicalWidth = !holdSize && width > 0 ? width : state.defaultWidth;
+    state.logicalHeight = !holdSize && height > 0 ? height : state.defaultHeight;
   }
 
   void toplevelClose(void*, xdg_toplevel*) {}

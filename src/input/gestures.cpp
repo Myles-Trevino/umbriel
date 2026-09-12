@@ -19,19 +19,12 @@ namespace umbriel {
   namespace {
     // Tuning constants: file-local, no config keys.
     constexpr double kAxisLockPx = 16.0;
-    constexpr double kSwitchDistancePx = 300.0;
     constexpr double kCommitProgress = 0.35;
     constexpr double kCommitVelocityPxMs = 0.9;
     constexpr double kOverscrollCompress = 0.15;
     constexpr double kOverscrollMaxWs = 0.08;
     // Finger travel for a full overview open or close.
     constexpr double kOverviewDistancePx = 300.0;
-    // Finger travel per workspace step while the overview is up. Outside it, a switch commits once the swipe passes
-    // kCommitProgress of a full slide, so that same travel is what the hand already reads as "one workspace"; there is
-    // no slide to be a fraction of in here, so it becomes the step itself.
-    constexpr double kOverviewStepPx = kSwitchDistancePx * kCommitProgress;
-    // Finger travel that scrolls the strip by one viewport width.
-    constexpr double kViewGestureMovementPx = 1200.0;
 
     int touchpadGestureDirection(wlr_pointer* pointer) {
       if (pointer == nullptr || !wlr_input_device_is_libinput(&pointer->base)) {
@@ -165,6 +158,11 @@ namespace umbriel {
       m_state = State::Idle;
       break;
     case State::OverviewSelect:
+      if (Overview* overview = m_server->overview()) {
+        overview->endNavigation(true, 0, NavigationSource::Swipe);
+      }
+      m_state = State::Idle;
+      break;
     case State::Pending:
     case State::Idle:
       m_state = State::Idle;
@@ -195,7 +193,8 @@ namespace umbriel {
       return;
     }
     WorkspaceGroup* group = m_output != nullptr ? m_output->workspaceGroup() : nullptr;
-    if (group == nullptr || group->active() != m_scrollWorkspace) {
+    const bool overviewPointer = m_scrollSource == ScrollSource::OverviewPointer;
+    if (group == nullptr || (!overviewPointer && group->active() != m_scrollWorkspace)) {
       finishScroll(true, timeMsec);
       return;
     }
@@ -209,7 +208,7 @@ namespace umbriel {
     m_scrollWorkspace->markArrange(false);
   }
 
-  bool Gestures::beginPointerScroll() {
+  bool Gestures::beginPointerScroll(double lx, double ly) {
     if (m_server->sessionLocked()) {
       return false;
     }
@@ -217,7 +216,18 @@ namespace umbriel {
       cancelActive();
     }
     if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
-      return false;
+      // The row under the pointer, not the active one: the overview pans whichever row the drag started over, and the
+      // strip it scrolls always runs across the workspace axis.
+      Workspace* workspace = overview->pointerScrollWorkspace(lx, ly);
+      WorkspaceGroup* group = workspace != nullptr ? workspace->group() : nullptr;
+      m_output = group != nullptr ? group->output() : nullptr;
+      // Previews are drawn at the settled zoom, so travel over one covers that much more of the content below it.
+      if (m_output == nullptr
+          || !beginScroll(workspace, 1.0 / Overview::settledZoom(), ScrollSource::OverviewPointer)) {
+        m_output = nullptr;
+        return false;
+      }
+      return true;
     }
     Output* output = m_server->outputFromWlr(m_server->preferredOutput());
     Workspace* workspace =
@@ -231,13 +241,13 @@ namespace umbriel {
   }
 
   void Gestures::updatePointerScroll(double dx, double dy, uint32_t timeMsec) {
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       updateScroll(m_scrollVertical ? dy : dx, timeMsec);
     }
   }
 
   void Gestures::endPointerScroll(bool cancelled, uint32_t timeMsec) {
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       finishScroll(cancelled, timeMsec);
     }
   }
@@ -255,8 +265,13 @@ namespace umbriel {
     case State::Overview:
       finishOverview(true);
       break;
-    case State::Forward:
     case State::OverviewSelect:
+      if (Overview* overview = m_server->overview()) {
+        overview->endNavigation(true, 0, NavigationSource::Swipe);
+      }
+      m_state = State::Idle;
+      break;
+    case State::Forward:
     case State::Pending:
     case State::Idle:
       m_state = State::Idle;
@@ -274,7 +289,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
     if (m_state != State::Idle) {
@@ -282,6 +297,7 @@ namespace umbriel {
     }
     Overview* overview = m_server->overview();
     if (event->fingers == 4 && overview != nullptr) {
+      overview->cancelNavigation();
       m_state = State::Overview;
       m_accumX = 0;
       m_accumY = 0;
@@ -293,8 +309,16 @@ namespace umbriel {
     }
     if (event->fingers == 3) {
       m_naturalScrollDirection = touchpadGestureDirection(event->pointer);
-      // Which of the three-finger gestures this is (scroll, switch, or an
-      // overview row step) is decided once the axis locks, not here.
+      if (overview != nullptr && overview->active()) {
+        const wlr_cursor* cursor = m_server->cursor()->wlr();
+        overview->beginNavigation(event->pointer, NavigationSource::Swipe, cursor->x, cursor->y);
+        m_state = State::OverviewSelect;
+        m_accumX = 0;
+        m_accumY = 0;
+        m_output = nullptr;
+        return;
+      }
+      // Outside overview, axis lock chooses strip scrolling or workspace switching.
       m_state = State::Pending;
       m_accumX = 0;
       m_accumY = 0;
@@ -314,7 +338,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
 
@@ -345,17 +369,10 @@ namespace umbriel {
       const bool horizontalTravel = std::abs(m_accumX) > std::abs(m_accumY);
       const bool alongWorkspaceAxis = horizontalTravel == (m_workspaceAxis == WorkspaceAxis::Horizontal);
 
-      if (Overview* overview = m_server->overview(); overview != nullptr && overview->interactive()) {
-        // Perpendicular travel has no meaning over the filmstrip, and letting it
-        // through would step workspaces on any swipe that drifted off true.
-        if (!alongWorkspaceAxis) {
-          m_state = State::Idle;
-          return;
-        }
-        // Start measuring workspace travel from the lock point, not the touch down.
-        m_accumX = 0;
-        m_accumY = 0;
-        m_state = State::OverviewSelect;
+      if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
+        // Overview opened after this swipe began. Do not start a desktop slide
+        // behind it; the next gesture will take ownership of its navigation.
+        m_state = State::Idle;
         return;
       }
 
@@ -368,7 +385,7 @@ namespace umbriel {
           return;
         }
         const double scale =
-            static_cast<double>(ws->scrollViewportExtent()) / kViewGestureMovementPx * m_naturalScrollDirection;
+            static_cast<double>(ws->scrollViewportExtent()) / kSwipeViewportPx * m_naturalScrollDirection;
         if (!beginScroll(ws, scale, ScrollSource::Swipe)) {
           m_state = State::Idle;
         }
@@ -412,7 +429,7 @@ namespace umbriel {
       m_accumX += event->dx;
       m_accumY += event->dy;
       // Natural: swiping toward the negative axis direction moves to the next workspace.
-      double p = -(horizontal ? m_accumX : m_accumY) / kSwitchDistancePx * m_naturalScrollDirection;
+      double p = -(horizontal ? m_accumX : m_accumY) / kSwipeWorkspacePx * m_naturalScrollDirection;
       const double lo = m_hasPrev ? -1.0 : 0.0;
       const double hi = m_hasNext ? 1.0 : 0.0;
       if (p < lo) {
@@ -432,23 +449,16 @@ namespace umbriel {
     case State::OverviewSelect: {
       Overview* overview = m_server->overview();
       if (overview == nullptr || !overview->interactive()) {
+        // The overview started closing under the fingers; the rest of this swipe belongs to nothing.
+        if (overview != nullptr) {
+          overview->cancelNavigation();
+        }
         m_state = State::Idle;
         return;
       }
-      const bool horizontal = m_workspaceAxis == WorkspaceAxis::Horizontal;
-      double& accum = horizontal ? m_accumX : m_accumY;
-      accum += horizontal ? event->dx : event->dy;
-      // Natural, and the same sense as the switch outside the overview: swiping toward the negative
-      // axis direction moves to the next workspace. The leftover travel stays in the accumulator so
-      // one long swipe crosses several workspaces.
-      while (accum <= -kOverviewStepPx) {
-        accum += kOverviewStepPx;
-        overview->selectRelativeWorkspace(m_naturalScrollDirection, m_output);
-      }
-      while (accum >= kOverviewStepPx) {
-        accum -= kOverviewStepPx;
-        overview->selectRelativeWorkspace(-m_naturalScrollDirection, m_output);
-      }
+      overview->updateNavigation(
+          -event->dx * m_naturalScrollDirection, -event->dy * m_naturalScrollDirection, event->time_msec
+      );
       return;
     }
 
@@ -483,7 +493,7 @@ namespace umbriel {
       silentCancel();
       return;
     }
-    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+    if (pointerScrollActive()) {
       return;
     }
 
@@ -496,8 +506,12 @@ namespace umbriel {
       return;
 
     case State::Pending:
-    // Each row step was committed as it happened; there is nothing to settle.
+      m_state = State::Idle;
+      return;
     case State::OverviewSelect:
+      if (Overview* overview = m_server->overview()) {
+        overview->endNavigation(event->cancelled, event->time_msec, NavigationSource::Swipe);
+      }
       m_state = State::Idle;
       return;
 

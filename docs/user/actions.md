@@ -42,7 +42,7 @@ are required, `[bracket]` forms are optional.
 | `output-focus-left` | Focus the output to the left |
 | `output-focus-right` | Focus the output to the right |
 | `output-focus-up` | Focus the output above |
-| `window-focus:<window-id>` | Focus the given window |
+| `window-focus:<window-id>` | Focus the given window, summoning it if hidden in a scratchpad |
 | `window-focus-down` | Focus the next window down in the column |
 | `window-focus-last` | Focus the previously focused window |
 | `window-focus-left` | Focus the window to the left |
@@ -57,7 +57,7 @@ are required, `[bracket]` forms are optional.
 | `window-focus-right` | Focus the window to the right |
 | `window-focus-switch-floating` | Focus the last window of the opposite floating state |
 | `window-focus-up` | Focus the next window up in the column |
-| `window-focus-warp:<window-id>` | Focus the given window and warp the cursor to it |
+| `window-focus-warp:<window-id>` | Focus the given window, summon it if hidden in a scratchpad, and warp the cursor to it |
 | `workspace-focus-last` | Focus the previously active workspace |
 
 ## Move & size
@@ -119,7 +119,7 @@ Sizing rules per layout live in [Sizing behavior](layout.md#sizing-behavior).
 | `window-toggle-fullscreen` | Toggle fullscreen or exit a window covering the focus |
 | `window-toggle-maximize` | Toggle full width for the focused column |
 | `window-toggle-maximize-to-edges` | Toggle maximize without gaps, struts, or borders |
-| `window-toggle-pinned` | Pin the focused window above other windows |
+| `window-toggle-pinned` | Pin the focused window above other windows, or restore its pre-pin tiled or floating state |
 
 ## Scratchpad
 
@@ -224,6 +224,8 @@ their visual directions; see [Vertical strips](layout.md#vertical-strips).
   toplevel activation requests from docks and taskbars. Pointer-driven and
   automatic focus changes never move the cursor. `window-focus:<window-id>`
   stays focus-only, while `window-focus-warp:<window-id>` always moves it.
+- **Hidden scratchpads.** Either ID-targeted focus action summons a matching
+  hidden scratchpad window to the output under the pointer before focusing it.
 - **Across outputs.** Directions never wrap: with no monitor in that direction
   the action fails with an IPC error naming it ("no output to the left" and
   friends). Otherwise the cursor warps to the center of the target monitor so
@@ -237,6 +239,10 @@ their visual directions; see [Vertical strips](layout.md#vertical-strips).
   `window-swap-next` and `window-swap-previous` exchange the focused tiled
   window with its layout-order neighbor, wrap at both ends, and keep focus on
   the moved window.
+- **Focus memory.** Directional focus that leaves the current group lands on
+  the window that was focused there most recently: the target column in
+  scrolling and master, the split it enters in dwindle. When nothing in that
+  group has been focused yet, it lands on the geometric neighbor.
 - **Workspace order.** `workspace-next`, `workspace-previous`, `workspace-move-
   up`, and `workspace-move-down` never wrap: on the first workspace, the
   previous forms are silent no-ops. On a dynamic output, `workspace-next`
@@ -252,8 +258,12 @@ their visual directions; see [Vertical strips](layout.md#vertical-strips).
   slightly below and to the right of its tiled position while keeping it on-
   screen. `window-toggle-pinned` floats the window and keeps it above fullscreen
   windows on its output, visible across workspace switches and hidden for as
-  long as the overview is open. A fullscreen window cannot be pinned, and making
-  a pinned window fullscreen drops the pin.
+  long as the overview is open. Unpinning restores the state from before it was
+  pinned: a tiled window returns to its layout, while a floating window remains
+  floating with its saved geometry. Use `window-toggle-floating` to unpin and
+  place a pinned window in the layout regardless of its pre-pin state. A
+  fullscreen window cannot be pinned, and making a pinned window fullscreen
+  drops the pin.
 - **Unavailable actions.** When an action has no meaning in the active layout,
   its keybind does nothing and `umbriel msg` returns an error naming the
   requirement.

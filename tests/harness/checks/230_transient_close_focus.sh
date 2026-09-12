@@ -98,12 +98,10 @@ if grep -q '^configured-maximized$' "$CLIENT_LOG"; then
   exit 1
 fi
 
-child_x=$(jq -r --arg id "$child_id" '.[] | select(.id == $id) | .x' <<< "$windows")
-child_y=$(jq -r --arg id "$child_id" '.[] | select(.id == $id) | .y' <<< "$windows")
 child_w=$(jq -r --arg id "$child_id" '.[] | select(.id == $id) | .w' <<< "$windows")
 child_h=$(jq -r --arg id "$child_id" '.[] | select(.id == $id) | .h' <<< "$windows")
-if ((child_x != 340 || child_y != 110 || child_w != 600 || child_h != 500)); then
-  echo "transient is ${child_w}x${child_h} at ${child_x},${child_y}, expected 600x500 centered at 340,110: $windows"
+if ((child_w != 600 || child_h != 500)); then
+  echo "transient is ${child_w}x${child_h}, expected its natural 600x500: $windows"
   exit 1
 fi
 

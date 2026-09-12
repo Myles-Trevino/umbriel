@@ -16,6 +16,7 @@ The C++ scene adapter caches one program per event, exact source, and renderer.
 Startup and animation config reload prepare programs before rendering. Failures
 are cached too, avoiding per-frame compiler retries. UmbrielFX supplies a GLSL
 ES 1.00 wrapper around `vec4 animation(vec2 uv)`, normalized target sampling,
+target-local previous-result sampling, a stable four-channel random seed,
 logical target size, eased and linear progress, and transition direction.
 Compiler diagnostics retain source line numbers and the file/event label.
 
@@ -73,6 +74,23 @@ Logical target bounds are converted to output pixels only at rasterization.
 Sampling transforms account for output rotation and fractional scale, with
 transparent samples outside target/output bounds. Drawing honors ancestor clips.
 
+Shaders that call `umbriel_sample_previous` receive the prior successfully
+submitted post-shader result for the same node, slot, output, and renderer. The
+first render uses the current input. History uses normalized target coordinates,
+so it follows movement and is resampled across target-size changes. A transition
+ID distinguishes retargets from spring progress moving backward. Snapshot
+creation preserves that ID and seed and transfers feedback history before the
+source target is retired.
+
+Previous-result feedback lazily allocates two target-sized buffers per active
+node, slot, and output. The pair costs 8 bytes per pixel in SDR and 16 bytes per
+pixel with an FP16 color-management target, before allocator overhead. History
+is reset for a new transition, program, output transform, working format, or
+renderer. Allocation or import failure disables feedback for that transition
+and keeps direct shader rendering available. Front-buffer promotion is deferred
+until render-pass submission succeeds. Shadow silhouette captures may read the
+same prior result but never advance it.
+
 Intermediate buffers are pooled per output and nesting depth, allocated on
 demand and dropped after effects end. Composition preserves the working format,
 including FP16 when color management uses a linear intermediate. Blur within
@@ -103,6 +121,9 @@ Scene destruction releases addon references. Renderer destruction invalidates
 remaining programs without accessing a dead context; renderer replacement
 prepares new configured programs. Timeline owners clear finished effects and
 continue to own cancellation, unmap, and teardown. No shader extends a timeline.
+Each owner creates a process-unique nonzero transition ID and four pseudorandom
+seed channels when it retargets. The ID and seed remain stable through ticks,
+coordinate translation, spring reversals, and snapshots.
 
 Custom GLSL is trusted local GPU code. Source-size and resource bounds do not
 sandbox shader execution or prevent an expensive shader from stalling a driver.
@@ -131,6 +152,16 @@ border effects, retained closing borders, and smooth blur gradients. Negative co
 temporarily bypass shader rendering and configuration assignment to ensure
 the checks fail for the behavior they cover. Shadow negative controls bypass
 silhouette rendering in a separate temporary build, never in the working source.
+
+`189_animation_shader_feedback` verifies first-frame initialization, recurrence,
+target isolation, and feedback transfer into a closing snapshot.
+`190_animation_shader_seed` verifies all four channels, stability within a
+transition and its closing snapshot, and renewal when the same client maps
+again. Unit coverage verifies global transition identities and preservation
+while underdamped spring progress reverses. Negative controls replace feedback
+with current-target sampling, force a reused seed, suppress transition renewal,
+and refresh spring identity on every tick. Each check fails on its intended
+behavior.
 
 Headless checks do not establish physical HDR output correctness or hardware
 GPU-reset recovery. Those require suitable hardware and a running-session check.

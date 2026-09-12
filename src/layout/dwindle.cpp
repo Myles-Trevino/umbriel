@@ -568,6 +568,47 @@ namespace umbriel {
     return umbriel::directionalNeighbor(m_targets, view, false, direction);
   }
 
+  std::vector<View*> DwindleLayout::focusPeers(const View* from, const View* target) const {
+    const Node* source = findNode(from);
+    const Node* destination = findNode(target);
+    if (source == nullptr || destination == nullptr || source == destination) {
+      return {};
+    }
+
+    // Ancestors of the source leaf, root included.
+    std::vector<const Node*> sourceChain;
+    for (const Node* node = source; node != nullptr; node = node->parent) {
+      sourceChain.push_back(node);
+    }
+
+    // Climb from the destination until its parent is the split the move
+    // crossed; that subtree is the group the move entered.
+    const Node* crossed = destination;
+    while (crossed->parent != nullptr && std::ranges::find(sourceChain, crossed->parent) == sourceChain.end()) {
+      crossed = crossed->parent;
+    }
+
+    std::vector<View*> peers;
+    std::vector<const Node*> stack{crossed};
+    while (!stack.empty()) {
+      const Node* node = stack.back();
+      stack.pop_back();
+      if (node->type == Node::Leaf) {
+        if (node->view != nullptr) {
+          peers.push_back(node->view);
+        }
+        continue;
+      }
+      if (node->right != nullptr) {
+        stack.push_back(node->right.get());
+      }
+      if (node->left != nullptr) {
+        stack.push_back(node->left.get());
+      }
+    }
+    return peers;
+  }
+
   bool DwindleLayout::cycleWidth(int columnIndex, int direction) {
     Node* node = nodeAtFlatIndex(columnIndex);
     const std::vector<Split> axisSplits = splits(node, Node::HSplit);

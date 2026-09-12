@@ -4,6 +4,7 @@
 
 using umbriel::anchoredContentOrigin;
 using umbriel::centeredOrigin;
+using umbriel::centeredOverShown;
 using umbriel::clampFloatingOrigin;
 using umbriel::floatingFractionSize;
 using umbriel::FloatingGeometry;
@@ -186,6 +187,44 @@ UMBRIEL_TEST(clampDoesNotInvertWhenTheBoundsCross) {
   // Low bound wins rather than the range being read backwards.
   CHECK_EQ(clamped.x, usable.x + floatingKeepVisible(0));
   CHECK_EQ(clamped.y, usable.y + floatingKeepVisible(0));
+}
+
+// Dialog placement
+UMBRIEL_TEST(aDialogCentersOnAParentThatIsFullyInView) {
+  const wlr_box parent{100, 110, 900, 600};
+  const FloatingPoint origin = centeredOverShown(parent, kUsable, 400, 300);
+  CHECK_EQ(origin.x, 350);
+  CHECK_EQ(origin.y, 260);
+}
+
+UMBRIEL_TEST(aDialogCentersOnTheVisiblePartOfAScrolledParent) {
+  // The parent hangs 500 wide off the left edge, so only its right 400 show.
+  const wlr_box parent{-500, 0, 900, 600};
+  const FloatingPoint origin = centeredOverShown(parent, kUsable, 200, 100);
+  CHECK_EQ(origin.x, 100);
+  CHECK_EQ(origin.y, 250);
+}
+
+UMBRIEL_TEST(aDialogOverAParentOutOfViewCentersOnTheArea) {
+  const wlr_box parent{-2000, 0, 900, 600};
+  const FloatingPoint origin = centeredOverShown(parent, kUsable, 400, 300);
+  CHECK_EQ(origin.x, 760);
+  CHECK_EQ(origin.y, 390);
+}
+
+UMBRIEL_TEST(aDialogStaysInsideTheAreaWhenItFits) {
+  // Centered on the sliver of parent in the corner, the dialog would overhang; it is pulled back to the edge.
+  const wlr_box parent{1800, 1000, 900, 600};
+  const FloatingPoint origin = centeredOverShown(parent, kUsable, 400, 300);
+  CHECK_EQ(origin.x, kUsable.width - 400);
+  CHECK_EQ(origin.y, kUsable.height - 300);
+}
+
+UMBRIEL_TEST(aDialogLargerThanTheAreaKeepsItsTopLeftOnIt) {
+  const wlr_box usable{0, 40, 1280, 680};
+  const FloatingPoint origin = centeredOverShown({0, 40, 1280, 680}, usable, 1500, 900);
+  CHECK_EQ(origin.x, 0);
+  CHECK_EQ(origin.y, 40);
 }
 
 // Resize anchoring

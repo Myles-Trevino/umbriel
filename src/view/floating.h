@@ -73,6 +73,22 @@ namespace umbriel {
     };
   }
 
+  // Center a window of the given size over what shows of `box` inside `usable`, kept fully inside `usable` when it
+  // fits. A box entirely out of view centers the window on `usable` instead.
+  [[nodiscard]] constexpr FloatingPoint
+  centeredOverShown(const wlr_box& box, const wlr_box& usable, int width, int height) {
+    const auto clamp = [](int value, int low, int high) { return value < low ? low : (value > high ? high : value); };
+    const int left = box.x > usable.x ? box.x : usable.x;
+    const int top = box.y > usable.y ? box.y : usable.y;
+    const int right = box.x + box.width < usable.x + usable.width ? box.x + box.width : usable.x + usable.width;
+    const int bottom = box.y + box.height < usable.y + usable.height ? box.y + box.height : usable.y + usable.height;
+    const wlr_box shown{.x = left, .y = top, .width = right - left, .height = bottom - top};
+    FloatingPoint origin = centeredOrigin(shown.width > 0 && shown.height > 0 ? shown : usable, width, height);
+    origin.x = clamp(origin.x, usable.x, usable.x + (usable.width > width ? usable.width - width : 0));
+    origin.y = clamp(origin.y, usable.y, usable.y + (usable.height > height ? usable.height - height : 0));
+    return origin;
+  }
+
   // Pixel length of `fraction` of the usable area on one axis. Rounds like
   // Layout::fractionalWidth so a float and a tiled lane at the same fraction do
   // not disagree by a pixel on an odd axis. A degenerate axis yields 0, which

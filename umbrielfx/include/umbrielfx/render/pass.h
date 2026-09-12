@@ -46,6 +46,7 @@ struct fx_gles_render_pass {
 	struct fx_framebuffer *animation_parents[FX_ANIMATION_DEPTH];
 	struct wlr_texture *animation_textures[FX_ANIMATION_DEPTH];
 	bool animation_suppress[FX_ANIMATION_DEPTH];
+	struct wl_list animation_history_updates;
 };
 
 bool fx_render_pass_begin_animation(struct fx_gles_render_pass *pass);

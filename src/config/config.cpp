@@ -360,7 +360,7 @@ namespace umbriel {
       }
       const auto* value = node->as_string();
       if (value == nullptr) {
-        warnAt(node->source(), R"({}.position must be a string ("left" or "right"))", context);
+        warnAt(node->source(), R"({}.position must be a string ("left", "right", or "center"))", context);
         return std::nullopt;
       }
       const std::string_view position = value->get();
@@ -370,7 +370,10 @@ namespace umbriel {
       if (position == "right") {
         return MasterPosition::Right;
       }
-      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left" or "right"))", context, position);
+      if (position == "center") {
+        return MasterPosition::Center;
+      }
+      warnAt(node->source(), R"(unknown {}.position "{}" (expected "left", "right", or "center"))", context, position);
       return std::nullopt;
     }
 
@@ -608,7 +611,8 @@ namespace umbriel {
                 overrides.master.position = position;
               }
               sm.real("default_width_fraction", 0.1, 0.9, overrides.master.defaultWidthFraction)
-                  .boolean("new_on_top", overrides.master.newOnTop);
+                  .boolean("new_on_top", overrides.master.newOnTop)
+                  .boolean("new_becomes_master", overrides.master.newBecomesMaster);
             });
           },
           layoutContext
@@ -1070,12 +1074,16 @@ namespace umbriel {
           configStore().addWatchPath(std::move(path));
         }
       };
-      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
-        if (const toml::node* node = section.take("curve")) {
+      const auto readCurveKey = [&](Section& section, std::string_view key, std::string_view context,
+                                    AnimationCurve& target) {
+        if (const toml::node* node = section.take(key)) {
           if (auto curve = readCurveNode(node, context, animation.beziers, animation.springs)) {
             target = *curve;
           }
         }
+      };
+      const auto readCurve = [&](Section& section, std::string_view context, AnimationCurve& target) {
+        readCurveKey(section, "curve", context, target);
       };
       const auto readStyle = [](Section& section, std::string& target,
                                 std::initializer_list<std::string_view> allowed) {
@@ -1124,6 +1132,9 @@ namespace umbriel {
         section.boolean("enabled", animation.overview.enabled)
             .integer("duration_ms", 1, 10000, animation.overview.durationMs);
         readCurve(section, "animation.overview", animation.overview.curve);
+        readCurveKey(
+            section, "workspace_curve", "animation.overview.workspace_curve", animation.overview.workspaceCurve
+        );
       });
       s.sub("scratchpad", [&](Section& section) {
         readShader(section, animation.scratchpad);
@@ -1192,6 +1203,8 @@ namespace umbriel {
     void readOverview(Section& root, Config& loaded) {
       root.sub("overview", [&](Section& s) {
         s.real("zoom", 0.1, 0.75, loaded.overview.zoom)
+            .real("scroll_factor_horizontal", 0.1, 10.0, loaded.overview.scrollFactorHorizontal)
+            .real("scroll_factor_vertical", 0.1, 10.0, loaded.overview.scrollFactorVertical)
             .boolean("background_blur", loaded.overview.backgroundBlur)
             .boolean("workspace_wallpaper", loaded.overview.workspaceWallpaper)
             .boolean("shortcuts", loaded.overview.shortcuts);
@@ -1292,7 +1305,8 @@ namespace umbriel {
             loaded.layout.master.position = *position;
           }
           sm.real("default_width_fraction", 0.1, 0.9, loaded.layout.master.defaultWidthFraction)
-              .boolean("new_on_top", loaded.layout.master.newOnTop);
+              .boolean("new_on_top", loaded.layout.master.newOnTop)
+              .boolean("new_becomes_master", loaded.layout.master.newBecomesMaster);
         });
       });
     }

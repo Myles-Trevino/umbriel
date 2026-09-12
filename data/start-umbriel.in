@@ -11,9 +11,9 @@ if [ -n "${MANAGERPID:-}" ] && [ "${SYSTEMD_EXEC_PID:-}" = "$$" ]; then
 fi
 
 login_reentry=false
-if [ "${1:-}" = "__umbriel_login_shell" ]; then
+if [ "${UMBRIEL_LOGIN_REENTRY:-}" = 1 ]; then
   login_reentry=true
-  shift
+  unset UMBRIEL_LOGIN_REENTRY
   unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY UMBRIEL_SOCKET \
     XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
 fi
@@ -50,10 +50,10 @@ if [ "$login_reentry" = false ]; then
   # shell once so its noninteractive login profile can extend the environment.
   case "$login_shell_kind" in
     fish)
-      exec "$SHELL" -l -c 'exec $argv' "$0" __umbriel_login_shell "$@"
+      UMBRIEL_LOGIN_REENTRY=1 exec "$SHELL" -l -c 'exec $argv' "$0" "$@"
       ;;
     bourne)
-      exec "$SHELL" -l -c 'exec "$@"' "$SHELL" "$0" __umbriel_login_shell "$@"
+      UMBRIEL_LOGIN_REENTRY=1 exec "$SHELL" -l -c 'exec "$@"' "$SHELL" "$0" "$@"
       ;;
   esac
 fi

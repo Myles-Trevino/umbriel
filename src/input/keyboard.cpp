@@ -261,9 +261,12 @@ namespace umbriel {
       if (!modifierOnly && nsyms > 0) {
         m_server->cursor()->noteTyping();
       }
-      m_server->armModifierTap(
-          this, event->keycode, std::span<const uint32_t>(syms, nsyms > 0 ? static_cast<size_t>(nsyms) : 0), modifiers
-      );
+      // IME echoes must not cancel the original key's pending tap.
+      if (!m_server->inputMethodRelay()->ownsKeyboard(m_keyboard)) {
+        m_server->armModifierTap(
+            this, event->keycode, std::span<const uint32_t>(syms, nsyms > 0 ? static_cast<size_t>(nsyms) : 0), modifiers
+        );
+      }
       cancelRepeat();
       bool vtSwitched = false;
       for (int i = 0; i < nsyms; ++i) {

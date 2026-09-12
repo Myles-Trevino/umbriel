@@ -66,6 +66,7 @@ namespace umbriel {
     struct Master {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> newOnTop;
+      std::optional<bool> newBecomesMaster;
       std::optional<MasterPosition> position;
       bool operator==(const Master&) const = default;
     } master;
@@ -111,6 +112,7 @@ namespace umbriel {
     struct Master {
       double defaultWidthFraction = 0.55;
       bool newOnTop = true;
+      bool newBecomesMaster = false;
       MasterPosition position = MasterPosition::Left;
       bool operator==(const Master&) const = default;
     } master;
@@ -557,6 +559,10 @@ namespace umbriel {
         bool enabled = true;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::EaseOutCubic};
+        // Filmstrip movement between workspace previews, for the wheel, the keyboard and touchpad releases alike. A
+        // spring curve settles from the current position and carries the release velocity of a gesture; any other
+        // curve runs over duration_ms and ignores it.
+        AnimationCurve workspaceCurve{.easing = Easing::Spring, .spring = {.damping = 1.0, .stiffness = 1000.0}};
         bool operator==(const Overview&) const = default;
       } overview;
 
@@ -604,6 +610,10 @@ namespace umbriel {
     struct Overview {
       // Workspace scale when fully zoomed out.
       double zoom = 0.5;
+      // Touchpad travel per workspace or viewport in the overview, by the physical direction of the movement rather
+      // than the output's workspace axis. Independent of an input device's own scroll_factor.
+      double scrollFactorHorizontal = 1.0;
+      double scrollFactorVertical = 1.0;
       // Blur the wallpaper behind the filmstrip while the overview is visible. Uses [appearance.blur] parameters;
       // inert when appearance blur is disabled.
       bool backgroundBlur = true;
@@ -650,6 +660,7 @@ namespace umbriel {
       struct Master {
         double defaultWidthFraction = 0.55;
         bool newOnTop = true;
+        bool newBecomesMaster = false;
         MasterPosition position = MasterPosition::Left;
         bool operator==(const Master&) const = default;
       } master;

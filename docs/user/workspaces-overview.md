@@ -8,6 +8,8 @@ appearance.
 ```toml
 [overview]
 zoom = 0.5                     # 0.1-0.75
+scroll_factor_horizontal = 1.0 # 0.1-10.0
+scroll_factor_vertical = 1.0   # 0.1-10.0
 background_blur = true
 workspace_wallpaper = true
 shortcuts = true
@@ -40,13 +42,42 @@ closes.
 
 Click a window to focus it, middle-click to close it, or drag it to another
 workspace. When a click selects a window in another scrolling column, the
-column reveal runs together with the closing zoom. Use the wheel or a 3-finger
-swipe to move through the workspace list. Each wheel notch or swipe step moves
-one workspace at a time. The filmstrip runs along each output's
-[workspace axis](workspaces.md#workspace-axis), so a 3-finger swipe selects
-workspaces along that axis, while the ordinary vertical wheel works on either
-arrangement and a horizontal wheel navigates only horizontal workspaces. A
-4-finger swipe opens or closes the overview.
+column reveal runs together with the closing zoom. Each wheel notch moves one
+workspace at a time. The vertical wheel works on either arrangement; a
+horizontal wheel navigates only horizontal workspaces. A 4-finger swipe opens
+or closes the overview.
+
+Two-finger scrolling and three-finger swipes both navigate continuously:
+
+- Movement along the output's [workspace axis](workspaces.md#workspace-axis)
+  drags the workspace previews and selects a workspace on release.
+- Movement across it pans the scrolling layout in the preview the pointer was
+  over when the gesture started, without activating another workspace. Dwindle
+  and master workspaces have no strip to pan.
+
+A gesture locks onto whichever direction it starts in, resists travel past
+either end, and coasts on the speed it was released at, so a flick can cross
+several workspaces. Holding still before letting go drops that momentum.
+The gesture keeps the output and the preview it started on even if the pointer
+moves away. Wheel and keyboard navigation are unchanged.
+
+Touchpad `natural_scroll` sets the direction of both gestures.
+`overview.scroll_factor_horizontal` and `overview.scroll_factor_vertical`
+scale how far a gesture travels; both default to `1.0`, and a factor of `0.8`
+needs 25% more finger movement for the same distance. They apply to the
+physical direction of the movement, not to the output's workspace axis, and
+they are independent of the input device's `scroll_factor`, which still only
+scales application scrolling.
+
+Three-finger swipes cover one workspace in the same travel a swipe outside the
+overview takes to switch workspaces. Two-finger scrolling has its own distance:
+libinput reports swipes as pointer-accelerated motion and finger scrolling as
+raw scroll units, so the same movement of the hand does not produce the same
+numbers. Different touchpads also differ. The two factors are there to correct
+the difference on your hardware.
+
+`[animation.overview] workspace_curve` decides how the previews settle after a
+release. See [animation](animation.md).
 
 #### Which window actions act on
 
@@ -115,9 +146,11 @@ characters. Letter uniqueness ignores case, while badges preserve the case
 written in the configuration.
 
 Middle-click still closes a window card, but the close is sent on button
-release. Drag the middle button along the output's workspace axis instead to
-step through workspaces without using the keyboard; moving beyond the drag
-threshold suppresses the close.
+release. Drag the middle button along the output's workspace axis to step
+through workspaces without using the keyboard, or across that axis to pan the
+scrolling strip of the row under the pointer. Moving beyond the drag threshold
+locks to the dominant axis and suppresses the close. A configured
+`layout-scroll-drag` mouse bind pans the same row.
 
 An active client drag takes precedence. Umbriel ignores requests to open the
 overview until the pointer button that initiated the drag is released.

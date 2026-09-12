@@ -1,6 +1,4 @@
-// Verifies that a virtual keyboard is not exposed as the seat keyboard until it has a usable keymap. Some virtual
-// keyboard clients create their object before preparing its keymap. Advertising that incomplete device makes wlroots
-// send wl_keyboard.keymap with no_keymap and size zero, which leaves strict clients without an XKB keymap.
+// Applications need usable keymaps while virtual keyboards initialize, change maps, and disappear.
 
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
 
@@ -15,6 +13,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
 namespace {
@@ -23,6 +22,7 @@ namespace {
     BeforeUpload,
     FirstUpload,
     SecondUpload,
+    Removal,
   };
 
   std::string_view phaseName(Phase phase) {
@@ -33,6 +33,8 @@ namespace {
       return "after first virtual keymap upload";
     case Phase::SecondUpload:
       return "after second virtual keymap upload";
+    case Phase::Removal:
+      return "during virtual keyboard removal";
     }
     return "during unknown phase";
   }
@@ -46,6 +48,7 @@ namespace {
     Phase phase = Phase::BeforeUpload;
     size_t validKeymaps = 0;
     size_t invalidKeymaps = 0;
+    xkb_keysym_t yKeySymbol = XKB_KEY_NoSymbol;
   };
 
   void releaseKeyboard(State& state) {
@@ -101,6 +104,9 @@ namespace {
       std::println(stderr, "keyboard-keymap-client: could not compile wl_keyboard keymap {}", phaseName(state.phase));
       return;
     }
+    const xkb_keysym_t* symbols = nullptr;
+    const int count = xkb_keymap_key_get_syms_by_level(keymap, xkb_keymap_key_by_name(keymap, "AD06"), 0, 0, &symbols);
+    state.yKeySymbol = count == 1 ? symbols[0] : XKB_KEY_NoSymbol;
     xkb_keymap_unref(keymap);
     ++state.validKeymaps;
   }
@@ -221,6 +227,26 @@ namespace {
     return true;
   }
 
+  bool expectFreshKeymap(State& state, xkb_keysym_t expected, std::string_view context) {
+    releaseKeyboard(state);
+    const size_t validBefore = state.validKeymaps;
+    state.yKeySymbol = XKB_KEY_NoSymbol;
+    state.keyboard = wl_seat_get_keyboard(state.seat);
+    wl_keyboard_add_listener(state.keyboard, &kKeyboardListener, &state);
+    if (!roundtripTwice(state)) {
+      std::println(stderr, "keyboard-keymap-client: connection lost {}", context);
+      return false;
+    }
+    if (state.invalidKeymaps != 0 || state.validKeymaps == validBefore || state.yKeySymbol != expected) {
+      std::println(
+          stderr, "keyboard-keymap-client: fresh binding {} received {} keymaps, AD06 keysym {} instead of {}", context,
+          state.validKeymaps - validBefore, state.yKeySymbol, expected
+      );
+      return false;
+    }
+    return true;
+  }
+
 } // namespace
 
 int main() {
@@ -278,7 +304,45 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  std::println("valid-keymaps {}", state.validKeymaps);
+  state.phase = Phase::Removal;
+  zwp_virtual_keyboard_v1* activeKeyboard =
+      zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(state.keyboardManager, state.seat);
+  zwp_virtual_keyboard_v1_keymap(
+      activeKeyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fileno(firstKeymap.file), firstKeymap.size
+  );
+  zwp_virtual_keyboard_v1_modifiers(activeKeyboard, 1, 0, 0, 0);
+  if (!roundtripTwice(state) || !expectFreshKeymap(state, XKB_KEY_y, "before keyboard removal")) {
+    return EXIT_FAILURE;
+  }
+
+  zwp_virtual_keyboard_v1* inactiveKeyboard =
+      zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(state.keyboardManager, state.seat);
+  zwp_virtual_keyboard_v1_keymap(
+      inactiveKeyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fileno(secondKeymap.file), secondKeymap.size
+  );
+  zwp_virtual_keyboard_v1_destroy(inactiveKeyboard);
+  if (!roundtripTwice(state) || !expectFreshKeymap(state, XKB_KEY_y, "after inactive keyboard removal")) {
+    return EXIT_FAILURE;
+  }
+
+  // No surviving keyboard sends input between removal and the new binding.
+  zwp_virtual_keyboard_v1_destroy(activeKeyboard);
+  if (!roundtripTwice(state) || !expectFreshKeymap(state, XKB_KEY_z, "after active keyboard removal")) {
+    return EXIT_FAILURE;
+  }
+
+  zwp_virtual_keyboard_v1_destroy(virtualKeyboard);
+  if (!roundtripTwice(state) || state.keyboard != nullptr) {
+    std::println(stderr, "keyboard-keymap-client: keyboard capability remains after the last device was removed");
+    return EXIT_FAILURE;
+  }
+  virtualKeyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(state.keyboardManager, state.seat);
+  if (!sendKeymap(state, virtualKeyboard, firstKeymap, Phase::FirstUpload)
+      || !expectFreshKeymap(state, XKB_KEY_y, "after reconnecting the only keyboard")) {
+    return EXIT_FAILURE;
+  }
+
+  std::println("keyboard initialization, keymap updates, removal, and reconnection preserve usable keymaps");
   zwp_virtual_keyboard_v1_destroy(virtualKeyboard);
   releaseKeyboard(state);
   zwp_virtual_keyboard_manager_v1_destroy(state.keyboardManager);

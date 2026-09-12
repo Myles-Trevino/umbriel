@@ -85,6 +85,8 @@ With no named definitions, use `default_scratchpad = "default"` instead.
 The window remembers the output, workspace, and tiled or floating state it
 would otherwise have opened with. `default_output`, `default_workspace`, and
 `default_floating` therefore control where and how it returns when restored.
+Opening size and position rules set its initial scratchpad geometry unless
+scratchpad scale, maximize, or fullscreen overrides it.
 If the scratchpad is already visible, the new window joins it without hiding
 the existing members.
 
@@ -104,6 +106,10 @@ exists. In named mode it is required.
 Toggle, restore, and focus actions do nothing when their required window is not
 available. In particular, restore and focus-next require the selected
 scratchpad to be visible.
+
+`window-focus:<window-id>` and `window-focus-warp:<window-id>` summon a
+matching hidden scratchpad window to the output under the pointer before
+focusing it. The `-warp` form then moves the cursor to that window.
 
 Scratchpad visibility and cycling actions never repeat while their key is held,
 even if the binding does not set `repeat = false`.

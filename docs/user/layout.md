@@ -216,36 +216,50 @@ handles a column that enters Dwindle.
 
 Master divides the workspace into a master area and a stack area. The master
 area is on the side selected by `position`; the stack occupies the other side.
-Each area arranges its windows from top to bottom. When only one area has
-windows, that area fills the complete content box.
+With `position = "center"` the master area sits between two stacks, one on each
+side. Each area arranges its windows from top to bottom. When only one area has
+windows, that area fills the complete content box, except in center mode where
+the master area keeps its centered box even with empty sides.
 
 ### Settings
 
 ```toml
 [layout.master]
-position = "left"                   # "left" or "right"
+position = "left"                   # "left", "right", or "center"
 default_width_fraction = 0.55       # 0.1-0.9
-new_on_top = true                    # place new windows at the top of the stack
+new_on_top = true                   # place new windows at the top of the stack
+new_becomes_master = false          # new windows take the master slot
 ```
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `position` | string | `"left"` | Side occupied by the master area: `"left"` or `"right"`. |
+| `position` | string | `"left"` | Side occupied by the master area: `"left"`, `"right"`, or `"center"` between two stacks. |
 | `default_width_fraction` | float | `0.55` | Initial fraction assigned to the master area when both areas exist (0.1-0.9). |
 | `new_on_top` | bool | `true` | Place new windows at the top of the stack. Disable to place them at the bottom. |
+| `new_becomes_master` | bool | `false` | Give the master slot to each new window and move the last master row to the stack top. |
 
 ### Behavior
 
 The first window becomes master. A new window also becomes master when the
-master area is empty. Otherwise it joins the top of the stack when
+master area is empty. With `new_becomes_master = true` every new window takes
+the top master slot and the last master row moves to the stack top, leaving the
+master count unchanged. Otherwise a new window joins the top of the stack when
 `new_on_top = true`, or the bottom when it is false. Removing the final master
 window promotes the top stack window. Moving every window out of master does
 not promote one, so the remaining stack stays full-width until another window
 opens or is moved into master.
 
+In center mode a new stack window goes to the side with fewer windows, the left
+one on a tie, and `new_on_top` places it within that side. A promotion takes the
+top row of the fuller side, and a demotion goes to the top of the emptier side,
+the left one on a tie in both cases. With the master area empty, one remaining
+stack fills the content box and two split it evenly.
+
 Consume actions preserve their visual meanings. With `position = "left"`, left
 moves a stack window into master and right moves a master window into the stack.
 With `position = "right"`, those roles reverse because master is visually right.
+With `position = "center"`, consume and expel move a window one area along the
+visual order left stack, master, right stack, and fail at either end.
 The consume-or-expel variants make the same directional move.
 
 Master workflows use a deterministic layout-order ring: master windows from top
@@ -257,12 +271,14 @@ and `layout-master-count-decrease` demotes the master bottom into the stack. At
 least one window remains in master.
 
 Width actions operate on the master fraction; the stack fraction is its
-complement. `window-modify-width:<delta>` changes the focused area's fraction,
-and the cycle actions walk `width_presets`. Width actions are inert while either
-area is empty because the occupied area already fills the viewport. Height
-actions change a window's row fraction within its area; see
+complement, and in center mode each side reports half of that complement.
+`window-modify-width:<delta>` changes the focused area's fraction, and the cycle
+actions walk `width_presets`. Width actions are inert while either area is
+empty, except in center mode where a nonempty master area always has margins to
+move. Height actions change a window's row fraction within its area; see
 [Sizing behavior](#sizing-behavior). Tiled resizing is available on the boundary
-between master and stack and between rows in either area.
+between master and stack and between rows in either area. A center master
+resizes symmetrically: dragging one margin moves both.
 
 Dragging over a master workspace previews the destination row within the
 nearest area. Hint bands appear at the top, bottom, and between existing rows.
@@ -294,6 +310,23 @@ space above itself instead. In master and dwindle, a window with no neighbor on
 the stacking axis has nothing to trade space with, so the height actions leave
 it unchanged.
 
+### Client minimum sizes
+
+A client can keep a buffer larger than its assigned tile, including when its
+minimum size exceeds the available space. Umbriel clips that content to the
+tile at rest. Interactive resize may temporarily scale the buffer; releasing
+the grab restores unscaled content for the window and its resized neighbors,
+without waiting for another client commit.
+
+Vesktop enforces a 940×500 logical-pixel minimum by default. To allow smaller
+tiles, open **User Settings**, select **Vesktop** in the left sidebar under
+**Vencord Settings** (below **Backup & Restore**), then enable
+**Behaviour → Disable minimum window size** (`disableMinSize`). Open this page
+directly: the settings search does not find this option.
+
+This removes Vesktop's minimum-size constraint, but does not guarantee that
+all of its interface adapts to very narrow or short tiles.
+
 ### Floating windows
 
 All of the width and height actions resize a focused floating window directly,
@@ -311,7 +344,11 @@ fullscreen.
 
 Parented XDG dialogs are stacked with their ancestor chain. Raising any member
 raises the family while keeping each dialog above its parent, including when an
-ancestor is floating, pinned, or fullscreen.
+ancestor is floating, pinned, or fullscreen. A dialog without a
+`default_position` rule opens centered over the visible part of its parent,
+kept inside the usable area: over the output for a fullscreen parent and over
+the usable area for one maximized to edges. A parent scrolled out of view leaves
+it centered on the area.
 
 ### Maximize and fullscreen
 

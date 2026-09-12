@@ -8,6 +8,7 @@
 // 1 right mod <name|none> hold one modifier (shift, control, alt, or logo) tap <key> press and release one evdev key
 // pause <ms> keep the pointer connection and current input state. Commands run in order, each followed by a frame and
 // a roundtrip so the compositor has processed one before the next is sent.
+// axis <horizontal|vertical> <delta> sends smooth finger input; axis-stop <horizontal|vertical> ends it.
 
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
 #include "wlr-virtual-pointer-unstable-v1-client-protocol.h"
@@ -144,11 +145,13 @@ namespace {
     }
   }
 
-  // The compositor only reads time_msec for event ordering, so a monotonically
-  // increasing counter is enough and keeps runs reproducible.
+  // Release velocity needs pauses to advance the input clock as well.
   uint32_t nextTime() {
+    static const auto start = std::chrono::steady_clock::now();
     static uint32_t time = 1000;
-    time += 10;
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    time = std::max(time + 1, 1000 + static_cast<uint32_t>(elapsed.count()));
     return time;
   }
 
@@ -186,8 +189,9 @@ int main(int argc, char** argv) {
   }
 
   const std::vector<std::string> args(argv + 3, argv + argc);
-  const bool needsKeyboard =
-      std::ranges::find(args, "mod") != args.end() || std::ranges::find(args, "tap") != args.end();
+  const bool needsKeyboard = std::ranges::any_of(args, [](const std::string& command) {
+    return command == "mod" || command == "tap" || command == "key-press" || command == "key-release";
+  });
   VirtualKeyboard keyboard;
   if (needsKeyboard && !initializeKeyboard(keyboard, state, display)) {
     return EXIT_FAILURE;
@@ -228,20 +232,45 @@ int main(int argc, char** argv) {
       const uint32_t axis = command == "notch" ? WL_POINTER_AXIS_VERTICAL_SCROLL : WL_POINTER_AXIS_HORIZONTAL_SCROLL;
       // A real wheel sends the smooth value and the discrete step together. The overview counts notches, so the
       // discrete half is the one that matters here, but sending only that is not something a wheel does.
+      zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
       zwlr_virtual_pointer_v1_axis_discrete(pointer, nextTime(), axis, wl_fixed_from_double(dir * 15.0), dir);
+    } else if (command == "axis" || command == "axis-stop") {
+      needs(command == "axis" ? 2 : 1);
+      const std::string& orientation = args[i + 1];
+      if (orientation != "horizontal" && orientation != "vertical") {
+        std::println(stderr, "pointer-client: unknown axis '{}'", orientation);
+        return EXIT_FAILURE;
+      }
+      const uint32_t axis =
+          orientation == "horizontal" ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL;
+      zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_FINGER);
+      if (command == "axis") {
+        const double delta = std::atof(args[i + 2].c_str());
+        i += 2;
+        zwlr_virtual_pointer_v1_axis(pointer, nextTime(), axis, wl_fixed_from_double(delta));
+      } else {
+        i += 1;
+        zwlr_virtual_pointer_v1_axis_stop(pointer, nextTime(), axis);
+      }
     } else if (command == "mod") {
       needs(1);
       const uint32_t depressed = modifierMask(keyboard, args[i + 1]);
       i += 1;
       zwp_virtual_keyboard_v1_modifiers(keyboard.protocol, depressed, 0, 0, 0);
-    } else if (command == "tap") {
+    } else if (command == "tap" || command == "key-press" || command == "key-release") {
       needs(1);
       const auto key = static_cast<uint32_t>(std::atoi(args[i + 1].c_str()));
       i += 1;
-      zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_PRESSED);
-      zwlr_virtual_pointer_v1_frame(pointer);
-      wl_display_roundtrip(display);
-      zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_RELEASED);
+      if (command != "key-release") {
+        zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_PRESSED);
+      }
+      if (command == "tap") {
+        zwlr_virtual_pointer_v1_frame(pointer);
+        wl_display_roundtrip(display);
+      }
+      if (command != "key-press") {
+        zwp_virtual_keyboard_v1_key(keyboard.protocol, nextTime(), key, WL_KEYBOARD_KEY_STATE_RELEASED);
+      }
     } else if (command == "pause") {
       needs(1);
       const auto duration = std::chrono::milliseconds(std::atoi(args[i + 1].c_str()));

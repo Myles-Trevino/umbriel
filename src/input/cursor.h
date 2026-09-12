@@ -14,6 +14,7 @@ struct wl_event_source;
 struct wlr_input_device;
 struct wlr_output;
 struct wlr_pointer_constraint_v1;
+struct wlr_seat_client;
 struct wlr_surface;
 struct wlr_tablet;
 struct wlr_tablet_tool;
@@ -138,8 +139,10 @@ namespace umbriel {
     void applyConfig();
     void setCursorSurface(wlr_surface* surface, int32_t hotspotX, int32_t hotspotY);
     void setXcursor(const char* name);
-    void beginMove(View* view, uint32_t button = 0);
-    void beginResize(View* view, uint32_t edges);
+    bool beginMove(View* view, uint32_t button);
+    bool beginResize(View* view, uint32_t edges, uint32_t button);
+    void beginClientMove(View* view, wlr_seat_client* seatClient, uint32_t serial);
+    void beginClientResize(View* view, wlr_seat_client* seatClient, uint32_t serial, uint32_t edges);
     void resetMode();
     // Warp the cursor to a layout position and run the motion pipeline (pointer focus, xcursor, pointer-output
     // tracking, idle). Output actions use it so focus follows the cursor onto the target monitor.
@@ -249,6 +252,8 @@ namespace umbriel {
     void toggleDragTarget(uint32_t button);
     void processResize();
     void processResizeTile();
+    [[nodiscard]] std::optional<uint32_t>
+    clientPointerGrabButton(const View* view, wlr_seat_client* seatClient, uint32_t serial) const;
     [[nodiscard]] uint32_t floatResizeEdges(View* view) const;
     [[nodiscard]] uint32_t hoverResizeEdges(View* view) const;
     void updateInteractiveCursor(View* under);
@@ -288,8 +293,8 @@ namespace umbriel {
     wlr_pointer_constraint_v1* m_activeConstraint = nullptr;
 
     GrabState m_grab;
-    // Physical button that owns the current interactive move.
-    uint32_t m_moveButton = 0;
+    // Physical button that owns the current interactive pointer operation.
+    uint32_t m_grabButton = 0;
     // Last layout output under the pointer; crossing heads updates seat focus like workspace switch.
     wlr_output* m_pointerOutput = nullptr;
     double m_wheelAccum[2]{};

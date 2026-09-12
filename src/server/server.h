@@ -364,6 +364,8 @@ namespace umbriel {
     );
 
   private:
+    static void
+    onProtocolMessage(void* data, wl_protocol_logger_type direction, const wl_protocol_logger_message* message);
     static void onNewOutput(wl_listener* listener, void* data);
     static void onNewInput(wl_listener* listener, void* data);
     static void onNewXdgToplevel(wl_listener* listener, void* data);
@@ -497,6 +499,7 @@ namespace umbriel {
     };
 
     wl_display* m_display = nullptr;
+    wl_protocol_logger* m_protocolLogger = nullptr;
     std::unique_ptr<BackendManager> m_backendManager;
     wlr_backend* m_backend = nullptr;
     wlr_session* m_session = nullptr;

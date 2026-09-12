@@ -31,6 +31,7 @@ namespace umbriel {
     // Returns the grab that should receive this keyboard, or null when there is
     // no grab or this is the input method's own virtual keyboard.
     [[nodiscard]] wlr_input_method_keyboard_grab_v2* grabForKeyboard(wlr_keyboard* keyboard) const;
+    [[nodiscard]] bool ownsKeyboard(wlr_keyboard* keyboard) const;
 
   private:
     struct TextInput {

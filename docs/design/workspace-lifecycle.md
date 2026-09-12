@@ -87,6 +87,15 @@ when returning to a workspace whose remembered focused window is elsewhere.
 In both cases, a small motion inside the window under the pointer is sufficient;
 the pointer does not need to leave and re-enter its border.
 
+Closing a focused Dwindle or master tile is a bounded exception. Umbriel records
+the pointer position only when the closing view owns both keyboard and pointer
+focus and the position lies inside its current presented box. It chooses the
+normal layout replacement before detaching the view, then flushes the new layout
+and checks its final tiled target boxes once. A survivor that inherits the
+recorded position receives pointer-hover focus; otherwise the normal replacement
+remains focused. Reading final layout geometry avoids treating every view that
+moves through the pointer during an animation as another hover transition.
+
 ## Data-device drag focus
 
 Wayland data-device drags install pointer and keyboard grabs. Normal hover
