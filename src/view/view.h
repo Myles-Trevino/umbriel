@@ -90,6 +90,10 @@ namespace umbriel {
     // Seat-global activation, tracked independently of the per-workspace focus
     // state the IPC `focused` field reports.
     [[nodiscard]] bool activated() const { return m_activated; }
+    // Window-geometry box the client has pixels for: its committed geometry, widened towards the size this view was
+    // configured to when the surface already holds those pixels. A tiled client that acks a configure and redraws
+    // without updating set_window_geometry would otherwise be presented, and cropped, at its old size.
+    [[nodiscard]] wlr_box committedContentBox() const;
     [[nodiscard]] int presentedWidth(const wlr_box& target) const;
     [[nodiscard]] int presentedHeight(const wlr_box& target) const;
     // Canonical box currently presented by this view. The normal scene and overview cards both project this state, so

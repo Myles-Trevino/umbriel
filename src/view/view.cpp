@@ -669,6 +669,20 @@ namespace umbriel {
     setFadeAlpha(1.0F);
   }
 
+  wlr_box View::committedContentBox() const {
+    wlr_box box = m_toplevel->base->geometry;
+    if (!m_tiled || m_toplevel->current.fullscreen) {
+      return box;
+    }
+    // A client may ack a configure, render the new size into its buffer, and leave set_window_geometry at the old size
+    // (Electron does, permanently). Presenting that stale box would crop the content the client just drew, so trust
+    // the pixels: grow the box towards the size this view was configured to, never past what the surface holds.
+    const wlr_surface_state& surface = m_toplevel->base->surface->current;
+    box.width = std::max(box.width, std::min(m_toplevel->scheduled.width, surface.width - box.x));
+    box.height = std::max(box.height, std::min(m_toplevel->scheduled.height, surface.height - box.y));
+    return box;
+  }
+
   int View::presentedWidth(const wlr_box& target) const {
     if (sizeGrabActive()) {
       return target.width;
@@ -679,7 +693,7 @@ namespace umbriel {
     if (m_toplevel->current.fullscreen) {
       return target.width;
     }
-    return std::min(m_toplevel->base->geometry.width, target.width);
+    return std::min(committedContentBox().width, target.width);
   }
 
   void View::trackPresentedSize(int width, int height) { m_presentation.track(width, height); }
@@ -694,7 +708,7 @@ namespace umbriel {
     if (m_toplevel->current.fullscreen) {
       return target.height;
     }
-    return std::min(m_toplevel->base->geometry.height, target.height);
+    return std::min(committedContentBox().height, target.height);
   }
 
   // Fullscreen chrome follows committed state. Transitions may scale the old buffer, while settled mismatched buffers
@@ -758,8 +772,8 @@ namespace umbriel {
   }
 
   void View::finishSizeAnimation() {
-    const wlr_box& geo = m_toplevel->base->geometry;
-    m_presentation.setSize(geo.width, geo.height);
+    const wlr_box content = committedContentBox();
+    m_presentation.setSize(content.width, content.height);
     resetPresentedSurface();
     updateBorderGeometry();
     updateBlur();
@@ -771,8 +785,8 @@ namespace umbriel {
     if (!sizeAnimating()) {
       return;
     }
-    const wlr_box& geo = m_toplevel->base->geometry;
-    m_presentation.snapTo(geo.width, geo.height);
+    const wlr_box content = committedContentBox();
+    m_presentation.snapTo(content.width, content.height);
     finishSizeAnimation();
   }
 
@@ -1648,8 +1662,8 @@ namespace umbriel {
   }
 
   void View::updateBlur() {
-    const wlr_box& geometry = m_toplevel->base->geometry;
-    updateBlur(geometry.width, geometry.height);
+    const wlr_box content = committedContentBox();
+    updateBlur(content.width, content.height);
   }
 
   void View::updateBlur(int contentWidth, int contentHeight) {
@@ -1694,8 +1708,8 @@ namespace umbriel {
   }
 
   void View::updateBorderGeometry() {
-    const wlr_box& geometry = m_toplevel->base->geometry;
-    updateBorderGeometry(geometry.width, geometry.height);
+    const wlr_box content = committedContentBox();
+    updateBorderGeometry(content.width, content.height);
   }
 
   void View::updateBorderGeometry(int contentWidth, int contentHeight) {
@@ -1908,15 +1922,15 @@ namespace umbriel {
     // Fullscreen must not keep a copied tile clip (that freezes usable-area size and leaves a bar-sized gap). Use
     // scheduled (not current): on leave, scheduled clears immediately while current lags until the client acks.
     const bool fullscreen = m_toplevel->scheduled.fullscreen;
-    const wlr_box& geometry = m_toplevel->base->geometry;
-    trackPresentedSize(geometry.width, geometry.height);
+    const wlr_box content = committedContentBox();
+    trackPresentedSize(content.width, content.height);
     if (!fullscreen && !m_tiled) {
       syncFloatingSurfaceClip();
       applyCornerRadius();
       updateBorderGeometry();
       return;
     }
-    const wlr_box* clip = (!fullscreen && m_tiled) ? &m_toplevel->base->geometry : nullptr;
+    const wlr_box* clip = (!fullscreen && m_tiled) ? &content : nullptr;
     setSurfaceTreeClip(clip);
     applyCornerRadius();
     updateBorderGeometry();
