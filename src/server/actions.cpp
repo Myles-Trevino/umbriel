@@ -408,6 +408,45 @@ namespace umbriel {
       return outputs[*adjacent];
     }
 
+    // The output `step` places away from the focused (cursor) output in layout order, wrapping at both ends. Null with
+    // a message when this session has only one output.
+    Output* cycledOutput(Server& server, int step, std::string* error) {
+      Output* reference = server.outputFromWlr(server.preferredOutput());
+      if (reference == nullptr) {
+        if (error != nullptr) {
+          *error = "no outputs";
+        }
+        return nullptr;
+      }
+
+      std::vector<Output*> outputs;
+      std::vector<OutputBox> boxes;
+      size_t referenceIndex = 0;
+      bool foundReference = false;
+      for (const auto& output : server.outputs()) {
+        wlr_box box{};
+        wlr_output_layout_get_box(server.outputLayout(), output->wlr(), &box);
+        if (box.width <= 0 || box.height <= 0) {
+          continue;
+        }
+        if (output.get() == reference) {
+          referenceIndex = boxes.size();
+          foundReference = true;
+        }
+        outputs.push_back(output.get());
+        boxes.push_back({box.x, box.y, box.width, box.height});
+      }
+
+      const std::optional<size_t> next = foundReference ? cyclicOutputIndex(boxes, referenceIndex, step) : std::nullopt;
+      if (!next) {
+        if (error != nullptr) {
+          *error = "no other output";
+        }
+        return nullptr;
+      }
+      return outputs[*next];
+    }
+
     // Warp the cursor to the center of `output`'s usable area so subsequent
     // actions resolve against the target monitor (focus is cursor-defined).
     void warpToOutputCenter(Server& server, Output& output) {
@@ -1206,17 +1245,45 @@ namespace umbriel {
     }
 
     // Outputs
+    bool focusOutput(Server& server, Output& target) {
+      warpToOutputCenter(server, target);
+      server.refocus(&target);
+      WorkspaceGroup* group = target.workspaceGroup();
+      Workspace* workspace = group != nullptr ? group->active() : nullptr;
+      maybeWarpCursorToWindow(server, workspace != nullptr ? workspace->focusedView() : nullptr);
+      return true;
+    }
+
     template <wlr_direction D> bool actionOutputFocus(Server& server, const Keybind& /*bind*/, std::string* error) {
       std::string message;
       Output* target = adjacentOutput(server, D, &message);
       if (target == nullptr) {
         return reject(error, std::move(message));
       }
-      warpToOutputCenter(server, *target);
-      server.refocus(target);
-      WorkspaceGroup* group = target->workspaceGroup();
-      Workspace* workspace = group != nullptr ? group->active() : nullptr;
-      maybeWarpCursorToWindow(server, workspace != nullptr ? workspace->focusedView() : nullptr);
+      return focusOutput(server, *target);
+    }
+
+    template <int Step> bool actionOutputFocusCycle(Server& server, const Keybind& /*bind*/, std::string* error) {
+      std::string message;
+      Output* target = cycledOutput(server, Step, &message);
+      if (target == nullptr) {
+        return reject(error, std::move(message));
+      }
+      return focusOutput(server, *target);
+    }
+
+    bool moveFocusedWindowToOutput(Server& server, Output& target, std::string* error) {
+      WorkspaceGroup* targetGroup = target.workspaceGroup();
+      Workspace* destination = targetGroup != nullptr ? targetGroup->active() : nullptr;
+      if (destination == nullptr) {
+        return reject(error, "output has no workspace");
+      }
+      Workspace* source = windowActionWorkspace(server);
+      View* view = source != nullptr ? source->focusedView() : nullptr;
+      if (view == nullptr) {
+        return true; // nothing focused: silent no-op
+      }
+      moveViewToWorkspace(server, *view, *destination);
       return true;
     }
 
@@ -1230,18 +1297,20 @@ namespace umbriel {
       if (target == nullptr) {
         return reject(error, std::move(message));
       }
-      WorkspaceGroup* targetGroup = target->workspaceGroup();
-      Workspace* destination = targetGroup != nullptr ? targetGroup->active() : nullptr;
-      if (destination == nullptr) {
-        return reject(error, "output has no workspace");
+      return moveFocusedWindowToOutput(server, *target, error);
+    }
+
+    template <int Step>
+    bool actionWindowMoveToOutputCycle(Server& server, const Keybind& /*bind*/, std::string* error) {
+      if (scratchpadHoldsFocus(server)) {
+        return true;
       }
-      Workspace* source = windowActionWorkspace(server);
-      View* view = source != nullptr ? source->focusedView() : nullptr;
-      if (view == nullptr) {
-        return true; // nothing focused: silent no-op
+      std::string message;
+      Output* target = cycledOutput(server, Step, &message);
+      if (target == nullptr) {
+        return reject(error, std::move(message));
       }
-      moveViewToWorkspace(server, *view, *destination);
-      return true;
+      return moveFocusedWindowToOutput(server, *target, error);
     }
 
     template <wlr_direction D>
@@ -1473,27 +1542,14 @@ namespace umbriel {
       return swapActiveWorkspaceWindows(server, server.outputFromWlr(server.preferredOutput()), target, error);
     }
 
-    bool actionWorkspaceSwapActiveOutputs(Server& server, const Keybind& /*bind*/, std::string* error) {
-      Output* current = server.outputFromWlr(server.preferredOutput());
-      if (current == nullptr) {
-        return reject(error, "no active output");
+    template <int Step>
+    bool actionWorkspaceSwapActiveOutputCycle(Server& server, const Keybind& /*bind*/, std::string* error) {
+      std::string message;
+      Output* target = cycledOutput(server, Step, &message);
+      if (target == nullptr) {
+        return reject(error, std::move(message));
       }
-      std::vector<Output*> enabled;
-      for (const auto& out : server.outputs()) {
-        if (out->wlr()->enabled) {
-          enabled.push_back(out.get());
-        }
-      }
-      if (enabled.size() == 2) {
-        Output* other = (enabled[0] == current) ? enabled[1] : enabled[0];
-        return swapActiveWorkspaceWindows(server, current, other, error);
-      }
-      for (wlr_direction dir : {WLR_DIRECTION_DOWN, WLR_DIRECTION_UP, WLR_DIRECTION_RIGHT, WLR_DIRECTION_LEFT}) {
-        if (Output* target = adjacentOutput(server, dir, nullptr)) {
-          return swapActiveWorkspaceWindows(server, current, target, error);
-        }
-      }
-      return reject(error, "could not determine adjacent output to swap with");
+      return swapActiveWorkspaceWindows(server, server.outputFromWlr(server.preferredOutput()), target, error);
     }
 
     // Overlays
@@ -1669,10 +1725,14 @@ namespace umbriel {
         &actionOutputFocus<WLR_DIRECTION_RIGHT>,
         &actionOutputFocus<WLR_DIRECTION_UP>,
         &actionOutputFocus<WLR_DIRECTION_DOWN>,
+        &actionOutputFocusCycle<1>,
+        &actionOutputFocusCycle<-1>,
         &actionWindowMoveToOutput<WLR_DIRECTION_LEFT>,
         &actionWindowMoveToOutput<WLR_DIRECTION_RIGHT>,
         &actionWindowMoveToOutput<WLR_DIRECTION_UP>,
         &actionWindowMoveToOutput<WLR_DIRECTION_DOWN>,
+        &actionWindowMoveToOutputCycle<1>,
+        &actionWindowMoveToOutputCycle<-1>,
         &actionColumnMoveToOutput<WLR_DIRECTION_LEFT>,
         &actionColumnMoveToOutput<WLR_DIRECTION_RIGHT>,
         &actionColumnMoveToOutput<WLR_DIRECTION_UP>,
@@ -1685,7 +1745,8 @@ namespace umbriel {
         &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_RIGHT>,
         &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_UP>,
         &actionWorkspaceSwapActiveOutput<WLR_DIRECTION_DOWN>,
-        &actionWorkspaceSwapActiveOutputs,
+        &actionWorkspaceSwapActiveOutputCycle<1>,
+        &actionWorkspaceSwapActiveOutputCycle<-1>,
         &actionModifyWidth,
         &actionWindowCenter,
         &actionWorkspaceSetLayout,

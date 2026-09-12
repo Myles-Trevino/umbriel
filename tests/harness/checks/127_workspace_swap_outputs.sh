@@ -128,7 +128,7 @@ if [[ ${top_before#* } == ${bottom_before#* } ]]; then
   exit 1
 fi
 
-accepts workspace-swap-active-outputs
+accepts workspace-swap-active-output-next
 wait_for_workspace stack-top "$right"
 sleep 0.4
 assert_box stack-top "$right" "$OFFSET" "$top_before"
@@ -159,7 +159,7 @@ bottom_dwindle=$(box_of stack-bottom)
 wide_dwindle=$(box_of wide)
 lone_dwindle=$(box_of lone)
 
-accepts workspace-swap-active-outputs
+accepts workspace-swap-active-output-next
 wait_for_workspace stack-top "$right"
 sleep 0.4
 assert_box stack-top "$right" "$OFFSET" "$top_dwindle"
