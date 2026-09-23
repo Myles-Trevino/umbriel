@@ -49,10 +49,12 @@ namespace umbriel {
     void notifyWindowsChanged();
     void notifyWorkspacesChanged();
     void notifySubmapChanged();
-    // End of an output frame: answers settle requests once every output has drawn a frame and the server is settled.
+    // End of an output frame: answers frame waits (settle, clock-advance) once every output has drawn a frame.
     void notifyOutputFrame(const Output& output);
 
   private:
+    enum class FrameWait : uint8_t { None, Drawn, Settled };
+
     struct Connection {
       Ipc* owner = nullptr;
       int fd = -1;
@@ -63,9 +65,11 @@ namespace umbriel {
       wl_event_source* deadline = nullptr;
       bool responding = false;
       uint8_t subscribedEvents = 0;
-      // A settle request holds its reply until these outputs have each drawn a frame and the server is settled.
-      bool settling = false;
-      std::vector<std::string> settleOutputs;
+      // A frame wait holds its reply until these outputs have each drawn a frame, and for settle until the server is
+      // settled as well.
+      FrameWait frameWait = FrameWait::None;
+      std::vector<std::string> waitOutputs;
+      std::string waitReply;
     };
 
     static int onListenReadable(int fd, uint32_t mask, void* data);
@@ -81,8 +85,8 @@ namespace umbriel {
     static void closeConnection(Connection& connection);
     // Empty when the reply is deferred, as for settle.
     std::optional<std::string> handleRequest(Connection& connection, std::string_view line);
-    void beginSettle(Connection& connection);
-    void finishSettle(Connection& connection, std::string response);
+    void beginFrameWait(Connection& connection, FrameWait wait, std::string reply);
+    void finishFrameWait(Connection& connection, std::string response);
     void broadcastEvent(uint8_t event, const nlohmann::json& payload);
 
     Server* m_server;

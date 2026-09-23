@@ -47,6 +47,10 @@ files = []
 [appearance.blur]
 radius = 3
 
+# Choose the background color shown if the lock screen takes too long to appear.
+# [colors]
+# backdrop = "#000000FF"
+
 # ==============================================================================
 # Input
 # Enable NumLock when a physical keyboard connects.

@@ -51,17 +51,6 @@ if [[ -z ${source_id:-} ]]; then
 fi
 "$UMBRIEL" msg "window-focus:$source_id" > /dev/null
 
-# The headless seat gains a keyboard only with the first virtual keyboard, and the source binds its wl_keyboard in
-# response. Hold one keyboard open until the source has entered, so the tapped press cannot arrive before it binds.
-"$POINTER" 1280 720 mod none pause 10000 > "$UMBRIEL_RUNTIME_DIR/input-activation-keyboard.log" 2>&1 &
-for _ in $(seq 40); do
-  grep -q '^keyboard-enter' "$SOURCE_LOG" && break
-  sleep 0.1
-done
-if ! grep -q '^keyboard-enter' "$SOURCE_LOG"; then
-  echo "activation source never received keyboard focus: $(< "$SOURCE_LOG")"
-  exit 1
-fi
 "$POINTER" 1280 720 tap 30 pause 5000 > "$POINTER_LOG" 2>&1 &
 for _ in $(seq 40); do
   grep -q '^key 30 1$' "$SOURCE_LOG" && break

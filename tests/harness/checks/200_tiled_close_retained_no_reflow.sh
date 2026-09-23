@@ -125,13 +125,13 @@ bounds_match() {
 }
 
 spawn retained-owner 0xFFFF0000
-sleep 0.6
+"$UMBRIEL" settle
 spawn retained-peer 0xFFFF0000
 peer_id=$(jq -r .id <<< "$window")
-sleep 0.6
+"$UMBRIEL" settle
 spawn retained-close 0xFF0000FF
 closing_id=$(jq -r .id <<< "$window")
-sleep 0.6
+"$UMBRIEL" settle
 
 survivors_before=$("$UMBRIEL" windows --json | jq -c \
   '[.[] | select(.title == "retained-owner" or .title == "retained-peer") | {title, x, y, w, h}] | sort_by(.title)')

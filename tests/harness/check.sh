@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# How to write a check (waits, the animation clock, pixel analysis, stress runs) is in CONTRIBUTING.md, "Tests".
 # Boots one contained headless Umbriel per check in checks/, runs the check, kills everything it spawned, and asserts
 # that instance exited cleanly. One instance per check is what makes a failure local: a check starts from the default
 # config with no windows, no overview, and workspace 1 focused, so it asserts behaviour instead of maintaining hygiene
@@ -57,6 +58,9 @@ if ((JOBS == 0)); then
 fi
 
 HARNESS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# CHECK_DIR substitutes another directory of checks. Checks find repository files relative to their own location, so
+# it must sit beside checks/.
+CHECKS_DIR=${CHECK_DIR:-$HARNESS_DIR/checks}
 
 # A check that never returns would otherwise hang the suite with no output. The
 # cap is per check and generous: the slowest checks drive two-second animations.
@@ -81,7 +85,7 @@ COLUMNS_MAX=${COLUMNS:-100}
 
 all_checks() {
   local check
-  for check in "$HARNESS_DIR"/checks/*.sh; do
+  for check in "$CHECKS_DIR"/*.sh; do
     basename "$check" .sh
   done
 }
@@ -113,6 +117,20 @@ if ((${#SELECTED[@]} == 0)); then
   echo "check: no checks matched ${FILTERS[*]}" >&2
   echo "check: available checks:" >&2
   all_checks | sed 's/^/  /' >&2
+  exit 1
+fi
+
+# A fixed sleep ties a check to machine load. Animation timing belongs on `umbriel clock-freeze`/`clock-advance`, end
+# states on `umbriel settle`, and client state on a poll; a sleep that is genuinely about real time says why.
+sleep_violations=$(
+  for name in "${SELECTED[@]}"; do
+    printf '%s\n' "$CHECKS_DIR/$name.sh"
+  done | xargs awk -f "$HARNESS_DIR/sleep-lint.awk"
+)
+if [[ -n $sleep_violations ]]; then
+  echo "check: fixed sleeps outside polling loops; use the animation clock, settle, or a poll, or end the line with" >&2
+  echo "check: '# real time: <reason>':" >&2
+  printf '%s\n' "$sleep_violations" | sed 's/^/  /' >&2
   exit 1
 fi
 
@@ -153,6 +171,7 @@ export UMBRIEL_SECURITY_CONTEXT_CLIENT="$CLIENT_DIR/security-context-client"
 export UMBRIEL_SEAT_LOG_CLIENT="$CLIENT_DIR/seat-log-client"
 export UMBRIEL_OUTPUT_MANAGEMENT_CLIENT="$CLIENT_DIR/output-management-client"
 export UMBRIEL_PIXEL_PROBE="$CLIENT_DIR/pixel-probe"
+export UMBRIEL_HARNESS_LIB="$HARNESS_DIR/lib.sh"
 export UMBRIEL=$BINARY
 
 # Live instance state. The EXIT trap reaches for these, so they stay declared
@@ -162,6 +181,7 @@ SERVER_PID=
 INSTANCE_PGID=
 CHECK_PGID=
 IPC_CLIENT_PID=
+KEYBOARD_PID=
 KEPT_DIRS=()
 
 now_us() {
@@ -225,6 +245,7 @@ kill_check_group() {
 # instance's process group rather than the check's, and reaping that group is
 # the only way they do not outlive the run.
 kill_instance() {
+  stop_keyboard
   if [[ -n $IPC_CLIENT_PID ]] && kill -0 "$IPC_CLIENT_PID" 2>/dev/null; then
     kill -KILL "$IPC_CLIENT_PID" 2>/dev/null || true
     wait "$IPC_CLIENT_PID" 2>/dev/null || true
@@ -315,9 +336,45 @@ EOF
 # A check that needs a second monitor declares it in its header and the harness boots that instance accordingly.
 # Everything else gets one output, which is what most geometry assertions are written against. A check that needs
 # monitors to come and go uses `umbriel output-create` and `umbriel output-destroy` on top of what it declares here.
+# A real session has a keyboard from the start, and a headless one has none until a virtual keyboard arrives; without
+# one the seat's keyboard capability also drops between helper runs, so clients bind wl_keyboard late and miss keys.
+# Each instance therefore gets a keyboard-only helper before its check runs, which stays connected through teardown. A
+# check about keyboard arrival itself opts out with `# harness: keyboard=none` in its header.
+check_keyboard() {
+  if sed -n '2,12p' "$CHECKS_DIR/$1.sh" | grep -q '^# harness: keyboard=none'; then
+    echo none
+  else
+    echo virtual
+  fi
+}
+
+start_keyboard() {
+  local log=$RUNTIME_DIR/keyboard.log
+  XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY=wayland-0 \
+    "$UMBRIEL_POINTER_CLIENT" 1 1 keyboard-only mod none mark ready pause 86400000 > "$log" 2>&1 &
+  KEYBOARD_PID=$!
+  local waited=0
+  until grep -q '^ready$' "$log" 2>/dev/null; do
+    if ! kill -0 "$KEYBOARD_PID" 2>/dev/null || ((waited >= 400)); then
+      BOOT_ERROR="the harness keyboard never attached"$'\n'"$(< "$log")"
+      return 1
+    fi
+    sleep 0.005
+    waited=$((waited + 1))
+  done
+}
+
+stop_keyboard() {
+  if [[ -n $KEYBOARD_PID ]] && kill -0 "$KEYBOARD_PID" 2>/dev/null; then
+    kill -KILL "$KEYBOARD_PID" 2>/dev/null || true
+    wait "$KEYBOARD_PID" 2>/dev/null || true
+  fi
+  KEYBOARD_PID=
+}
+
 check_outputs() {
   local declared
-  declared=$(sed -n '2,12p' "$HARNESS_DIR/checks/$1.sh" |
+  declared=$(sed -n '2,12p' "$CHECKS_DIR/$1.sh" |
     sed -n 's/^# harness: outputs=\([0-9][0-9]*\).*/\1/p' | head -1)
   [[ -z $declared ]] && declared=1
   echo "$declared"
@@ -436,6 +493,7 @@ stop_instance() {
     wait "$IPC_CLIENT_PID" 2>/dev/null || true
   fi
   IPC_CLIENT_PID=
+  stop_keyboard
   reap_instance_group
 
   if [[ $status -ne 0 ]]; then
@@ -464,7 +522,7 @@ run_check_body() {
     XDG_RUNTIME_DIR="$RUNTIME_DIR" \
     WAYLAND_DISPLAY=wayland-0 \
     bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pgid_file" \
-    timeout -k 5 "$CHECK_TIMEOUT" bash "$HARNESS_DIR/checks/$name.sh" > "$output_file" 2>&1 &
+    timeout -k 5 "$CHECK_TIMEOUT" bash "$CHECKS_DIR/$name.sh" > "$output_file" 2>&1 &
   local body_pid=$!
   CHECK_PGID=$(child_pgid "$pgid_file" "$body_pid")
   local status=0
@@ -490,6 +548,10 @@ run_one() {
 
   BOOT_ERROR=
   if ! start_instance "$(check_outputs "$name")"; then
+    publish "$prefix" 1 "$check_start" "$BOOT_ERROR"
+    return 0
+  fi
+  if [[ $(check_keyboard "$name") == virtual ]] && ! start_keyboard; then
     publish "$prefix" 1 "$check_start" "$BOOT_ERROR"
     return 0
   fi
@@ -601,7 +663,7 @@ REPORTED=0
 
 # Seconds per check from earlier runs, one "name seconds" line each. Checks this run did not select keep their entry;
 # checks that no longer exist lose it.
-DURATIONS_FILE=$BINARY_DIR/tests/check-durations
+DURATIONS_FILE=${CHECK_DURATIONS_FILE:-$BINARY_DIR/tests/check-durations}
 declare -A DURATION=()
 if [[ -r $DURATIONS_FILE ]]; then
   while read -r name seconds; do
@@ -618,8 +680,23 @@ mapfile -t DISPATCH_ORDER < <(
 save_durations() {
   local name
   for name in "${!DURATION[@]}"; do
-    [[ -f $HARNESS_DIR/checks/$name.sh ]] && printf '%s %s\n' "$name" "${DURATION[$name]}"
+    [[ -f $CHECKS_DIR/$name.sh ]] && printf '%s %s\n' "$name" "${DURATION[$name]}"
   done | sort > "$DURATIONS_FILE.tmp" 2>/dev/null && mv "$DURATIONS_FILE.tmp" "$DURATIONS_FILE" 2>/dev/null || true
+}
+
+# Seconds a check may take before the summary names it. A check over it is a candidate for the animation clock or a
+# split, not a failure.
+CHECK_BUDGET=${CHECK_BUDGET:-8}
+
+print_over_budget() {
+  local line
+  line=$(
+    for name in "${SELECTED[@]}"; do
+      printf '%s %s\n' "${DURATION[$name]:-0}" "$name"
+    done | sort -k1,1gr | awk -v budget="$CHECK_BUDGET" '$1 > budget { printf "%s%s %ss", (n++ ? " · " : ""), $2, $1 }'
+  )
+  [[ -z $line ]] && return 0
+  printf '%s\n' "  ${C_RUN}over the ${CHECK_BUDGET}s budget: ${line}${C_OFF}"
 }
 
 # The slowest checks of this run, so growth shows up when it happens.
@@ -671,6 +748,7 @@ total_time=$(elapsed "$suite_start")
 save_durations
 printf '\n'
 print_slowest
+print_over_budget
 if ((failed > 0)); then
   printf '%s\n' "  ${C_FAIL}${C_BOLD}${failed} failed${C_OFF} ${C_DIM}·${C_OFF} $passed passed ${C_DIM}·${C_OFF} ${C_DIM}${total_time}${C_OFF}"
   for index in "${!FAILED_NAMES[@]}"; do

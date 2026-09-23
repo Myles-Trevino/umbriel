@@ -82,10 +82,14 @@ if [[ -z ${first:-} ]]; then
   exit 1
 fi
 first_id=$(jq -r .id <<< "$first")
-sleep 0.2
+"$UMBRIEL" settle
 
 "$UMBRIEL" msg overview-open > /dev/null
-sleep 1.1
+"$UMBRIEL" settle
+
+# Animation time only moves by clock-advance from here: samples land 120 ms and 720 ms into the admission, and 120 ms
+# into the close. Advancing 1600 ms finishes every timeline, including the reflow each change starts.
+"$UMBRIEL" clock-freeze
 
 # Mapping the second tile starts a long windows_move transition on the established first tile and its overview card.
 FILL_COLOR=0xFF00FFFF "$UMBRIEL_UNMAP_CLIENT" overview-close-second 1200 700 > "$SECOND_LOG" 2>&1 &
@@ -99,7 +103,7 @@ if [[ $("$UMBRIEL" windows --json | jq length) -ne 2 ]]; then
   echo "second overview close client never mapped"
   exit 1
 fi
-sleep 0.12
+"$UMBRIEL" clock-advance 120
 grim "$MOVING"
 moving_red=$(color_pixels "$MOVING" 'r > 0.8 && g < 0.1 && b < 0.1')
 if ((moving_red < 4000)); then
@@ -116,7 +120,7 @@ if ((opening_dim < 4000)); then
 fi
 
 # windows_in ends 600 ms after the admission, while windows_move still runs until 1600 ms.
-sleep 0.6
+"$UMBRIEL" clock-advance 600
 grim "$OPENED"
 opened_cyan=$(color_pixels "$OPENED" 'g > 0.8 && b > 0.8 && r < 0.1')
 if ((opened_cyan < 4000)); then
@@ -128,7 +132,8 @@ if ((opened_red < 4000)); then
   echo "the overview opener's windows_in did not finish ahead of the neighbour reflow: red_pixels=$opened_red"
   exit 1
 fi
-sleep 1.7
+"$UMBRIEL" clock-advance 1600
+"$UMBRIEL" settle
 
 "$UMBRIEL" msg "window-close:$first_id" > /dev/null
 for _ in $(seq 80); do
@@ -139,7 +144,7 @@ if ! grep -q '^unmapped$' "$FIRST_LOG"; then
   echo "overview close client never unmapped: $(cat "$FIRST_LOG")"
   exit 1
 fi
-sleep 0.12
+"$UMBRIEL" clock-advance 120
 grim "$DURING"
 during_green=$(color_pixels "$DURING" 'g > 0.8 && r < 0.1 && b < 0.1')
 during_magenta=$(color_pixels "$DURING" 'r > 0.8 && g < 0.1 && b > 0.8')
@@ -152,7 +157,8 @@ if ((during_magenta > 40)); then
   exit 1
 fi
 
-sleep 1.05
+"$UMBRIEL" clock-advance 1600
+"$UMBRIEL" settle
 grim "$AFTER"
 after_green=$(color_pixels "$AFTER" 'g > 0.8 && r < 0.1 && b < 0.1')
 after_magenta=$(color_pixels "$AFTER" 'r > 0.8 && g < 0.1 && b > 0.8')

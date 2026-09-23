@@ -7,6 +7,7 @@
 #include "input/cursor.h"
 #include "input/seat.h"
 #include "layer/layer_surface.h"
+#include "lock/session_lock.h"
 #include "output/frame_schedule.h"
 #include "output/hdr_format.h"
 #include "output/identity.h"
@@ -585,6 +586,9 @@ namespace umbriel {
     if (m_server->sessionLocked()) {
       m_server->updateLockBlank();
     }
+    if (SessionLock* lock = m_server->sessionLock()) {
+      lock->handleOutputStateChanged(*this);
+    }
     wlr_output_schedule_frame(m_output);
   }
 
@@ -610,6 +614,9 @@ namespace umbriel {
         "output '{}': {} by output management, power {}", m_output->name, desktopEnabled() ? "enabled" : "disabled",
         m_output->enabled ? "on" : "off"
     );
+    if (SessionLock* lock = m_server->sessionLock()) {
+      lock->handleOutputStateChanged(*this);
+    }
   }
 
   bool Output::setPowered(bool powered) {
@@ -636,6 +643,9 @@ namespace umbriel {
       }
       wlr_output_schedule_frame(m_output);
       m_server->scheduleDisplacedViewRestore();
+    }
+    if (SessionLock* lock = m_server->sessionLock()) {
+      lock->handleOutputStateChanged(*this);
     }
     m_server->updateOutputManagerConfig();
     return true;
@@ -925,6 +935,14 @@ namespace umbriel {
     if (m_server->sessionLocked()) {
       m_server->updateLockBlank();
     }
+    if (SessionLock* lock = m_server->sessionLock()) {
+      lock->handleOutputStateChanged(*this);
+    }
+    wlr_output_schedule_frame(m_output);
+  }
+
+  void Output::scheduleFullFrame() {
+    wlr_damage_ring_add_whole(&m_sceneOutput->damage_ring);
     wlr_output_schedule_frame(m_output);
   }
 
@@ -985,8 +1003,7 @@ namespace umbriel {
     }
     timespec now{};
     clock_gettime(CLOCK_MONOTONIC, &now);
-    const uint64_t nowMsec = static_cast<uint64_t>(now.tv_sec) * 1000 + static_cast<uint64_t>(now.tv_nsec) / 1'000'000;
-    m_server->tickAnimations(nowMsec);
+    m_server->tickAnimations(m_server->animationClockMsec());
 
     // Surface commits reset scene-buffer opacity to the protocol alpha. Repair
     // pending rule opacity after every commit listener and before composition.
@@ -1147,6 +1164,9 @@ namespace umbriel {
           ) {
             m_tearingFallbackReason = "recovered with regular page flip";
           }
+          if (SessionLock* lock = m_server->sessionLock()) {
+            lock->handleOutputCommit(*this, m_output->commit_seq);
+          }
         } else if (commitTearing) {
           m_tearingFallbackReason = "async page flip commit failed";
         } else if (hasBuffer && m_tearingRecovery.regularCommitPending()) {
@@ -1216,12 +1236,18 @@ namespace umbriel {
     if ((event->state->committed & (WLR_OUTPUT_STATE_MODE | WLR_OUTPUT_STATE_ENABLED)) != 0) {
       markDirty(Dirty::LayerArrange | Dirty::Banner | Dirty::Backdrop);
       m_gammaDirty = true;
+      if (SessionLock* lock = m_server->sessionLock()) {
+        lock->handleOutputStateChanged(*this);
+      }
     }
     wlr_output_schedule_frame(m_output);
   }
 
   void Output::handlePresent(void* data) {
     const auto* event = static_cast<const wlr_output_event_present*>(data);
+    if (SessionLock* lock = m_server->sessionLock()) {
+      lock->handleOutputPresent(*this, event->commit_seq, event->presented);
+    }
     if (!m_trackingPresentation || event->commit_seq != m_trackedPresentationCommitSeq) {
       return;
     }

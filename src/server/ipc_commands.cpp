@@ -621,6 +621,24 @@ namespace umbriel {
     return nlohmann::json{{"ok", nullptr}};
   }
 
+  nlohmann::json IpcCommands::clockFreeze([[maybe_unused]] Server& server, std::string_view /*arg*/) {
+#ifdef UMBRIEL_TEST_IPC
+    server.freezeAnimationClock();
+#endif
+    return nlohmann::json{{"ok", nullptr}};
+  }
+
+  nlohmann::json IpcCommands::clockAdvance(Server& /*server*/, std::string_view /*arg*/) {
+    return nlohmann::json{{"ok", nullptr}};
+  }
+
+  nlohmann::json IpcCommands::clockResume([[maybe_unused]] Server& server, std::string_view /*arg*/) {
+#ifdef UMBRIEL_TEST_IPC
+    server.resumeAnimationClock();
+#endif
+    return nlohmann::json{{"ok", nullptr}};
+  }
+
   static constexpr IpcCommandSpec kIpcCommands[] = {
       {"msg", "<action> [args...]", "send an action to the compositor", true, &IpcCommands::msg, nullptr},
       {"windows", "", "list windows (app id and title)", false, &IpcCommands::windows, &printWindows},
@@ -637,6 +655,11 @@ namespace umbriel {
        nullptr},
       {"settle", "", "wait until no layout or animation is pending and every output has drawn a frame", false,
        &IpcCommands::settle, nullptr, 35},
+      {"clock-freeze", "", "stop animation time", false, &IpcCommands::clockFreeze, nullptr},
+      {"clock-advance", "<ms>", "move frozen animation time forward and wait until every output has drawn it", true,
+       &IpcCommands::clockAdvance, nullptr, 35},
+      {"clock-resume", "", "let animation time follow the monotonic clock again, from where it stopped", false,
+       &IpcCommands::clockResume, nullptr},
 #endif
   };
 

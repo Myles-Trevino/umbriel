@@ -2045,8 +2045,9 @@ namespace umbriel {
         ? (focused ? config().colors.border.scratchpadFocused : config().colors.border.scratchpadUnfocused)
         : (focused ? config().colors.border.focused : config().colors.border.unfocused);
 
+    // A window without a drawn border has nothing to fade, and an invisible transition would still keep frames coming.
     const auto& border = animation.border;
-    if (m_mapped && focusChanged && animation.enabled && border.enabled) {
+    if (m_mapped && focusChanged && animation.enabled && border.enabled && borderInset() > 0) {
       m_borderColorAnim.retarget(targetBase, border.durationMs, border.curve);
       scheduleFrame();
     } else {
@@ -3948,6 +3949,14 @@ namespace umbriel {
 
     if (floating) {
       auto [keepWidth, keepHeight] = floatingRestoreSize();
+      // Where the layout puts the tile, read before it leaves the layout. The drawn node lags behind a pending arrange
+      // (after a move to another output it is still on the old one), so placing from it would depend on frame timing.
+      const bool inLayout = m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0;
+      if (inLayout) {
+        m_workspace->flushArrange();
+      }
+      const wlr_box slot = inLayout ? m_workspace->layout().targetBox(this)
+                                    : wlr_box{.x = layoutTargetX(), .y = layoutTargetY(), .width = 0, .height = 0};
       if (m_workspace != nullptr) {
         const int column = m_workspace->layout().columnOf(this);
         if (m_workspace->scrollingLayout() != nullptr && column >= 0) {
@@ -3961,8 +3970,8 @@ namespace umbriel {
         }
         m_workspace->layoutDetach(this);
       }
-      const int keepX = m_sceneTree->node.x;
-      const int keepY = m_sceneTree->node.y;
+      const int keepX = slot.x;
+      const int keepY = slot.y;
       m_tiled = false;
       m_presentedTiledBox = {};
       if (m_workspace != nullptr) {
@@ -4042,7 +4051,7 @@ namespace umbriel {
     if (!fullscreen && geo.width > 0 && geo.height > 0) {
       m_floating.rememberSize(geo.width, geo.height);
     }
-    m_floating.rememberPositionFraction({.x = m_sceneTree->node.x, .y = m_sceneTree->node.y}, usable);
+    m_floating.rememberPositionFraction({.x = layoutTargetX(), .y = layoutTargetY()}, usable);
 
     m_floating.clearSizeRequest();
     m_tiled = true;

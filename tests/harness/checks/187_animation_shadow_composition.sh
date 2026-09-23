@@ -69,8 +69,10 @@ configure false
 spawn occluder 180 180
 occluder=$(jq -r .id <<< "$window")
 configure true
+# Animation time only moves by clock-advance; each sample lands 200 ms into a 4000 ms timeline.
+"$UMBRIEL" clock-freeze
 spawn caster 700 400
-sleep 0.2
+"$UMBRIEL" clock-advance 200
 grim "$IMAGE"
 pixel 556 170
 if ! (( g > 15 && r < 5 && b < 5 )); then
@@ -90,7 +92,7 @@ if ! (( r < 5 && g < 5 && b > 115 && b < 140 )); then
 fi
 "$UMBRIEL" msg "window-close:$occluder" > /dev/null
 "$UMBRIEL" msg workspace-switch:2 > /dev/null
-sleep 0.2
+"$UMBRIEL" clock-advance 200
 grim "$IMAGE"
 red=$("$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'r > 0.04 && g < 0.01 && b < 0.01')
 green=$("$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.04 && r < 0.01 && b < 0.01')
