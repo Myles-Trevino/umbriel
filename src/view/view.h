@@ -402,7 +402,9 @@ namespace umbriel {
     // Re-apply compositor-owned opacity to surface buffers. With opaque_fullscreen, fullscreen bypasses window-rule
     // opacity, while fades, drag opacity, focus dimming, and client-provided alpha remain active.
     [[nodiscard]] float effectiveOpacity() const;
-    // A fullscreen window in this state hides everything behind it: it draws over the backdrop and skips blur.
+    // A fullscreen window in this state hides everything behind it: it draws over the backdrop and skips blur. Without
+    // opaque_fullscreen, rule opacity below 1, client alpha below 1, or an opaque region short of the window geometry
+    // lets the desktop show through instead.
     [[nodiscard]] bool fullscreenOpaque() const;
     // The lifecycle fade runs through a whole-window shader, so buffers and borders stay opaque under it.
     [[nodiscard]] bool fadeComposited() const;

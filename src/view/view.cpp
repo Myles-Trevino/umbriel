@@ -11,6 +11,7 @@
 #include "output/output.h"
 #include "overview/overview.h"
 #include "scene/animation_shader.h"
+#include "scene/surface_blur.h"
 #include "server/server.h"
 extern "C" {
 #include <umbrielfx/render/animation.h>
@@ -697,7 +698,21 @@ namespace umbriel {
     );
   }
 
-  bool View::fullscreenOpaque() const { return config().appearance.opaqueFullscreen || m_ruleOpacity >= 1.0F; }
+  bool View::fullscreenOpaque() const {
+    if (config().appearance.opaqueFullscreen) {
+      return true;
+    }
+    if (m_ruleOpacity < 1.0F) {
+      return false;
+    }
+    wlr_surface* surface = m_toplevel->base->surface;
+    if (const wlr_alpha_modifier_surface_v1_state* clientAlpha = wlr_alpha_modifier_v1_get_surface_state(surface);
+        clientAlpha != nullptr && clientAlpha->multiplier < 1.0) {
+      return false;
+    }
+    const wlr_box& geometry = m_toplevel->base->geometry;
+    return geometry.width <= 0 || geometry.height <= 0 || !surfaceTransparent(surface, geometry);
+  }
 
   void View::setFadeAlpha(float alpha) {
     // Overshooting curves can push this out of range; wlr_scene_buffer_set_opacity asserts opacity is in [0, 1].
@@ -3229,6 +3244,10 @@ namespace umbriel {
       m_resizeCrossfade.start(move.durationMs, move.curve);
       m_resizeCrossfade.applyOpacity(effectiveOpacity());
       scheduleFrame();
+    }
+    // Client transparency can change on any commit. An unmap commit reaches here after handleUnmap hid the backdrop.
+    if (m_mapped) {
+      m_presentation.setFullscreenOpaque(fullscreenOpaque());
     }
     if (m_captureScene != nullptr) {
       // Restrict the capture to the xdg window geometry. Client subsurfaces
