@@ -626,17 +626,18 @@ namespace umbriel {
     keybinds.reserve(60);
     // Built by assignment rather than aggregate initialisation: the trigger and payload fields already carry default
     // member initialisers, and naming every one of them just to satisfy -Wmissing-field-initializers is noise.
-    auto add = [&keybinds](KeybindAction action, uint32_t keysym, uint32_t modifiers = 0) {
+    auto add = [&keybinds](KeybindAction action, uint32_t keysym, uint32_t modifiers = 0) -> Keybind& {
       Keybind bind;
       bind.modifiers = modifiers;
       bind.useMod = true;
       bind.keysym = xkb_keysym_to_lower(keysym);
       bind.action = action;
-      keybinds.push_back(std::move(bind));
+      return keybinds.emplace_back(std::move(bind));
     };
 
     add(KeybindAction::SessionQuit, XKB_KEY_Escape);
-    add(KeybindAction::WindowClose, XKB_KEY_q);
+    // Holding close would also close each window that focus moves to.
+    add(KeybindAction::WindowClose, XKB_KEY_q).repeat = false;
     add(KeybindAction::WindowFocusNext, XKB_KEY_F1);
 
     add(KeybindAction::WindowFocusLeft, XKB_KEY_Left);
@@ -666,15 +667,8 @@ namespace umbriel {
     add(KeybindAction::ToggleMaximizeToEdges, XKB_KEY_m);
     add(KeybindAction::ToggleFloating, XKB_KEY_t);
     add(KeybindAction::TogglePinned, XKB_KEY_p);
-    // Overview must not repeat: holding the key would thrash open/close.
-    {
-      Keybind overview;
-      overview.useMod = true;
-      overview.keysym = XKB_KEY_o;
-      overview.repeat = false;
-      overview.action = KeybindAction::OverviewToggle;
-      keybinds.push_back(std::move(overview));
-    }
+    // Holding the overview key would thrash open/close.
+    add(KeybindAction::OverviewToggle, XKB_KEY_o).repeat = false;
 
     for (int index = 0; index < 9; ++index) {
       const uint32_t digit = XKB_KEY_1 + static_cast<uint32_t>(index);

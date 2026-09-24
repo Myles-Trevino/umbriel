@@ -772,6 +772,8 @@ UMBRIEL_TEST(defaultKeybindsAreUsable) {
   CHECK(close->useMod);
   CHECK_EQ(close->modifiers, uint32_t{0});
   CHECK_EQ(close->keysym, xkb_keysym_to_lower(XKB_KEY_q));
+  // Holding close would also close each window that focus moves to.
+  CHECK(!close->repeat);
 
   // Overview toggle must not key-repeat: holding it would thrash open/close.
   const auto overview =
