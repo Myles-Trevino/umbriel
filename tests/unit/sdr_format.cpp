@@ -10,7 +10,7 @@ using umbriel::selectSdr10RenderFormat;
 
 UMBRIEL_TEST(sdr10XR30AcceptedShortCircuits) {
   std::vector<uint32_t> probed;
-  const auto selected = selectSdr10RenderFormat([&](uint32_t format) {
+  const auto selected = selectSdr10RenderFormat(DRM_FORMAT_XRGB8888, [&](uint32_t format) {
     probed.push_back(format);
     return true;
   });
@@ -22,7 +22,7 @@ UMBRIEL_TEST(sdr10XR30AcceptedShortCircuits) {
 
 UMBRIEL_TEST(sdr10XR30RejectedFallsBackToXB30) {
   std::vector<uint32_t> probed;
-  const auto selected = selectSdr10RenderFormat([&](uint32_t format) {
+  const auto selected = selectSdr10RenderFormat(DRM_FORMAT_XRGB2101010, [&](uint32_t format) {
     probed.push_back(format);
     return format == DRM_FORMAT_XBGR2101010;
   });
@@ -35,7 +35,7 @@ UMBRIEL_TEST(sdr10XR30RejectedFallsBackToXB30) {
 
 UMBRIEL_TEST(sdr10BothRejectedReturnsNothing) {
   std::vector<uint32_t> probed;
-  const auto selected = selectSdr10RenderFormat([&](uint32_t format) {
+  const auto selected = selectSdr10RenderFormat(DRM_FORMAT_XRGB8888, [&](uint32_t format) {
     probed.push_back(format);
     return false;
   });
@@ -44,6 +44,31 @@ UMBRIEL_TEST(sdr10BothRejectedReturnsNothing) {
   CHECK_EQ(probed.size(), size_t{2});
   CHECK_EQ(probed[0], uint32_t{DRM_FORMAT_XRGB2101010});
   CHECK_EQ(probed[1], uint32_t{DRM_FORMAT_XBGR2101010});
+}
+
+UMBRIEL_TEST(sdr10ActiveXB30AcceptedShortCircuits) {
+  std::vector<uint32_t> probed;
+  const auto selected = selectSdr10RenderFormat(DRM_FORMAT_XBGR2101010, [&](uint32_t format) {
+    probed.push_back(format);
+    return true;
+  });
+
+  CHECK_EQ(selected, std::optional<uint32_t>{DRM_FORMAT_XBGR2101010});
+  CHECK_EQ(probed.size(), size_t{1});
+  CHECK_EQ(probed[0], uint32_t{DRM_FORMAT_XBGR2101010});
+}
+
+UMBRIEL_TEST(sdr10ActiveXB30RejectedFallsBackToXR30) {
+  std::vector<uint32_t> probed;
+  const auto selected = selectSdr10RenderFormat(DRM_FORMAT_XBGR2101010, [&](uint32_t format) {
+    probed.push_back(format);
+    return format == DRM_FORMAT_XRGB2101010;
+  });
+
+  CHECK_EQ(selected, std::optional<uint32_t>{DRM_FORMAT_XRGB2101010});
+  CHECK_EQ(probed.size(), size_t{2});
+  CHECK_EQ(probed[0], uint32_t{DRM_FORMAT_XBGR2101010});
+  CHECK_EQ(probed[1], uint32_t{DRM_FORMAT_XRGB2101010});
 }
 
 // XR30 (DRM_FORMAT_XRGB2101010) on an enabled, non-HDR output is active SDR10.

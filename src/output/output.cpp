@@ -137,7 +137,7 @@ namespace umbriel {
 
   bool Output::hdrActive() const { return m_output->image_description != nullptr; }
 
-  bool Output::tenBitSdrActive() const {
+  bool Output::bitDepthActive() const {
     return deriveTenBitSdrActive(m_output->enabled, hdrActive(), m_output->render_format);
   }
 
@@ -228,11 +228,11 @@ namespace umbriel {
     }
   }
 
-  void Output::setTenBitFallbackReason(std::string_view reason) {
-    if (m_tenBitFallbackReason == reason) {
+  void Output::setBitDepthFallbackReason(std::string_view reason) {
+    if (m_bitDepthFallbackReason == reason) {
       return;
     }
-    m_tenBitFallbackReason = reason;
+    m_bitDepthFallbackReason = reason;
     if (!reason.empty()) {
       kLog.warn("output '{}': 10-bit SDR unavailable: {}", m_output->name, reason);
     }
@@ -485,10 +485,10 @@ namespace umbriel {
       }
       m_hdrGammaWarningLogged = false;
     }
-    if (!enabled || tenBitSdrActive() || hdrIsActive || bitDepth != 10) {
-      setTenBitFallbackReason({});
+    if (!enabled || bitDepthActive() || hdrIsActive || bitDepth != 10) {
+      setBitDepthFallbackReason({});
     } else {
-      setTenBitFallbackReason(pendingSdr10Fail);
+      setBitDepthFallbackReason(pendingSdr10Fail);
     }
     updateSceneSdrWhite();
     m_server->updateIdleInhibit();

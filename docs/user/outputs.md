@@ -185,12 +185,15 @@ Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
 bit_depth = 10
 ```
 
-Selects a 10-bit format XR30 (`DRM_FORMAT_XRGB2101010`) or
-XB30 (`DRM_FORMAT_XBGR2101010`) as the render format when the backend accepts
-it. If neither is accepted, the output falls back to 8-bit. While a 10-bit
-format is active, blur and effects intermediate buffers are upgraded to FP16
-precision, provided the renderer supports FP16 render targets. Otherwise,
-they remain 8-bit. HDR uses 10-bit independently of this setting.
+Umbriel selects XR30 (`DRM_FORMAT_XRGB2101010`) or XB30
+(`DRM_FORMAT_XBGR2101010`) when the backend accepts it. XB30 is tried first if
+it is already active. Otherwise, XR30 is tried first. If no 10-bit format
+commits, the output falls back to 8-bit. HDR uses 10-bit independently of this
+setting.
+
+While a 10-bit format is active, blur and effects intermediate buffers are
+upgraded to FP16 precision, provided the renderer supports FP16 render targets
+and linear filtering of half-float textures. Otherwise, they remain 8-bit.
 
 `bit_depth = 10` controls the compositor render format only. It does not
 guarantee that the physical display link runs at 10 bits per channel. The
@@ -198,22 +201,34 @@ number of bits delivered to the panel depends on the display's EDID, cable,
 and driver. Run `umbriel color` to confirm the active render format that the
 compositor committed.
 
-**VRR fallback.** When VRR is also requested, the format sequence first
-attempts the 10-bit format with VRR enabled. If the backend rejects that
-combination, it retries the same 10-bit format with VRR disabled. Only when
-both fail does Umbriel fall back to 8-bit.
+In `umbriel color --json`, `bit_depth` is the configured value and
+`bit_depth_active` reports whether an enabled SDR output is currently using
+XR30 or XB30. `bit_depth_fallback_reason` explains a failed 10-bit request.
+It is empty while HDR is active.
 
-**Direct scanout.** Direct scanout remains enabled by the `direct_scanout`
-setting, but it may be  less likely to engage while 10-bit rendering is
-active. Direct scanout requires the client buffer format to exactly match
-what KMS accepts for the plane. Set `direct_scanout = false` explicitly if
-you want to suppress the condition check.
+#### VRR fallback
 
-**Screencopy and capture.** Screencopy clients such as `grim` and Noctalia
-receive raw buffers in the output's active 10-bit render format (XR30 or XB30)
-when 10-bit SDR is active. Unlike HDR capture, the pixels are not converted to
-an 8-bit SDR format first. Tools that do not handle 10-bit formats may produce
-undesired output. Use a bit depth of 8 if you encounter issues.
+When VRR is also requested and the output supports adaptive sync, Umbriel tests
+the formats with VRR first, in the order described above. If neither passes, it
+tests them without VRR in the same order. Once a format passes its test,
+Umbriel attempts to commit it. If that commit fails with VRR, it retries the
+same format without VRR, without another test. A failed commit does not try the
+other format. If no 10-bit format commits, it falls back to 8-bit. HDR follows
+the same retry rule before falling back to SDR.
+
+#### Direct scanout with 10-bit
+
+Direct scanout remains enabled by the `direct_scanout` setting, but it may be
+less likely to engage while 10-bit rendering is active. Direct scanout requires
+the client buffer format to exactly match what KMS accepts for the plane. Set
+`direct_scanout = false` to disable direct scanout for an output entirely.
+
+#### Screencopy and capture
+
+Screencopy clients such as `grim` and Noctalia receive raw buffers in the
+output's active 10-bit render format (XR30 or XB30) when 10-bit SDR is active.
+Unlike HDR capture, the pixels are not converted to an 8-bit SDR format first.
+Tools that do not handle 10-bit formats may produce undesired output.
 
 ## Disabling an output
 

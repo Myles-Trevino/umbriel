@@ -620,6 +620,87 @@ static bool test_fp16_save_restore(struct fixture *fixture) {
 		"FP16 save/restore round trip preserves luminance");
 }
 
+// An untransformed 10-bit pass must still use FP16 effect buffers for blur when
+// half-float textures can be linearly filtered. Pixel averages alone cannot
+// distinguish an 8-bit intermediate from the intended FP16 intermediate.
+static bool test_sdr10_blur_buffer_format(struct fixture *fixture) {
+	struct wlr_buffer *target = create_output_buffer(fixture,
+		DRM_FORMAT_XRGB2101010, TEST_WIDTH, TEST_HEIGHT);
+	// Some GBM drivers advertise XR30 but cannot allocate it; XBGR2101010
+	// exercises the same untransformed 10-bit effect-buffer path.
+	if (target == NULL) {
+		target = create_output_buffer(fixture,
+			DRM_FORMAT_XBGR2101010, TEST_WIDTH, TEST_HEIGHT);
+	}
+	if (!check(target != NULL, "allocate 10-bit blur target")) {
+		return false;
+	}
+
+	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
+		fixture->renderer, target, NULL);
+	if (!check(pass != NULL, "begin untransformed 10-bit blur pass")) {
+		wlr_buffer_drop(target);
+		return false;
+	}
+	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(pass);
+	struct wlr_box box = { .width = TEST_WIDTH, .height = TEST_HEIGHT };
+	pixman_region32_t region;
+	pixman_region32_init_rect(&region, 0, 0, TEST_WIDTH, TEST_HEIGHT);
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options) {
+		.box = box,
+		.color = { .r = 0.4f, .g = 0.25f, .b = 0.5f, .a = 1.0f },
+		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+	});
+
+	bool ok = check(!fx_pass->has_color_transform,
+		"10-bit blur pass has no color transform") &&
+		check(fx_render_pass_init_offscreen_buffers(pass, fixture->output),
+			"initialize 10-bit blur buffers");
+	if (ok) {
+		const float opacity = 1.0f;
+		struct blur_data blur_data = {
+			.num_passes = 1,
+			.radius = 1.0f,
+			.brightness = 1.0f,
+			.contrast = 1.0f,
+			.saturation = 1.0f,
+		};
+		struct fx_render_blur_pass_options blur_options = {
+			.tex_options = {
+				.base = {
+					.dst_box = box,
+					.clip = &region,
+					.transform = WL_OUTPUT_TRANSFORM_NORMAL,
+					.filter_mode = WLR_SCALE_FILTER_BILINEAR,
+					.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+					.alpha = &opacity,
+				},
+				.clip_box = &box,
+			},
+			.blur_data = &blur_data,
+			.blur_strength = 1.0f,
+		};
+		fx_render_pass_add_blur(fx_pass, &blur_options);
+
+		struct fx_offscreen_buffers *fbos = fx_pass->fx_offscreen_buffers;
+		uint32_t expected = fx_get_renderer(fixture->renderer)->exts.half_float_linear
+			? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+		ok = check(fbos != NULL && fbos->effects_buffer != NULL &&
+			fbos->effects_buffer_swapped != NULL,
+			"10-bit blur allocates both effect buffers") && ok;
+		if (fbos != NULL && fbos->effects_buffer != NULL &&
+				fbos->effects_buffer_swapped != NULL) {
+			ok = check(fbos->effects_buffer->drm_format == expected &&
+				fbos->effects_buffer_swapped->drm_format == expected,
+				"untransformed 10-bit blur uses the expected effect format") && ok;
+		}
+	}
+	pixman_region32_fini(&region);
+	ok = check(wlr_render_pass_submit(pass), "submit 10-bit blur pass") && ok;
+	wlr_buffer_drop(target);
+	return ok;
+}
+
 static bool test_shared_output_buffers(struct fixture *fixture) {
 	bool ok = true;
 	struct wlr_buffer *target_a = create_output_buffer(fixture,
@@ -1493,6 +1574,8 @@ int main(int argc, char *argv[]) {
 		ok = test_fp16_blur_effects(&fixture);
 	} else if (strcmp(argv[1], "fp16-save-restore") == 0) {
 		ok = test_fp16_save_restore(&fixture);
+	} else if (strcmp(argv[1], "sdr10-blur-buffer-format") == 0) {
+		ok = test_sdr10_blur_buffer_format(&fixture);
 	} else if (strcmp(argv[1], "optimized-blur-format-cache") == 0) {
 		ok = test_optimized_blur_format_cache(&fixture);
 	} else if (strcmp(argv[1], "shared-output-buffers") == 0) {

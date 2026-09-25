@@ -82,11 +82,11 @@ namespace umbriel {
     [[nodiscard]] HdrMode hdrMode() const;
     [[nodiscard]] bool hdrRequested() const;
     [[nodiscard]] bool hdrActive() const;
-    [[nodiscard]] bool tenBitSdrActive() const;
+    [[nodiscard]] bool bitDepthActive() const;
     [[nodiscard]] const std::string& hdrFallbackReason() const { return m_hdrFallbackReason; }
     [[nodiscard]] float configuredSdrWhite() const;
     [[nodiscard]] int configuredBitDepth() const;
-    [[nodiscard]] const std::string& tenBitSdrFallbackReason() const { return m_tenBitFallbackReason; }
+    [[nodiscard]] const std::string& bitDepthFallbackReason() const { return m_bitDepthFallbackReason; }
     [[nodiscard]] bool configuredDirectScanoutEnabled() const;
     [[nodiscard]] bool configuredTearingAllowed() const;
     [[nodiscard]] bool tearingRequested() const;
@@ -138,7 +138,7 @@ namespace umbriel {
     [[nodiscard]] View* findAutoHdrCandidate() const;
     [[nodiscard]] bool configuredVrrEnabled() const;
     void setHdrFallbackReason(std::string_view reason);
-    void setTenBitFallbackReason(std::string_view reason);
+    void setBitDepthFallbackReason(std::string_view reason);
     void updateSceneSdrWhite();
     void rejectGammaControl(wlr_gamma_control_v1* control);
     void armFrameRetry();
@@ -180,7 +180,7 @@ namespace umbriel {
     View* m_autoHdrOwner = nullptr;
     std::string m_hdrFallbackReason;
     std::string m_tearingFallbackReason;
-    std::string m_tenBitFallbackReason;
+    std::string m_bitDepthFallbackReason;
     std::optional<bool> m_lastPresentationPresented;
     std::optional<uint32_t> m_lastPresentationFlags;
     uint32_t m_trackedPresentationCommitSeq = 0;

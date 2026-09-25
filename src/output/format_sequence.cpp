@@ -37,6 +37,14 @@ namespace umbriel {
         return true;
       };
 
+      const auto commitTenBit = [&](FormatTier tier, uint32_t fmt, bool vrr,
+                                    const std::function<bool(uint32_t, bool)>& stage) -> bool {
+        if (commitStaged(tier, fmt, vrr)) {
+          return true;
+        }
+        return vrr && stage(fmt, false) && commitStaged(tier, fmt, false);
+      };
+
       // HDR.
       const auto tryHdrFormats = [&]() -> bool {
         if (!(params.hdrRequested && params.imageDescAvailable)) {
@@ -53,7 +61,7 @@ namespace umbriel {
           if (!accepted) {
             continue;
           }
-          if (commitStaged(FormatTier::Hdr, *accepted, vrr)) {
+          if (commitTenBit(FormatTier::Hdr, *accepted, vrr, ops.stageHdr)) {
             return true;
           }
           hdrFail = "HDR commit rejected by backend";
@@ -73,12 +81,13 @@ namespace umbriel {
         }
 
         for (const bool vrr : vrrPasses(params.tryVrrOn)) {
-          const auto accepted =
-              selectSdr10RenderFormat([&](uint32_t fmt) { return ops.stageSdr(fmt, vrr) && ops.test(); });
+          const auto accepted = selectSdr10RenderFormat(params.currentRenderFormat, [&](uint32_t fmt) {
+            return ops.stageSdr(fmt, vrr) && ops.test();
+          });
           if (!accepted) {
             continue;
           }
-          if (commitStaged(FormatTier::Sdr10, *accepted, vrr)) {
+          if (commitTenBit(FormatTier::Sdr10, *accepted, vrr, ops.stageSdr)) {
             return true;
           }
           sdr10Fail = "10-bit SDR commit rejected by backend";
