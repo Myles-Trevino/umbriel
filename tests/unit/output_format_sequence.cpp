@@ -3,11 +3,14 @@
 #include "output/format_sequence.h"
 
 #include <algorithm>
-#include <cmath>
 #include <drm_fourcc.h>
 #include <vector>
 
+// Pulls the C++ math headers in before `static` is defined away below.
+#include <cmath> // IWYU pragma: keep
+
 extern "C" {
+// wlroots uses C99 array parameter syntax in headers included by wlr_output.h.
 #define static
 #include <wlr/types/wlr_output.h>
 #undef static
